@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What an MDM may configure on this app.
+
+  This file is the CONTRACT. A Device Owner reads it to discover which keys it
+  may set, and Headwind's application-settings screen builds its form from it.
+  A key the app reads but does not declare here is invisible to the MDM and can
+  never be pushed, which looks exactly like the feature not working.
+
+  The point of the whole file is announceToken. Without it a freshly provisioned
+  phone installs the relay, launches it, and is then permanently absent from the
+  bond because announcing needs a credential only a human could type. With it,
+  enrolment is genuinely hands-free.
+
+  Defaults are deliberately ABSENT rather than set. An unset restriction leaves
+  local configuration alone (see ManagedConfig.merge); a default would push a
+  value at every managed phone whether the operator asked for it or not.
+-->
+<restrictions xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <restriction
+        android:key="announceToken"
+        android:title="@string/mc_token_title"
+        android:description="@string/mc_token_desc"
+        android:restrictionType="string" />
+
+    <restriction
+        android:key="consoleLanHost"
+        android:title="@string/mc_console_title"
+        android:description="@string/mc_console_desc"
+        android:restrictionType="string" />
+
+    <restriction
+        android:key="homeHost"
+        android:title="@string/mc_home_host_title"
+        android:description="@string/mc_home_host_desc"
+        android:restrictionType="string" />
+
+    <restriction
+        android:key="homePort"
+        android:title="@string/mc_home_port_title"
+        android:description="@string/mc_home_port_desc"
+        android:restrictionType="string" />
+
+    <restriction
+        android:key="listenPort"
+        android:title="@string/mc_listen_port_title"
+        android:description="@string/mc_listen_port_desc"
+        android:restrictionType="string" />
+
+    <restriction
+        android:key="autoStartRelay"
+        android:title="@string/mc_autostart_title"
+        android:description="@string/mc_autostart_desc"
+        android:restrictionType="bool"
+        android:defaultValue="false" />
+
+    <restriction
+        android:key="ddClientToken"
+        android:title="@string/mc_dd_token_title"
+        android:description="@string/mc_dd_token_desc"
+        android:restrictionType="string" />
+
+    <restriction
+        android:key="ddSite"
+        android:title="@string/mc_dd_site_title"
+        android:description="@string/mc_dd_site_desc"
+        android:restrictionType="string" />
+
+    <!-- #222. Off by default and it must stay that way: an enabled
+         CATEGORY_HOME component makes Android ask which home app to use, and
+         the phone carrying the household's traffic must not be asked that
+         because it took an update. Set this only on a dedicated leg. -->
+    <restriction
+        android:key="homeScreenMode"
+        android:title="@string/mc_home_screen_title"
+        android:description="@string/mc_home_screen_desc"
+        android:restrictionType="bool"
+        android:defaultValue="false" />
+
+</restrictions>

@@ -1,0 +1,15 @@
+#!/bin/sh
+# Entrypoint for the hand-installed zippie package at /opt/zippie-agent.
+# The init script, the watchdog, and interactive use all go through here so
+# there is exactly one definition of "run zippie".
+#
+# Install as /usr/bin/zippie (mode 755).
+#
+# /etc/zippie/env (0600, root-only) carries DD_API_KEY / DD_SITE /
+# ZIPPIE_TAGS so telemetry works identically from procd, the watchdog, and
+# an interactive shell. Provision it from SSM without ever printing the key:
+#   aws ssm get-parameter --name /infra/datadog/api_key --with-decryption \
+#     --query Parameter.Value --output text | ssh root@<router> \
+#     'umask 077; key=$(cat); printf "export DD_API_KEY=%s\nexport DD_SITE=datadoghq.com\nexport ZIPPIE_TAGS=device:suzu,router:gl-mt3000\n" "$key" > /etc/zippie/env'
+[ -f /etc/zippie/env ] && . /etc/zippie/env
+exec env PYTHONPATH=/opt/zippie-agent python3 -m zippie "$@"

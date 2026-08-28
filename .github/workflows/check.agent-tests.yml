@@ -1,0 +1,346 @@
+name: Check · zippie agent tests
+
+# Gates the Zippie bond-agent suite (#1986).
+#
+# This suite was running DARK: `zippie` appeared in no workflow at all, so the
+# whole agent - path policy, the OpenWrt/UCI Wi-Fi backend, and the
+# all-paths-down behaviour that decides whether a moving car keeps internet -
+# was covered by tests nobody ran on push. Found 2026-07-27 while adding the
+# home-exit manifest.
+#
+# pytest, not `unittest discover` like check.python-units: these tests use
+# pytest's monkeypatch fixture, which unittest cannot provide. Deps are pulled
+# EPHEMERALLY by uv in the test-cmd, matching the spark-gateway gate.
+#
+# It also covers the manifest drift guard: the k8s ConfigMap ships a COPY of
+# zippie_home.py (kustomize refuses `files:` outside its root), and
+# test_manifest_copy_in_sync.py is what stops that copy silently diverging from
+# the canonical server.
+#
+# The HUB was in the same position the agent was in on 2026-07-27: hub/ appeared
+# in no workflow at all, so nothing it does was ever run on push - including the
+# hand-rolled APM emitter added for quadseven/infra#2265, which is precisely the
+# kind of code this repo keeps shipping unexecuted. The `hubtest` job below is
+# what stops that.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'travel/**'
+      - 'home/**'
+      - 'hub/**'
+      # The whole directory, not just the two manifest dirs it used to name:
+      # deploy/oke now holds executable operator tooling with its own suite
+      # (see the deploytest job), and a path filter that misses it would let
+      # that tooling change without a single test running.
+      - 'deploy/oke/**'
+      - '.github/workflows/check.agent-tests.yml'
+  pull_request:
+    paths:
+      - 'travel/**'
+      - 'home/**'
+      - 'hub/**'
+      # The whole directory, not just the two manifest dirs it used to name:
+      # deploy/oke now holds executable operator tooling with its own suite
+      # (see the deploytest job), and a path filter that misses it would let
+      # that tooling change without a single test running.
+      - 'deploy/oke/**'
+      - '.github/workflows/check.agent-tests.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zippie-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fail-closed trust gate, mirroring the other self-hosted check workflows.
+  # No checkout: evaluates PR author trust only.
+  guard:
+    name: trust gate (collaborator-only on self-hosted)
+    runs-on: arc-zippie
+    timeout-minutes: 2
+    steps:
+      - name: "Block untrusted (non-collaborator) PRs on self-hosted runner"
+        if: ${{ github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) }}
+        run: |
+          echo "::error::PR validation restricted to repo collaborators."
+          exit 1
+
+  pytest:
+    needs: guard
+    name: zippie agent pytest
+    uses: quadseven/infra-public/.github/workflows/check.python.yml@cd83e5727c0a7b904f780960664a51b3a3a0c685
+    with:
+      runner: arc-zippie
+      working-directory: travel/bond-agent
+      install-cmd: "true"
+      ruff: false
+      # 3.9 on purpose: that is what the GL-MT3000 runs (GL firmware is built on
+      # OpenWrt 21.02), and it is the floor declared in pyproject.toml. Testing
+      # only on a newer interpreter would let 3.10+ syntax slip in and break the
+      # one device this agent exists to run on.
+      #
+      # --basetemp is the mitigation for GHSA-6w46-j5rx-g56g (Dependabot alert
+      # 10): pytest <9.0.3 defaults its temp root to a predictable
+      # /tmp/pytest-of-{user} path that a local user can pre-create (CWE-379).
+      # The patch is 9.0.3, which requires Python >=3.10, so there is no patched
+      # pytest for the 3.9 job. Pointing basetemp at the runner's own private
+      # temp dir sidesteps the shared path instead of accepting it. pytest
+      # cleans and recreates this directory itself, so it must NOT be a path
+      # anything else writes to.
+      test-cmd: "uv run --with 'pytest>=8.0' --with tomli --python 3.9 python -m pytest -q --basetemp=\"${RUNNER_TEMP:-/tmp}/zippie-pytest\""
+      timeout-minutes: 6
+
+  hubtest:
+    needs: guard
+    name: zippie hub pytest
+    uses: quadseven/infra-public/.github/workflows/check.python.yml@cd83e5727c0a7b904f780960664a51b3a3a0c685
+    with:
+      runner: arc-zippie
+      working-directory: hub
+      # No pyproject in hub/ and none wanted: the hub is stdlib-only on
+      # purpose, so there is nothing to sync and nothing to lock.
+      install-cmd: "true"
+      ruff: false
+      # 3.12, not the 3.9 the bond-agent job pins: the hub runs on
+      # python:3.12-alpine, and it is the only zippie component that does NOT
+      # have to fit on the MT3000. Testing it on 3.9 would test an interpreter
+      # it never meets.
+      #
+      # pytest >=9.0.3 is the patched line for GHSA-6w46-j5rx-g56g. The agent
+      # job below cannot take it (it requires Python >=3.10, and the router is
+      # on 3.9) and pins <9 with --basetemp instead; this job can, so it does,
+      # and needs no --basetemp workaround. See the note in
+      # travel/bond-agent/pyproject.toml.
+      #
+      # pyyaml is for test_manifest_service_tags.py, which parses the deploy
+      # manifests to pin the unified-service-tagging labels in place.
+      test-cmd: "uv run --with 'pytest>=9.0.3' --with pyyaml --python 3.12 python -m pytest -q"
+      timeout-minutes: 6
+
+  # hub.js was the last piece of zippie running with NO test at all: 189 lines
+  # deciding what an operator sees first when something is wrong, and nothing in
+  # the repository executed one of them. `worry()` alone decides the entire
+  # ordering and the headline, so a silent change to it would surface on the day
+  # it mattered and not before - the same shape as the agent suite, the Go
+  # datapath and the hub's own Python, all of which ran dark until checked.
+  #
+  # Node, not the runner's bundled one: the Actions runner ships a node to
+  # execute JS actions, but it is not on PATH, so relying on it would be a
+  # coin flip that reads as a passing job when it lands wrong.
+  hubjs:
+    needs: guard
+    name: zippie hub js
+    runs-on: arc-zippie
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+      # No runner, no package.json, no dependencies: the file is its own
+      # harness and exits non-zero on the first failed check. A framework here
+      # would be more moving parts than the thing under test.
+      - run: node hub/tests/hub_js.mjs
+
+  # deploy/oke/unreferenced-configmaps.py decides which ConfigMaps an operator
+  # is told nothing references - and that output gets acted on with
+  # `kubectl delete`. It shipped with no tests and no job, which put it in the
+  # same class as everything else in this file's header: code whose failure mode
+  # is silent and destructive, executed by nobody until a human runs it.
+  #
+  # A false positive there is not cosmetic. The script reads FOUR routes a pod
+  # spec can name a ConfigMap by, and the live namespace exercises exactly one
+  # of them (plain volume mounts), so a regression in the other three cannot be
+  # caught by running it against production - it would just quietly move a
+  # live ConfigMap into the "referenced by NOTHING" list.
+  deploytest:
+    needs: guard
+    name: zippie deploy tooling pytest
+    uses: quadseven/infra-public/.github/workflows/check.python.yml@cd83e5727c0a7b904f780960664a51b3a3a0c685
+    with:
+      runner: arc-zippie
+      working-directory: deploy/oke
+      # Stdlib-only operator tooling: no pyproject, nothing to sync.
+      install-cmd: "true"
+      ruff: false
+      # 3.12 like the hub job, not the router's 3.9: this runs on a workstation
+      # or a runner with kubectl, never on the MT3000. pytest >=9.0.3 is the
+      # patched line for GHSA-6w46-j5rx-g56g and needs >=3.10, so this job can
+      # take it and skip the --basetemp workaround the 3.9 job needs.
+      test-cmd: "uv run --with 'pytest>=9.0.3' --python 3.12 python -m pytest -q"
+      timeout-minutes: 5
+
+  # The Go datapath was running DARK for exactly the same reason the agent
+  # suite was (see the header): `datapath-go`, `setup-go` and `go test` appeared
+  # in NO workflow, so its ~700 lines of tests - wire-format golden vectors
+  # against real Python bytes, the reassembler, the security invariants - never
+  # ran on push. A PR touching only Go went green on a Python-only check, which
+  # is worse than no check because it reads as coverage.
+  #
+  # Kept as an inline job rather than a reusable for now; abstracting a
+  # check.go.yml into infra-public alongside check.rust.yml is tracked
+  # separately.
+  gotest:
+    needs: guard
+    name: zippie datapath go test
+    runs-on: arc-zippie
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: travel/datapath-go
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: travel/datapath-go/go.mod
+          # The module is stdlib-only: no require block, and therefore no
+          # go.sum. setup-go's cache looks for one by default and fails the job
+          # when it is absent, so caching is off rather than pointed at a file
+          # that does not exist. Add it back if a dependency is ever taken on.
+          cache: false
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test ./... -count=1
+      # THE MOBILE BIND LAYER IS A NESTED MODULE, and `./...` does not descend
+      # into one. `travel/datapath-go/mobile` has its own go.mod, so the step
+      # above lists exactly three packages - cmd/zippie-clienthome,
+      # cmd/zippie-datapath and zippie - and none of them is mobile.
+      #
+      # Its five tests therefore existed and never ran, on any PR, since the
+      # module was added: they cover key sealing, refusing a MALFORMED key
+      # rather than ignoring it, local port discovery, and the wire-format
+      # version. Tests that exist and do not run are the shape this repo has
+      # been bitten by repeatedly (#67, #48, #50) - the file looks like
+      # coverage and gates nothing.
+      #
+      # Run here rather than in the gomobile job on purpose: this runner is
+      # Linux and fast, the module is stdlib-only so it needs no gomobile
+      # toolchain, and gating every PR should not depend on the one mac mini
+      # that also holds the signing keychain.
+      - name: go test (mobile bind module)
+        working-directory: travel/datapath-go/mobile
+        run: go test ./... -count=1
+      # NO -race HERE, DELIBERATELY, and it is a real gap rather than a
+      # preference. The transport runs both directions concurrently and this is
+      # the one component where a data race shows up as a car losing internet
+      # rather than as a stack trace, so -race is exactly what you would want.
+      #
+      # It cannot run on this image. Two attempts, both on the record:
+      #   CGO_ENABLED=0 default -> "go: -race requires cgo"
+      #   CGO_ENABLED=1         -> cgo: C compiler "gcc" not found in $PATH
+      # The race detector needs cgo, cgo needs a C compiler, and the
+      # arc-infrastructure image ships none.
+      #
+      # Left OUT rather than skipped-when-missing on purpose: a step that
+      # quietly no-ops when a tool is absent reads as coverage while providing
+      # none, which is the exact failure this whole job was added to fix. Run it
+      # locally (`go test ./... -race`) until a C toolchain is on the image;
+      # tracked in #2182.
+      #
+      # The fuzz SEED corpus only - a timed fuzz run does not belong on a PR
+      # gate, but the seeds encode inputs that already found real bugs (an
+      # unbounded stream origin, a nextSeq overflow) and must never regress.
+      - name: fuzz seed corpus
+        run: go test ./zippie/ -run 'Fuzz' -count=1
+
+  gomobile:
+    # needs: guard is NOT optional here. The trust gate exists to keep
+    # non-collaborator PRs off self-hosted runners, and this job runs on the
+    # mac mini - the machine holding the Apple Distribution identity and the CI
+    # signing keychain. It is the WORST runner in the fleet to leave ungated,
+    # and it was, until a commit security review caught it.
+    needs: guard
+    name: zippie datapath mobile bind (xcframework + aar)
+    # The mac mini: the ONLY machine with both Xcode and the Android SDK/NDK.
+    # A hosted runner cannot do this and there are none in this org anyway.
+    runs-on: [self-hosted, macOS, ARM64, mac-mini]
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: travel/datapath-go/mobile
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: travel/datapath-go/mobile/go.mod
+          # This module DOES have a go.sum, unlike the core one, so caching is
+          # safe here even though the core gate must keep cache: false.
+          cache-dependency-path: travel/datapath-go/mobile/go.sum
+
+      - name: locate Xcode
+        # gomobile -target=ios shells out to xcrun, and `xcode-select -p` on
+        # this machine points at /Library/Developer/CommandLineTools - the CLI
+        # tools, not a full Xcode. gomobile rejects that with the unhelpful
+        # "gomobile: -target=\"ios\" requires Xcode", which reads as "Xcode is
+        # not installed" when it is (/Applications/Xcode-26.5.0.app).
+        #
+        # DEVELOPER_DIR rather than `sudo xcode-select -s`: this mini also runs
+        # the macchina and infra runners, and switching the machine-wide
+        # developer dir from inside one repo's job would reach into theirs.
+        #
+        # Same discovery the companion app job uses - find, not ls, so an
+        # unusual filename cannot mangle the glob (SC2012).
+        run: |
+          set -euo pipefail
+          XAPP=$(find /Applications -maxdepth 1 -name 'Xcode*.app' | sort | head -1)
+          [ -n "$XAPP" ] || { echo "::error::no Xcode.app found - run 'xcodes install'"; exit 1; }
+          echo "DEVELOPER_DIR=$XAPP/Contents/Developer" >> "$GITHUB_ENV"
+          echo "using $XAPP"
+
+      - name: Install gomobile and gobind
+        run: |
+          set -euo pipefail
+          # PINNED, not @latest. This runs on the machine that signs iOS
+          # releases, so `@latest` would fetch and EXECUTE whatever upstream
+          # published most recently, next to the Apple Distribution key.
+          #
+          # The version is the one the module already requires, so the tool and
+          # the library it binds against cannot drift apart - a mismatch there
+          # produces generated bindings that compile and misbehave.
+          #
+          # READ FROM go.mod rather than repeated as a literal (#94). The app
+          # workflow now installs the same tool to build the framework it
+          # links, and two hand-maintained copies of one version is the
+          # divergence this repo keeps closing elsewhere - the copy that is
+          # not updated is the one that silently binds against a different
+          # library.
+          GOMOBILE_VERSION=$(go list -m -f '{{.Version}}' golang.org/x/mobile)
+          go install "golang.org/x/mobile/cmd/gomobile@$GOMOBILE_VERSION"
+          go install "golang.org/x/mobile/cmd/gobind@$GOMOBILE_VERSION"
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+
+      - name: gomobile init
+        run: gomobile init
+
+      - name: Bind the iOS xcframework
+        run: |
+          set -euo pipefail
+          gomobile bind -target=ios -o "$RUNNER_TEMP/Zippie.xcframework" \
+            github.com/quadseven/zippie-datapath/mobile
+          # An xcframework that exists but exports nothing would link fine and
+          # do nothing, so check the API is actually in the generated header.
+          test -d "$RUNNER_TEMP/Zippie.xcframework/ios-arm64"
+          grep -rq "NewClient" "$RUNNER_TEMP/Zippie.xcframework" \
+            || { echo "::error::xcframework exports no NewClient"; exit 1; }
+
+      - name: Bind the Android aar
+        # Resolved in the shell, not in an `env:` map - a map value is a
+        # LITERAL, so `$HOME` would not expand there, and hardcoding the path
+        # would publish the runner account's name into a public repo. The
+        # runner's own .env wins if it exports these; otherwise fall back to
+        # the standard macOS location under whatever $HOME the runner has.
+        run: |
+          set -euo pipefail
+          export ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
+          export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/26.3.11579264}"
+          test -d "$ANDROID_NDK_HOME" \
+            || { echo "::error::Android NDK not found at $ANDROID_NDK_HOME"; exit 1; }
+          gomobile bind -target=android -androidapi 29 -o "$RUNNER_TEMP/zippie.aar" \
+            github.com/quadseven/zippie-datapath/mobile
+          test -s "$RUNNER_TEMP/zippie.aar"

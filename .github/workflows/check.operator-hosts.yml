@@ -1,0 +1,55 @@
+name: Check - no operator hosts in the shipped apps
+
+# Android's compiled-in defaults were emptied (#157) and nothing guarded that,
+# so the next person debugging on a desk could paste a real host back into a
+# default and no review would necessarily catch it. iOS's defaults were never
+# emptied at all. This pins both states and fails on any movement, in either
+# direction - tightening included, so that progress is recorded rather than
+# silently diverging from the allowlist.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'companion-android/**'
+      - 'companion/**'
+      - 'scripts/check-no-operator-hosts.sh'
+      - '.github/workflows/check.operator-hosts.yml'
+  pull_request:
+    paths:
+      - 'companion-android/**'
+      - 'companion/**'
+      - 'scripts/check-no-operator-hosts.sh'
+      - '.github/workflows/check.operator-hosts.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: operator-hosts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: trust gate (collaborator-only on self-hosted)
+    runs-on: arc-zippie
+    timeout-minutes: 2
+    steps:
+      - name: "Block untrusted (non-collaborator) PRs on self-hosted runner"
+        if: ${{ github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) }}
+        run: |
+          echo "::error::PR validation restricted to repo collaborators."
+          exit 1
+
+  hosts:
+    needs: guard
+    name: operator hosts ratchet
+    # Linux, not the mac mini: this is grep and find, it needs no SDK, and the
+    # mini is the scarce runner.
+    runs-on: arc-zippie
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - name: No new operator hosts in shipped source
+        run: bash scripts/check-no-operator-hosts.sh

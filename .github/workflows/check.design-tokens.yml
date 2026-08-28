@@ -1,0 +1,66 @@
+name: Check - design token drift
+
+# ONE SOURCE, THREE SURFACES. design/tokens.json generates
+# Tokens.generated.swift (iOS), Tokens.generated.kt (Android) and
+# tokens.generated.css (the hub + dashboard). The whole point is that the web
+# app, iOS and Android look and feel identical - which only holds if the
+# generated files are actually regenerated when a token changes.
+#
+# Nothing enforced that. `generate.py --check` exists and was run by hand.
+# Editing tokens.json and forgetting to regenerate would leave three surfaces
+# silently disagreeing about a colour or a spacing step, and the drift is
+# invisible in review because the generated files simply do not appear in the
+# diff.
+#
+# Cheap check, no runner cost worth mentioning, and it is the only thing
+# standing between "one design system" and three copies of one.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'design/**'
+      - '**/Tokens.generated.swift'
+      - '**/Tokens.generated.kt'
+      - '**/tokens.generated.css'
+      - '.github/workflows/check.design-tokens.yml'
+  pull_request:
+    paths:
+      - 'design/**'
+      - '**/Tokens.generated.swift'
+      - '**/Tokens.generated.kt'
+      - '**/tokens.generated.css'
+      - '.github/workflows/check.design-tokens.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: design-tokens-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: trust gate (collaborator-only on self-hosted)
+    runs-on: arc-zippie
+    timeout-minutes: 2
+    steps:
+      - name: "Block untrusted (non-collaborator) PRs on self-hosted runner"
+        if: ${{ github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) }}
+        run: |
+          echo "::error::PR validation restricted to repo collaborators."
+          exit 1
+
+  drift:
+    needs: guard
+    name: generated tokens match tokens.json
+    runs-on: arc-zippie
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - name: generate.py --check
+        # Stdlib only - no uv, no pip, no network. If that ever stops being
+        # true, this job needs a dependency step rather than silently picking
+        # up whatever the runner happens to have.
+        run: python3 design/generate.py --check

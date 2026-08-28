@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- App Store export for app.zippie-companion.testflight.yml.
+     Manual signing against the shared Apple Distribution cert in the runner's
+     CI keychain plus the "zippie companion AppStore" profile. Same shape as
+     macchina's companion export.
+
+     THREE profiles now (ADR 0020 phase 2 added the tunnel; issue #244 added
+     the widget). Every embedded extension is a separate bundle id and cannot
+     ride the app's profile; omitting an entry here does not fail the export,
+     it produces an IPA whose extension is signed with whatever xcodebuild
+     guessed, which then fails to load on the device with no useful error.
+     Every entry must name a profile that exists in the runner's
+     ~/Library/MobileDevice/Provisioning Profiles/.
+
+     THE WIDGET'S PROFILE DOES NOT EXIST YET. Unlike the tunnel's, which ADR
+     0020 records was created in the portal on 2026-08-05, "zippie companion
+     widget AppStore" has to be minted against a NEW app.zippie.companion.widget
+     App ID with App Groups enabled before a Release archive can succeed - a
+     portal step this change could not perform. Until then this export will
+     fail on that profile name, loudly, which is the correct failure mode for
+     a signing gap rather than a silently unsigned extension. -->
+
+<plist version="1.0">
+<dict>
+    <key>method</key>
+    <string>app-store-connect</string>
+    <key>teamID</key>
+    <string>__APPLE_TEAM_ID__</string>
+    <key>signingStyle</key>
+    <string>manual</string>
+    <key>signingCertificate</key>
+    <string>Apple Distribution</string>
+    <key>provisioningProfiles</key>
+    <dict>
+        <key>app.zippie.companion</key>
+        <string>zippie companion AppStore</string>
+        <key>app.zippie.companion.tunnel</key>
+        <string>zippie companion tunnel AppStore</string>
+        <key>app.zippie.companion.widget</key>
+        <string>zippie companion widget AppStore</string>
+    </dict>
+    <key>uploadSymbols</key>
+    <true/>
+    <key>destination</key>
+    <string>export</string>
+</dict>
+</plist>

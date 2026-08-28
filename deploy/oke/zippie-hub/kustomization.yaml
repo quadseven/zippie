@@ -1,0 +1,42 @@
+# Zippie fleet hub (#37).
+# Apply: kubectl apply -k deploy/oke/zippie-hub/
+#
+# WHY THIS FILE EXISTS. Until 2026-08-08 the hub's Deployment mounted a
+# ConfigMap named `zippie-hub-app` that NOTHING generated. It was created by
+# hand - `kubectl get configmap -n zippie zippie-hub-app` reported
+# `managed-by: (none)` - so the running hub's program and assets came from
+# outside git and no pipeline could update them. Editing hub.py on main
+# changed the repo and left the pod untouched: deployed-looking and inert,
+# which is #38's failure shape. quadseven/zippie#15 has been held open for
+# exactly this reason.
+#
+# It was never a recovery job. Four of the five live files already matched the
+# repo byte for byte; only tokens.generated.css differed, by a 36-byte comment
+# header still naming the pre-split `production/zippie/design/` paths. The repo
+# copy is the correct one.
+#
+# THE COPIES UNDER hub-app/ ARE DELIBERATE. configMapGenerator refuses files
+# outside the kustomization root, so the sources cannot be referenced in place.
+# zippie-home solved this the same way for zippie-pkg/, and this follows that
+# precedent rather than inventing a third pattern or relaxing the load
+# restrictor. test_hub_app_copy_in_sync.py holds the copies equal to their
+# sources and fails CI if either side moves alone.
+#
+# The generator's name-suffix hash is load-bearing, not noise: editing hub.js
+# rolls the ConfigMap name, which rolls the pod, so the hub cannot serve a
+# stale copy of its own program. Same reason zippie-home keeps it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: zippie
+
+resources:
+  - zippie-hub.yaml
+
+configMapGenerator:
+  - name: zippie-hub-app
+    files:
+      - hub-app/hub.py
+      - hub-app/hub.js
+      - hub-app/hub.css
+      - hub-app/index.html
+      - hub-app/tokens.generated.css

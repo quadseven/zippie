@@ -1,0 +1,45 @@
+<!--
+THESIS: a fleet is read by worry, not by inventory. This page owns the ordering
+- nodes needing attention first, quiet ones after - and refuses the device-grid
+every fleet dashboard ships, which gives a router with five legs and a phone
+with two the same visual weight.
+OWN-WORLD: the zippie system, generated from tokens.json and identical to the
+iOS and Android apps. Paper ground, near-black text, one ink-blue accent that
+means carrying and nothing else. Hairlines, no cards. Tabular figures.
+STORY: the reader scans the top of the list, finds nothing or finds the one
+node in trouble, expands it in place, and knows whether to act.
+FIRST VIEWPORT: one sentence of fleet state at display scale, then the node
+list ordered by worry, each node one line: name, kind, state word, its legs as
+a sparkline of carrying-ness, and the age of its last report.
+FORM: worry-ordered list, chosen over device grid, map, merged leg table, and
+timeline. The concept-seed script produced no output in this environment and
+its assignment did not run; derivation and choice are recorded in DESIGN-hub.md.
+FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>zippie</title>
+<link rel="stylesheet" href="tokens.generated.css">
+<link rel="stylesheet" href="hub.css">
+</head>
+<body>
+<main id="app">
+  <header class="head">
+    <h1 id="headline">Loading</h1>
+    <p id="subhead" class="sub"></p>
+  </header>
+  <section aria-labelledby="nodes-h">
+    <h2 id="nodes-h" class="section">Nodes</h2>
+    <ol id="nodes" class="nodes"></ol>
+  </section>
+  <footer class="foot">
+    <p id="stamp"></p>
+    <p>Nodes needing attention sort first. A node that has not reported is not a node that is fine.</p>
+  </footer>
+</main>
+<script src="hub.js" type="module"></script>
+</body>
+</html>

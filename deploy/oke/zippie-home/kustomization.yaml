@@ -1,0 +1,58 @@
+# IDENTITY PINNED to the old name after the 2026-07-31 Zippie rename.
+# The namespace, the PVC and the Deployment name are NOT cosmetic here:
+#   - the PVC holds /etc/wireguard, the home server's KEYS. A new PVC
+#     means new keys, which invalidates every travel peer's config.
+#   - this pod is hostNetwork, so a renamed Deployment would run
+#     ALONGSIDE the old one and fight over the same UDP ports.
+# Everything user-facing is Zippie; the k8s identity migration needs a
+# re-key window and is tracked separately.
+# Zippie home exit (#1986).
+# Apply: kubectl apply -k deploy/oke/zippie-home/
+#
+# Auto-applied on push to main by .github/workflows/deploy.oke-manifests.yml.
+# It said "auto-applied by sync.k8s-manifests" until infra#2266, and that had
+# been FALSE since the 2026-08-06 repo split: sync.k8s-manifests lives in
+# quadseven/infra and only watches production/oke/manifests/** there, so this
+# directory was applied by nothing for a fortnight while the comment said
+# otherwise. See deploy/oke/README.md.
+#
+# The server script is git-managed and mounted via the configMapGenerator
+# hash-roll, so editing it rolls the ConfigMap name and the pod cannot serve a
+# stale copy - same pattern as arr/media-deduper and unifi-wan-scraper.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: zippie
+
+resources:
+  - zippie-home.yaml
+  - zippie-home-config.yaml
+
+configMapGenerator:
+  - name: zippie-home-script
+    files:
+      - zippie_home.py
+  # The home TRANSPORT is the zippie package, not the standalone server script,
+  # so the modules home_transport imports transitively ship the same way. Only
+  # those five plus __init__ are here: the full package pulls in the travel
+  # agent and would not fit the pattern. A drift guard
+  # (test_manifest_copy_in_sync.py) pins these to the canonical files AND
+  # re-derives the import graph, so a new import fails CI rather than
+  # ImportError-ing in the pod.
+  #
+  # This list and the zippie-pkg/ DIRECTORY are held EQUAL, not merely
+  # overlapping. Until 2026-08-07 the directory also held agent.py and
+  # policy.py, in neither this list nor the drift guard: unshipped, unchecked,
+  # and agent.py already two changes stale. They were deleted rather than
+  # added, because nothing the pod runs imports them - zippie_home.py imports
+  # nothing from the package, and home_transport's transitive graph is exactly
+  # the five below. The guard now fails if a file appears in the directory, in
+  # this list, or in PKG_MODULES without appearing in all three, so adding a
+  # module means editing BOTH lists (quadseven/infra#2277).
+  - name: zippie-transport-pkg
+    files:
+      - zippie-pkg/__init__.py
+      - zippie-pkg/classify.py
+      - zippie-pkg/datapath.py
+      - zippie-pkg/home_transport.py
+      - zippie-pkg/retransmit.py
+      - zippie-pkg/transport.py

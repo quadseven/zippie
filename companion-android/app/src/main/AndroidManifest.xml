@@ -1,0 +1,200 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- ConnectivityManager.requestNetwork REQUIRES this, and without it the
+         cellular pinning the whole design rests on throws SecurityException at
+         runtime - a relay that installs, starts, shows a notification and never
+         carries a byte. It also satisfies Android 14's prerequisite for the
+         connectedDevice foreground-service type below. -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- The relay holds a cellular socket open with the screen off. Android 14
+         requires the specific subtype, and connectedDevice is the honest one:
+         this service exists to carry another device's traffic. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Android 13+. The service runs without it, but its notification is
+         hidden, which removes the only sign that this phone is spending
+         cellular for the bond and the only way to stop it from the shade. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Gates BOTH BOOT_COMPLETED and LOCKED_BOOT_COMPLETED (#54). Without it
+         a phone that reboots unattended never starts relaying - a receiver
+         declared but missing this permission never fires, and looks on the
+         bench identical to one that works, because the bench is where
+         somebody always unlocks the phone anyway. -->
+    <!-- A foreground service of type connectedDevice is SUPPOSED to be exempt
+         from Doze, and on a Pixel with Adaptive Battery it is not: the relay
+         keeps announcing on its timer while its UDP socket stops being
+         serviced, so the router sees a leg that is present and answers
+         nothing. Observed live on suzu three times (#254).
+
+         DECLARED SO IT CAN BE GRANTED. Without this the app cannot prompt, and
+         a Device Owner has no declared permission to allowlist against - so an
+         MDM-managed phone left in a car has no route to the exemption at all.
+         Declaring it does NOT enable anything by itself. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- ACCESS_FINE_LOCATION and ACCESS_WIFI_STATE are deliberately NOT
+         declared. They would be needed to read the current SSID, which is how
+         the iOS app arms its on-demand rule; this app decides contribute vs
+         client by asking the router's LOCAL console instead (RouterProximity),
+         which is evidence rather than a name any cafe could also use. A
+         dangerous permission with no code path behind it is a scary prompt for
+         nothing, and these phones are not all the operator's. -->
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:theme="@style/Theme.ZippieCompanion">
+
+        <!--
+          WITHOUT THIS META-DATA THE RESTRICTIONS FILE IS INVISIBLE. An MDM
+          discovers what it may configure by reading this reference; a
+          declaration file that is never pointed at simply never appears in the
+          admin console, which looks identical to the feature not existing.
+        -->
+        <meta-data
+            android:name="android.content.APP_RESTRICTIONS"
+            android:resource="@xml/app_restrictions" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- THE HOME SCREEN OF A DEDICATED LEG (#222).
+             On a phone whose whole job is being a leg, the bond status IS what
+             the home screen should show - the legs, which one is carrying, how
+             much each has moved. Headwind could set a wallpaper because it is a
+             launcher; Fleet cannot, because the Android Management API has no
+             field to SET one. Being the launcher ourselves answers that better
+             than porting a wallpaper would: the app draws its own screen.
+
+             DISABLED HERE, ON PURPOSE, AND THAT IS THE WHOLE DESIGN.
+             A component carrying CATEGORY_HOME makes this app eligible as a
+             home screen, and Android then asks the user which home app to use
+             the next time HOME is pressed. The phone carrying this household's
+             traffic must not start asking that merely because it took an app
+             update. So it ships off, and only managed configuration
+             (homeScreenMode) turns it on - see HomeScreenRole. -->
+        <activity-alias
+            android:name=".HomeScreenAlias"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- CLIENT mode: captures this phone's traffic and bonds its own links
+             back to home. The iOS twin is NEPacketTunnelProvider with default
+             routes. -->
+        <service
+            android:name=".ZippieVpnService"
+            android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+
+        <!-- CONTRIBUTE mode: lends this phone's cellular to the router's bond.
+             A plain foreground service, NOT a VpnService - it captures nothing
+             and only forwards opaque bytes.
+
+             directBootAware (#54): manifest-only, no code change to
+             RelayService.kt. A directBootAware BroadcastReceiver's process is
+             running before unlock, but whether it may start a component that
+             is NOT itself marked directBootAware is not something Android's
+             own docs state either way - so this is declared explicitly rather
+             than relied on implicitly. RelayService still calls
+             RelayConfiguration.load, which reads credential-encrypted
+             SharedPreferences and is unreadable before unlock regardless of
+             this flag - see BootReceiver's class doc for exactly what that
+             means (relays, does not announce, until the phone unlocks). -->
+        <service
+            android:name=".RelayService"
+            android:exported="false"
+            android:directBootAware="true"
+            android:foregroundServiceType="connectedDevice" />
+
+        <!-- #54: starts RelayService after a reboot without a human,
+             including a phone that is rebooted and never unlocked.
+             directBootAware so the system will actually invoke it before
+             first unlock; see BootReceiver's class doc for the full
+             reasoning, including the two broadcasts and the FGS-start
+             exemption (AC6). exported="true" because LOCKED_BOOT_COMPLETED
+             and BOOT_COMPLETED are both protected broadcasts the system alone
+             may send - exporting the receiver for them does not open it to
+             other apps. -->
+        <!-- The door an MDM knocks on. EXPORTED because the sender is another
+             app (the device-owner MDM), and an explicit intent carrying
+             FLAG_INCLUDE_STOPPED_PACKAGES is the only thing that reaches an app
+             which has never been launched. The component name is a contract -
+             muster names it in policy (#254).
+
+             DELIBERATELY UNGUARDED, and this is not an oversight. Do not add
+             android:permission back without reading this.
+
+             The obvious guard is BIND_DEVICE_ADMIN, because on a
+             DeviceAdminReceiver that is the correct idiom and it READS as
+             "device owner only". It is not. The platform's own table says
+             `sourcePackage=android prot=signature|role`, so it means PLATFORM
+             SIGNED only - no device-owner app can ever hold it. It was on this
+             receiver for one commit and would have locked out the only
+             legitimate caller. Worse, a broadcast to a receiver whose
+             permission the sender lacks is dropped SILENTLY: no exception, no
+             log at either end, indistinguishable from never being sent.
+
+             No custom permission either. A `normal` one is a label anything can
+             request - documentation wearing a guarantee's clothes - and a
+             `signature` one cannot be shared with a separately-signed MDM.
+
+             The threat is small enough to accept and worth stating: the worst a
+             hostile local app achieves is asking zippie to RE-EVALUATE whether
+             to relay. It cannot decide the answer. AutoStartDecision still
+             requires autoStartRelay in managed configuration - writable only by
+             the device owner - so an attacker can at most trigger, early, the
+             exact thing the operator already asked for. Nothing destructive
+             sits behind this bell, and repeat calls are debounced in the
+             receiver so it cannot be used to spend the battery. -->
+        <receiver
+            android:name=".WakeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="app.zippie.companion.action.WAKE" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true"
+            android:directBootAware="true">
+            <intent-filter>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <!-- UPDATING THIS APP STOPS ITS FOREGROUND SERVICE, and nothing
+                     was listening for that. Measured 2026-08-17: after an
+                     `adb install -r` the relay was simply gone, the router's leg
+                     expired, and the only recovery was the supervision ladder's
+                     15-MINUTE steady state. On the device that is someone's only
+                     uplink, shipping an update was a quarter-hour outage.
+                     MY_PACKAGE_REPLACED is delivered only to this app, about
+                     itself, and only by the system. -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

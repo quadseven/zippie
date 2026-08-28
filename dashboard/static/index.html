@@ -1,0 +1,760 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Zippie</title>
+<style>
+  /* Zippie console.
+     Read at a glance, often while moving, often at night -- so the ground is a
+     deep slate rather than pure black (less glare and less halation on a phone
+     in a dark car) and every figure is monospaced with tabular numerals so
+     digits do not jitter as they update once a second.
+
+     Two colour systems, kept strictly apart:
+       LINK IDENTITY  each connection keeps one hue across its card, its share
+                      bar and the graph, so "the violet one" is a thing you can
+                      say out loud.
+       STATE          up / degraded / down. Never reused as an identity hue, so
+                      "is anything wrong" still reads instantly at five links.
+
+     Deliberately single-theme: this is an instrument panel, and a light
+     version would be unusable in the situation it exists for. */
+  :root {
+    --ground:       #0E1319;
+    --panel:        #151C25;
+    --panel-raised: #1B242F;
+    --line:         #24303D;
+    --ink:          #E8EDF2;
+    --ink-dim:      #93A2B4;
+    --ink-faint:    #5D6E80;
+
+    --up:       #4ADE80;
+    --degraded: #FBBF24;
+    --down:     #F87171;
+
+    --ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--ui);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 740px; margin: 0 auto; padding: 20px 16px 56px; }
+
+  .banner {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 18px 20px;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 16px;
+    align-items: center;
+  }
+  .beacon { width: 12px; height: 12px; border-radius: 50%; background: var(--ink-faint); }
+  .beacon[data-state="up"]       { background: var(--up);       color: var(--up);       animation: pulse 2.4s ease-out infinite; }
+  .beacon[data-state="degraded"] { background: var(--degraded); color: var(--degraded); animation: pulse 1.2s ease-out infinite; }
+  .beacon[data-state="down"]     { background: var(--down);     color: var(--down); }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 currentColor; }
+    70%  { box-shadow: 0 0 0 9px transparent; }
+    100% { box-shadow: 0 0 0 0 transparent; }
+  }
+  @media (prefers-reduced-motion: reduce) { .beacon { animation: none !important; } }
+
+  .banner h1 { margin: 0; font-size: 20px; font-weight: 620; letter-spacing: -0.01em; text-wrap: balance; }
+  .banner .sub { margin: 3px 0 0; color: var(--ink-dim); font-size: 13.5px; }
+  .banner .sub b { color: var(--ink); font-weight: 560; font-family: var(--mono); }
+
+  .economy {
+    margin-top: 10px; padding: 9px 14px;
+    border: 1px solid var(--line); border-radius: 10px;
+    color: var(--ink-dim); font-size: 12px;
+  }
+  .economy code { color: var(--ink); font-family: var(--mono); }
+
+  .graph-card { margin-top: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .tabs { display: flex; gap: 2px; padding: 10px 12px 0; border-bottom: 1px solid var(--line); }
+  .tab {
+    appearance: none; border: 0; background: transparent;
+    color: var(--ink-faint);
+    font-family: var(--ui); font-size: 12px; font-weight: 600;
+    letter-spacing: 0.07em; text-transform: uppercase;
+    padding: 8px 12px 10px; cursor: pointer;
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .tab:hover { color: var(--ink-dim); }
+  .tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+  .tab:focus-visible { outline: 2px solid var(--ink-dim); outline-offset: -2px; border-radius: 4px; }
+
+  .graph-head { display: flex; align-items: baseline; justify-content: space-between; padding: 14px 18px 4px; }
+  .graph-value { font-family: var(--mono); font-size: 26px; font-variant-numeric: tabular-nums; }
+  .graph-unit  { color: var(--ink-dim); font-size: 13px; margin-left: 5px; }
+  .graph-label { color: var(--ink-faint); font-size: 11.5px; letter-spacing: 0.07em; text-transform: uppercase; }
+  canvas { display: block; width: 100%; height: 96px; }
+  /* Hover readout. The chart is the only place that shows which link carried
+     what, and "which one is the amber line" was previously unanswerable. */
+  .chart-wrap { position: relative; }
+  .tip {
+    position: absolute; pointer-events: none; z-index: 5;
+    background: #0C1218F2; border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 10px; font-size: 12px; line-height: 1.5; min-width: 168px;
+    box-shadow: 0 6px 24px #0008;
+  }
+  .tip[hidden] { display: none; }
+  .tip .tip-t { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+  .tip .tip-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .tip .tip-row .sw { width: 8px; height: 8px; border-radius: 2px; flex: 0 0 auto; }
+  .tip .tip-row .nm { flex: 1 1 auto; color: var(--muted); }
+  .tip .tip-row .vl { font-variant-numeric: tabular-nums; }
+  .tip .tip-row .st { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+
+  .links { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+
+  .link {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--hue, var(--ink-faint));
+    border-radius: 12px;
+    padding: 14px 16px;
+  }
+  .link.is-down { opacity: .62; }
+  /* Standby is healthy-but-unused. Dimmed so it recedes, but NOT as far
+     as down -- it is working, and it is the thing that will save you. */
+  .link.is-standby { opacity: .78; border-left-style: dashed; }
+  .tier-badge {
+    font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint);
+    border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px;
+  }
+
+  .link-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .link-name { font-weight: 600; font-size: 15.5px; }
+  .link-where { color: var(--ink-faint); font-size: 12.5px; font-family: var(--mono); }
+
+  .pill {
+    margin-left: auto;
+    font-size: 11px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase;
+    padding: 3px 9px; border-radius: 999px; border: 1px solid currentColor;
+  }
+  .pill[data-state="up"]       { color: var(--up); }
+  .pill[data-state="degraded"] { color: var(--degraded); }
+  .pill[data-state="down"]     { color: var(--down); }
+  .pill[data-state="standby"]  { color: var(--ink-faint); }
+
+  .metrics { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 12px 10px; }
+  .metric .k { display: block; color: var(--ink-faint); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; }
+  .metric .v { font-family: var(--mono); font-size: 15px; font-variant-numeric: tabular-nums; margin-top: 2px; display: block; }
+  .metric .v small { color: var(--ink-dim); font-size: 11px; margin-left: 2px; }
+  .metric .v[data-warn="true"] { color: var(--degraded); }
+  .metric .v[data-bad="true"]  { color: var(--down); }
+
+  .io {
+    margin-top: 9px; font-family: var(--mono);
+    font-size: 11px; color: var(--ink-faint); letter-spacing: .01em;
+  }
+  .io-stall { color: var(--degraded); }
+  .share { margin-top: 13px; }
+  .share-track { height: 5px; border-radius: 999px; background: var(--panel-raised); overflow: hidden; }
+  .share-fill { height: 100%; background: var(--hue); border-radius: 999px; transition: width .5s ease; }
+
+  /* Data cap. Rarely surfaced by anything; on a metered SIM it is the
+     number that actually bites, so it gets a permanent row, not a sub-menu. */
+  .cap { margin-top: 11px; display: flex; align-items: center; gap: 9px; }
+  .cap-track { flex: 1; height: 5px; border-radius: 999px; background: var(--panel-raised); overflow: hidden; }
+  .cap-fill { height: 100%; border-radius: 999px; background: var(--ink-faint); transition: width .5s ease; }
+  .cap-fill[data-level="warn"] { background: var(--degraded); }
+  .cap-fill[data-level="crit"] { background: var(--down); }
+  .cap-text { font-family: var(--mono); font-size: 11.5px; color: var(--ink-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  .err { margin-top: 10px; font-size: 12.5px; color: var(--down); font-family: var(--mono); word-break: break-word; }
+
+  .foot { margin-top: 18px; color: var(--ink-faint); font-size: 12px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .foot code { font-family: var(--mono); }
+
+  .notice { margin-top: 14px; padding: 11px 14px; border: 1px dashed var(--line); border-radius: 10px; color: var(--ink-dim); font-size: 12.5px; }
+  .notice b { color: var(--degraded); font-weight: 620; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="banner">
+    <span class="beacon" id="beacon" data-state="down"></span>
+    <div>
+      <h1 id="headline">Connecting…</h1>
+      <p class="sub" id="subline">Waiting for the agent</p>
+    </div>
+  </div>
+
+  <div class="economy" id="economy" hidden></div>
+
+  <div class="graph-card">
+    <div class="tabs" role="tablist" aria-label="Metric">
+      <button class="tab" role="tab" aria-selected="true"  data-metric="throughput">Traffic</button>
+      <button class="tab" role="tab" aria-selected="false" data-metric="rtt">Latency</button>
+      <button class="tab" role="tab" aria-selected="false" data-metric="loss">Loss</button>
+    </div>
+    <div class="graph-head">
+      <div><span class="graph-value" id="gval">—</span><span class="graph-unit" id="gunit"></span></div>
+      <span class="graph-label" id="glabel">combined</span>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="chart" height="96" aria-label="Recent history, one line per link"></canvas>
+      <div class="tip" id="tip" hidden role="status" aria-live="off"></div>
+    </div>
+  </div>
+
+  <div class="links" id="links"></div>
+
+  <div class="foot">
+    <span>home <code id="home">—</code></span>
+    <span>up <code id="uptime">—</code> · zippie <code id="version">—</code> · pid <code id="pid">—</code> · cfg <code id="cfghash">—</code></span>
+  </div>
+
+  <div class="notice" id="notice" hidden></div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  // ── SECURITY ─────────────────────────────────────────────────────────────
+  // EVERY value from /api/status is rendered with textContent, never innerHTML.
+  //
+  // `p.ssid` is ATTACKER-CONTROLLED: an SSID is whatever a nearby access point
+  // chooses to broadcast, so anyone in RF range of this travel device can name
+  // their network `<img src=x onerror=...>` and have it land in this page. That
+  // is not hypothetical for a router whose entire job is joining hotel, airport
+  // and cafe wifi.
+  //
+  // `p.name`, `p.interface` and `p.last_error` come from local config or the
+  // agent, but are handled identically -- one rule with no exceptions is the
+  // only version of this that survives someone adding a field later.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const HEX = ["#4CC2E0", "#B18BE8", "#E0A54C", "#6FD08C", "#E8798B"];
+  // The agent keeps its own bounded history and serves it at /api/series, so
+  // the graph is populated the moment the page loads instead of drawing itself
+  // from scratch over the next two minutes. That matters because this console
+  // is served THROUGH the bond it reports on: you usually open it right after
+  // something went wrong, which is exactly when the in-browser-only history
+  // was still empty.
+  const HISTORY = 240;              // ~4 min at a 1 s poll; server caps at 720
+  let metric = "throughput";
+  let series = new Map();           // link name -> [{t, v}]
+  const lastBytes = new Map();      // link name -> {total, at}
+  let hoverX = null;                // canvas px, or null when not hovering
+  let lastPaths = [];               // for the tooltip to name/colour rows
+  let seeded = false;
+
+  const $ = (id) => document.getElementById(id);
+
+  const fmtRate = (bps) => {
+    if (!isFinite(bps) || bps <= 0) return ["0", "bps"];
+    if (bps >= 1e9) return [(bps / 1e9).toFixed(2), "Gbps"];
+    if (bps >= 1e6) return [(bps / 1e6).toFixed(2), "Mbps"];
+    if (bps >= 1e3) return [(bps / 1e3).toFixed(1), "Kbps"];
+    return [String(Math.round(bps)), "bps"];
+  };
+
+  const fmtDur = (s) => {
+    if (s == null) return "—";
+    s = Math.round(s);
+    const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+    if (d) return d + "d " + h + "h";
+    if (h) return h + "h " + m + "m";
+    if (m) return m + "m " + (s % 60) + "s";
+    return s + "s";
+  };
+
+  const fmtBytes = (n) => {
+    if (n >= 1e9) return (n / 1e9).toFixed(2) + " GB";
+    if (n >= 1e6) return (n / 1e6).toFixed(2) + " MB";
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + " KB";
+    return Math.round(n || 0) + " B";
+  };
+
+  // "degraded" rather than "down" when a link is reachable but policy has
+  // pushed its weight to zero -- worth distinguishing, because a zero-weight
+  // link is alive and carrying nothing, which looks fine until you need it.
+  // Lowest tier with a usable link. Everything above it is standby: healthy,
+  // deliberately carrying nothing. Mirrors policy.active_tier() on the agent.
+  const activeTier = (paths) => {
+    const usable = paths.filter((p) => (p.effective_weight || 0) > 0 && p.state !== "down");
+    if (!usable.length) return null;
+    return Math.min.apply(null, usable.map((p) => p.tier ?? 1));
+  };
+
+  const linkState = (p, tier) => {
+    if (p.state === "down" || (p.loss_pct ?? 0) >= 100) return "down";
+    // Standby is checked BEFORE degraded: a reserve link has zero share by
+    // design, and calling that "degraded" would cry wolf on every healthy bond.
+    if (tier != null && (p.tier ?? 1) > tier) return "standby";
+    if (p.state === "degraded" || p.over_soft_limit || (p.effective_weight || 0) <= 0) return "degraded";
+    return "up";
+  };
+
+  const overallState = (paths, tier) => {
+    const states = paths.map((p) => linkState(p, tier));
+    const live = states.filter((s) => s === "up").length;
+    if (!live) return "down";
+    // Standby links are not a fault, so they must not make the bond look
+    // degraded -- otherwise a correctly-configured reserve shows amber forever.
+    const problems = states.filter((s) => s === "degraded" || s === "down").length;
+    return problems ? "degraded" : "up";
+  };
+
+  function render(s) {
+    const paths = s.paths || [];
+    const now = Date.now();
+
+    lastPaths = paths;
+    paths.forEach((p) => {
+      // The agent now measures the rate itself from the wg interface counters
+      // and knows when a counter RESET (failover recreates the interface), in
+      // which case it sends null rather than a bogus spike. Prefer it, and
+      // only fall back to differencing totals in the browser for an agent
+      // older than that change.
+      let bps = p.tx_bps != null || p.rx_bps != null
+        ? (p.tx_bps || 0) + (p.rx_bps || 0)
+        : null;
+      const total = (p.tx_bytes || 0) + (p.rx_bytes || 0);
+      const prev = lastBytes.get(p.name);
+      if (bps == null) {
+        bps = prev && now > prev.at
+          ? Math.max(0, (total - prev.total) * 8 / ((now - prev.at) / 1000))
+          : 0;
+      }
+      lastBytes.set(p.name, { total: total, at: now });
+      p._bps = bps;
+
+      const arr = series.get(p.name) || [];
+      arr.push({
+        t: now,
+        v: metric === "throughput" ? bps : metric === "rtt" ? (p.rtt_ms ?? 0) : (p.loss_pct ?? 0),
+      });
+      while (arr.length > HISTORY) arr.shift();
+      series.set(p.name, arr);
+    });
+
+    const tier = activeTier(paths);
+    const state = overallState(paths, tier);
+    const upCount = paths.filter((p) => linkState(p, tier) === "up").length;
+    // CARRYING means weight > 0, not state === "up". The headline used upCount
+    // and read "1 of 3 carrying" while all three links were carrying traffic
+    // (65/17/17) - two were DEGRADED, which is a health label, not a statement
+    // about whether the kernel is routing over them.
+    const carryingCount = paths.filter((p) => (p.effective_weight || 0) > 0).length;
+    const standbyCount = paths.filter((p) => linkState(p, tier) === "standby").length;
+    $("beacon").dataset.state = state;
+    $("headline").textContent =
+      state === "up"   ? "Bonded across " + upCount + " link" + (upCount === 1 ? "" : "s")
+    : state === "down" ? "No link carrying traffic"
+    :                    "Degraded — " + carryingCount + " of " + (paths.length - standbyCount) + " carrying";
+
+    const sub = $("subline");
+    sub.textContent = "";
+    const modeB = document.createElement("b"); modeB.textContent = s.mode ?? "—";
+    const primB = document.createElement("b"); primB.textContent = s.primary ?? "none";
+    sub.append("mode ", modeB, " · primary ", primB);
+
+    const economy = $("economy");
+    if (s.economy) {
+      const e = s.economy;
+      const ratio = e.metered_amplification == null
+        ? "—" : Number(e.metered_amplification).toFixed(2) + "×";
+      economy.textContent =
+        (e.idle ? "idle economy" : "active")
+        + " · client" + (e.client_payload_estimated ? " (est.) " : " ")
+        + fmtBytes(e.client_payload_bytes)
+        + " · metered " + fmtBytes(e.metered_bytes)
+        + " · spend " + ratio
+        + " · idle floor " + e.projected_idle_mb_day + " MB/day"
+        + " · probes " + e.probe_interval_ms + " ms"
+        + " · keepalive " + e.persistent_keepalive_s + " s";
+      economy.hidden = false;
+    } else {
+      economy.hidden = true;
+    }
+
+    $("home").textContent = s.home ?? "—";
+    $("uptime").textContent = fmtDur(s.uptime_s);
+    $("version").textContent = s.version ?? "—";
+    // Which process and which config, cryptographically -- the 2026-07-30
+    // incident was an agent whose live tiers contradicted the file on disk.
+    $("pid").textContent = s.pid ?? "—";
+    $("cfghash").textContent = (s.config_sha256 ?? "").slice(0, 8) || "—";
+
+    if (metric === "throughput") {
+      const agg = fmtRate(paths.reduce((a, p) => a + (p._bps || 0), 0));
+      $("gval").textContent = agg[0]; $("gunit").textContent = agg[1]; $("glabel").textContent = "combined";
+    } else if (metric === "rtt") {
+      const live = paths.filter((p) => p.rtt_ms != null && linkState(p) !== "down");
+      const best = live.length ? Math.min.apply(null, live.map((p) => p.rtt_ms)) : null;
+      $("gval").textContent = best == null ? "—" : best.toFixed(0);
+      $("gunit").textContent = best == null ? "" : "ms";
+      $("glabel").textContent = "best link";
+    } else {
+      const live = paths.filter((p) => linkState(p) !== "down");
+      const worst = live.length ? Math.max.apply(null, live.map((p) => p.loss_pct || 0)) : 0;
+      $("gval").textContent = worst.toFixed(1); $("gunit").textContent = "%"; $("glabel").textContent = "worst link";
+    }
+
+    renderLinks(paths, tier);
+    draw(paths);
+  }
+
+  function renderLinks(paths, tier) {
+    const host = $("links");
+    // Share is of the ACTIVE tier only -- a standby link is not competing.
+    const totalWeight = paths
+      .filter((p) => linkState(p, tier) === "up" || linkState(p, tier) === "degraded")
+      .reduce((a, p) => a + Math.max(0, p.effective_weight || 0), 0);
+    host.textContent = "";
+
+    if (!paths.length) {
+      const empty = document.createElement("section");
+      empty.className = "link";
+      empty.textContent = "No links configured";
+      host.appendChild(empty);
+      return;
+    }
+
+    paths.forEach((p, i) => {
+      const st = linkState(p, tier);
+      const hue = HEX[i % HEX.length];
+      const rate = fmtRate(p._bps || 0);
+      const share = st === "standby" ? 0
+                  : totalWeight > 0 ? (Math.max(0, p.effective_weight || 0) / totalWeight) * 100 : 0;
+
+      const el = document.createElement("section");
+      el.className = "link" + (st === "down" ? " is-down" : st === "standby" ? " is-standby" : "");
+      el.style.setProperty("--hue", hue);
+
+      const top = document.createElement("div");
+      top.className = "link-top";
+      const nameEl = document.createElement("span");
+      nameEl.className = "link-name";
+      // Operator-set label; falls back to the identifier when unset.
+      nameEl.textContent = p.label || p.name;
+      const whereEl = document.createElement("span");
+      whereEl.className = "link-where";
+      // Keep the identifier and interface visible but secondary -- when a
+      // link misbehaves you need to know WHICH interface, not just its nickname.
+      const ident = [p.label && p.label !== p.name ? p.name : null, p.ssid, p.interface]
+        .filter(Boolean).join(" · ");
+      whereEl.textContent = ident || "—";
+      const pill = document.createElement("span");
+      pill.className = "pill";
+      pill.dataset.state = st;
+      pill.textContent = st;
+      top.append(nameEl, whereEl);
+      if ((p.tier ?? 1) > 1) {
+        const tb = document.createElement("span");
+        tb.className = "tier-badge";
+        tb.textContent = "tier " + (p.tier ?? 1);
+        top.appendChild(tb);
+      }
+      top.appendChild(pill);
+      el.appendChild(top);
+
+      const cell = (label, value, unit, warn, bad) => {
+        const d = document.createElement("div"); d.className = "metric";
+        const k = document.createElement("span"); k.className = "k"; k.textContent = label;
+        const v = document.createElement("span"); v.className = "v"; v.textContent = value;
+        if (unit) { const u = document.createElement("small"); u.textContent = unit; v.appendChild(u); }
+        if (warn) v.dataset.warn = "true";
+        if (bad) v.dataset.bad = "true";
+        d.append(k, v);
+        return d;
+      };
+
+      const loss = p.loss_pct ?? 0;
+      const metrics = document.createElement("div");
+      metrics.className = "metrics";
+      metrics.append(
+        cell("Throughput", rate[0], rate[1], false, false),
+        cell("Latency", p.rtt_ms == null ? "—" : p.rtt_ms.toFixed(0), p.rtt_ms == null ? "" : "ms", (p.rtt_ms ?? 0) > 150, false),
+        cell("Loss", loss.toFixed(1), "%", loss > 1, loss > 5),
+        cell("Share", share.toFixed(0), "%", false, false)
+      );
+      el.appendChild(metrics);
+
+      // Split tx from rx. Summing them into one THROUGHPUT figure hides the
+      // single clearest symptom of a dead tunnel: WireGuard still SENDING
+      // handshake retries while receiving nothing back. Observed live on
+      // dongle4g as tx=71 bps / rx=0 bps at the same moment the agent
+      // reported "receive counter frozen after 3 failed probes" - a signature
+      // that the combined number rounded away into a small, innocuous value.
+      if (p.tx_bps != null || p.rx_bps != null) {
+        const tx = p.tx_bps || 0, rx = p.rx_bps || 0;
+        const io = document.createElement("div");
+        io.className = "io";
+        const t = fmtRate(tx), r = fmtRate(rx);
+        io.textContent = "tx " + t.join(" ") + "  ·  rx " + r.join(" ");
+        // Sending into silence. Only meaningful once tx is non-trivial - an
+        // idle link legitimately sits at tx 0 / rx 0.
+        if (tx > 500 && rx === 0) {
+          io.classList.add("io-stall");
+          io.textContent += "  ·  sending, nothing returning";
+        }
+        el.appendChild(io);
+      }
+
+      const shareWrap = document.createElement("div"); shareWrap.className = "share";
+      const track = document.createElement("div"); track.className = "share-track";
+      const fill = document.createElement("div"); fill.className = "share-fill";
+      fill.style.width = share.toFixed(1) + "%";
+      track.appendChild(fill); shareWrap.appendChild(track); el.appendChild(shareWrap);
+
+      if (p.monthly_cap_gb) {
+        const used = p.usage_gb || 0;
+        const pct = Math.min(100, (used / p.monthly_cap_gb) * 100);
+        const cap = document.createElement("div"); cap.className = "cap";
+        const ct = document.createElement("div"); ct.className = "cap-track";
+        const cf = document.createElement("div"); cf.className = "cap-fill";
+        cf.dataset.level = pct >= 90 ? "crit" : pct >= 75 ? "warn" : "ok";
+        cf.style.width = pct.toFixed(1) + "%";
+        ct.appendChild(cf);
+        const txt = document.createElement("span"); txt.className = "cap-text";
+        txt.textContent = used.toFixed(1) + " / " + p.monthly_cap_gb + " GB";
+        cap.append(ct, txt);
+        el.appendChild(cap);
+      }
+
+      if (p.last_error) {
+        const e = document.createElement("div"); e.className = "err";
+        e.textContent = p.last_error;
+        el.appendChild(e);
+      }
+
+      host.appendChild(el);
+    });
+  }
+
+  function draw(paths) {
+    const c = $("chart");
+    const ctx = c.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    const w = c.clientWidth, h = c.clientHeight || 96;
+    if (c.width !== Math.round(w * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    const all = paths.map((p) => series.get(p.name) || []);
+    let peak = 1;
+    all.forEach((a) => a.forEach((s) => { if (s.v > peak) peak = s.v; }));
+
+    ctx.strokeStyle = "#1B242F"; ctx.lineWidth = 1;
+    for (let i = 1; i < 3; i++) {
+      const y = Math.round((h / 3) * i) + 0.5;
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    }
+
+    const step = w / (HISTORY - 1);
+    all.forEach((arr, i) => {
+      if (arr.length < 2) return;
+      const colour = HEX[i % HEX.length];
+      const offset = HISTORY - arr.length;
+      const xy = (v, idx) => [(idx + offset) * step, h - (v / peak) * (h - 10) - 5];
+
+      ctx.beginPath();
+      arr.forEach((s, idx) => { const pt = xy(s.v, idx); idx ? ctx.lineTo(pt[0], pt[1]) : ctx.moveTo(pt[0], pt[1]); });
+      ctx.strokeStyle = colour; ctx.lineWidth = 1.75; ctx.stroke();
+
+      ctx.lineTo((HISTORY - 1) * step, h);
+      ctx.lineTo(offset * step, h);
+      ctx.closePath();
+      ctx.fillStyle = colour + "1A";
+      ctx.fill();
+
+      // Emphasised endpoint: "now" should be findable without counting across.
+      const last = xy(arr[arr.length - 1].v, arr.length - 1);
+      ctx.beginPath(); ctx.arc(last[0], last[1], 2.75, 0, Math.PI * 2);
+      ctx.fillStyle = colour; ctx.fill();
+    });
+
+    if (hoverX != null) drawHover(ctx, paths, all, w, h, step, peak);
+  }
+
+  // Nearest sample to the cursor, by index rather than by timestamp: every
+  // link shares one x axis, so one index answers "what was each link doing at
+  // this moment" without per-link searching.
+  // Series are right-aligned to "now": a link that joined late has a shorter
+  // array, so index i on the shared x axis is i minus that shortfall. Getting
+  // this wrong reads a neighbouring sample and quietly mislabels the tooltip.
+  const at = (arr, idx, longest) => arr[idx - (longest - arr.length)];
+
+  function hoverIndex(step) {
+    const longest = Math.max(0, ...[...series.values()].map((a) => a.length));
+    if (!longest) return null;
+    const offset = HISTORY - longest;
+    const i = Math.round(hoverX / step) - offset;
+    return Math.max(0, Math.min(longest - 1, i));
+  }
+
+  function drawHover(ctx, paths, all, w, h, step, peak) {
+    const longest = Math.max(0, ...all.map((a) => a.length));
+    if (longest < 2) return;
+    const offset = HISTORY - longest;
+    const idx = hoverIndex(step);
+    if (idx == null) return;
+    const x = (idx + offset) * step;
+
+    ctx.strokeStyle = "#8FA3B8"; ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, h); ctx.stroke();
+    ctx.setLineDash([]);
+
+    all.forEach((arr, i) => {
+      const s = at(arr, idx, longest);
+      if (!s) return;
+      const y = h - (s.v / peak) * (h - 10) - 5;
+      ctx.beginPath(); ctx.arc(x, y, 3.25, 0, Math.PI * 2);
+      ctx.fillStyle = HEX[i % HEX.length]; ctx.fill();
+      ctx.strokeStyle = "#0C1218"; ctx.lineWidth = 1.5; ctx.stroke();
+    });
+
+    renderTip(paths, all, idx, x, w);
+  }
+
+  function renderTip(paths, all, idx, x, w) {
+    const tip = $("tip");
+    tip.textContent = "";
+    let stamp = null;
+    const longest = Math.max(0, ...all.map((a) => a.length));
+
+    const head = document.createElement("div");
+    head.className = "tip-t";
+    tip.appendChild(head);
+
+    paths.forEach((p, i) => {
+      const arr = all[i] || [];
+      const s = at(arr, idx, longest);
+      if (!s) return;
+      if (stamp == null) stamp = s.t;
+      const row = document.createElement("div");
+      row.className = "tip-row";
+      const sw = document.createElement("span");
+      sw.className = "sw"; sw.style.background = HEX[i % HEX.length];
+      const nm = document.createElement("span");
+      nm.className = "nm"; nm.textContent = p.label || p.name;
+      const vl = document.createElement("span");
+      vl.className = "vl";
+      // fmtRate returns a [value, unit] TUPLE; assigning it straight to
+      // textContent stringifies the array and renders "10.0,Kbps".
+      vl.textContent = metric === "throughput" ? fmtRate(s.v).join(" ")
+        : metric === "rtt" ? (s.v ? s.v.toFixed(0) + " ms" : "—")
+        : s.v.toFixed(1) + " %";
+      row.append(sw, nm, vl);
+      tip.appendChild(row);
+    });
+
+    // Time is the whole point of a timeseries hover: "what was each ISP doing
+    // at 14:32" is the question, and a value with no clock cannot answer it.
+    head.textContent = stamp ? new Date(stamp).toLocaleTimeString() : "";
+
+    tip.hidden = false;
+    // Flip before the right edge so the tooltip never leaves the card.
+    const tw = tip.offsetWidth || 180;
+    tip.style.left = (x + 12 + tw > w ? Math.max(0, x - tw - 12) : x + 12) + "px";
+    tip.style.top = "6px";
+  }
+
+  document.querySelectorAll(".tab").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".tab").forEach((b) => b.setAttribute("aria-selected", String(b === btn)));
+      metric = btn.dataset.metric;
+      series = new Map();   // ms, % and bps share no scale; never mix them
+      seeded = false;       // refill this metric from the agent's history
+      $("tip").hidden = true;
+      seedSeries();
+    });
+  });
+
+  (function wireHover() {
+    const c = $("chart");
+    const move = (clientX) => {
+      const r = c.getBoundingClientRect();
+      hoverX = Math.max(0, Math.min(r.width, clientX - r.left));
+      draw(lastPaths);
+    };
+    c.addEventListener("mousemove", (e) => move(e.clientX));
+    c.addEventListener("mouseleave", () => { hoverX = null; $("tip").hidden = true; draw(lastPaths); });
+    // Touch: a phone in the car is the likeliest place this gets read.
+    c.addEventListener("touchmove", (e) => {
+      if (e.touches[0]) { move(e.touches[0].clientX); e.preventDefault(); }
+    }, { passive: false });
+    c.addEventListener("touchend", () => { hoverX = null; $("tip").hidden = true; draw(lastPaths); });
+  })();
+
+  // Backfill the chart from the agent's own history so it is useful on first
+  // paint. Failure is non-fatal: the chart simply fills forward from live
+  // polls, which is the old behaviour.
+  async function seedSeries() {
+    if (seeded) return;
+    seeded = true;
+    try {
+      const r = await fetch("api/series", { cache: "no-store" });
+      if (!r.ok) return;
+      const d = await r.json();
+      const pts = d.points || [];
+      if (pts.length < 2) return;
+      const byName = new Map();
+      pts.forEach((pt) => {
+        Object.entries(pt.paths || {}).forEach(([name, m]) => {
+          const v = metric === "throughput" ? ((m.tx_bps || 0) + (m.rx_bps || 0))
+            : metric === "rtt" ? (m.rtt_ms ?? 0)
+            : (m.loss_pct ?? 0);
+          const arr = byName.get(name) || [];
+          arr.push({ t: pt.t, v: v });
+          byName.set(name, arr);
+        });
+      });
+      byName.forEach((arr, name) => {
+        while (arr.length > HISTORY) arr.shift();
+        // Do not clobber live samples already collected while this was in flight.
+        if (!(series.get(name) || []).length) series.set(name, arr);
+      });
+    } catch (err) {
+      /* history is a nicety; live polling still works without it */
+    }
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch("api/status", { cache: "no-store" });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      render(await r.json());
+      $("notice").hidden = true;
+    } catch (err) {
+      // Say what is wrong. A console that silently keeps showing the last good
+      // numbers is worse than one that admits it lost the agent -- the entire
+      // point of this page is being trustable at a glance.
+      $("beacon").dataset.state = "down";
+      $("headline").textContent = "Agent unreachable";
+      $("subline").textContent = "Showing nothing rather than stale numbers";
+      const n = $("notice");
+      n.hidden = false;
+      n.textContent = "";
+      const b = document.createElement("b"); b.textContent = "No data. ";
+      n.append(b, "Could not read /api/status — " + String(err && err.message ? err.message : err) + ". The agent may be stopped.");
+    }
+  }
+
+  seedSeries();
+  poll();
+  setInterval(poll, 1000);
+})();
+</script>
+</body>
+</html>

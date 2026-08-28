@@ -1,0 +1,45 @@
+# THE deploy target table for k8s-oke. One file, read by every job in
+# .github/workflows/deploy.oke-manifests.yml that needs to know what lives
+# under deploy/oke/.
+#
+# It used to be two hand-maintained copies inside that workflow - a heredoc in
+# the render job and a TABLE in the apply job - which the workflow's own
+# comment forbade in the same breath ("Silent divergence between two copies of
+# the same truth is the exact bug this workflow exists to close, so it does not
+# get to have one"). It had one. This is that fix.
+#
+# EVERY entry under deploy/oke/ must appear here, deployable or not. The render
+# job fails on an unregistered entry, so a new directory or script is a PR-time
+# error with a clear message rather than a red deploy on main after the merge.
+# That is not hypothetical: adding unreferenced-configmaps.py (#100) and then
+# tests/ (#101) broke the apply on main both times, and because the planner
+# fails BEFORE it applies anything, main sat with an unapplied
+# revisionHistoryLimit change - shipped, green PR, not live - until someone
+# read the deploy log.
+#
+# columns: name  mode  flag  path
+#
+#   auto      applied on push to main when its files changed, AND on every
+#             scheduled reconcile whether anything changed or not (#38).
+#   dispatch  NEVER applied by a push, and NEVER by the schedule.
+#             zippie-clienthome is dispatch-only because its committed
+#             `zippie-clienthome-clients` ConfigMap is a PLACEHOLDER
+#             (`clients.json: []`). Auto-applying it would overwrite live
+#             pairing state with an empty list the first time anyone touched
+#             that directory - and the schedule would do it again every six
+#             hours. Apply it deliberately, via workflow_dispatch with
+#             target=zippie-clienthome, once it has a Secret instead of a
+#             placeholder.
+#   none      NOT deployable, and never will be. Registering an entry here is
+#             as deliberate an act as adding a target: it is the difference
+#             between "this is tooling" and "somebody forgot to wire this up",
+#             which is precisely what the planner cannot infer on its own.
+#
+# `flag` and `path` are unused for mode=none and are written as `-`.
+zippie-home                 auto      -k  deploy/oke/zippie-home
+zippie-hub                  auto      -k  deploy/oke/zippie-hub
+zippie-clienthome           dispatch  -f  deploy/oke/zippie-clienthome/zippie-clienthome.yaml
+targets.tsv                 none      -   -
+tests                       none      -   -
+unreferenced-configmaps.py  none      -   -
+reconcile_cadence.py        none      -   -

@@ -1,0 +1,123 @@
+# Zippie travel agent example (cost-aware prefer mode)
+# Install to /etc/zippie/zippie.toml
+# Keys live in /etc/zippie/keys.json (written by `zippie import`)
+
+[home]
+endpoint = "home.example.com"
+ports = [51820, 51821, 51822, 51823]
+server_public_key = ""
+address_cidr = "10.66.0.2/32"
+dns = ["1.1.1.1", "9.9.9.9"]
+allowed_ips = ["0.0.0.0/0", "::/0"]
+persistent_keepalive = 15
+
+# OPTIONAL: home over the LAN, for a site where the router's WAN sits on the
+# same network as the home server. The public endpoint above is that site's own
+# public address, and most edge routers do not hairpin, so a leg dialling it
+# from inside is answered by nothing while looking perfectly healthy - ICMP
+# still replies at one hop.
+#
+# Applied ONLY when a leg's own address falls inside `network`, so a travel
+# router away from home matches nothing and behaves exactly as before. No
+# per-trip toggle to forget.
+#
+# `port` is optional and is the port the home transport actually BINDS. It is
+# usually NOT the public port, which is typically a forward that does not exist
+# inside the network. Omit it when no forward is involved.
+# lan_endpoints = [
+#     { network = "192.0.2.0/24", address = "192.0.2.141", port = 51931 },
+# ]
+
+[policy]
+# prefer     = ONE active path, chosen by health → budget → cost_class → priority
+#              (pick the right internet; default for travel + data caps)
+# failover   = alias of prefer
+# aggregate  = weighted multipath (burn all links; use when you want max multi-flow speed)
+# redundant  = aggregate routing today; packet-duplication later
+mode = "prefer"
+min_paths = 1
+probe_interval_ms = 500
+# After a minute without real client data, packet mode reduces its own probes
+# and WireGuard's empty keepalive. The probe value is safety-clamped so a bad
+# setting cannot extend the six-second dead-leg window.
+idle_after_s = 60
+idle_probe_interval_ms = 2000
+idle_persistent_keepalive = 25
+failover_loss_pct = 15
+failover_rtt_ms = 400
+degraded_loss_pct = 5
+degraded_rtt_ms = 200
+sticky_primary_ms = 3000
+sticky_rtt_slack_ms = 40
+
+[agent]
+# Loopback by default. This agent runs on a TRAVEL device that attaches to
+# untrusted networks (hotel, airport, cafe wifi). Binding 0.0.0.0 exposes the
+# dashboard - link state, SSIDs, interface names, home endpoint - to every
+# other device on that LAN, unauthenticated. Reach it over the bonded tunnel
+# or an SSH port-forward instead. If you must override, put an authenticated
+# proxy in front; do not simply set 0.0.0.0.
+dashboard_host = "127.0.0.1"
+dashboard_port = 8787
+
+# --- WAN paths ----------------------------------------------------------
+# Selection order (prefer mode), among paths that are up:
+#   1) not over soft monthly limit
+#   2) cheaper cost_class (free < unlimited < throttle_ok < metered < expensive)
+#   3) lower priority number
+#   4) lower RTT
+#
+# cost_class values: free | unlimited | throttle_ok | metered | expensive
+# monthly_cap_gb + soft_limit_pct demote a path after e.g. 85% of 50GB.
+
+[[paths]]
+name = "starlink"
+weight = 100
+priority = 10
+cost_class = "metered"
+monthly_cap_gb = 50
+soft_limit_pct = 0.85
+mtu = 1280
+match = { type = "ssid", ssid = "STARLINK" }
+
+[[paths]]
+name = "fi-operator"
+weight = 80
+priority = 20
+cost_class = "metered"
+monthly_cap_gb = 50
+soft_limit_pct = 0.85
+mtu = 1280
+match = { type = "ssid", ssid = "PHONE-FI-OPERATOR" }
+
+[[paths]]
+name = "verizon-operator"
+weight = 90
+priority = 30
+# After 50GB Verizon often still works (throttled) — keep as "burn last" workhorse
+cost_class = "throttle_ok"
+monthly_cap_gb = 50
+soft_limit_pct = 0.95
+mtu = 1280
+match = { type = "ssid", ssid = "PHONE-VZ-OPERATOR" }
+
+# Co-operator's lines on the same travel kit (extra ~100GB pool)
+[[paths]]
+name = "fi-co-operator"
+weight = 80
+priority = 40
+cost_class = "metered"
+monthly_cap_gb = 50
+soft_limit_pct = 0.85
+mtu = 1280
+match = { type = "ssid", ssid = "PHONE-FI-CO-OPERATOR" }
+
+[[paths]]
+name = "verizon-co-operator"
+weight = 90
+priority = 50
+cost_class = "throttle_ok"
+monthly_cap_gb = 50
+soft_limit_pct = 0.95
+mtu = 1280
+match = { type = "ssid", ssid = "PHONE-VZ-CO-OPERATOR" }

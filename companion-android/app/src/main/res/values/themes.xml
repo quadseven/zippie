@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Defined here rather than inherited from Theme.Material3.*, which lives in
+      com.google.android.material - a dependency this app does not otherwise
+      need. Compose draws its own Material 3; the platform theme only has to
+      get the window right and stay out of the way until the first frame.
+
+      Found on the first real build 2026-08-05: referencing a Material
+      Components theme without that library fails in AAPT with "resource
+      style/... not found", which reads like a typo rather than a missing
+      dependency.
+    -->
+    <style name="Theme.ZippieCompanion" parent="android:Theme.DeviceDefault.DayNight">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowBackground">?android:attr/colorBackground</item>
+    </style>
+</resources>

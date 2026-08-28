@@ -1,0 +1,721 @@
+name: Deploy - k8s-oke manifests
+
+# The deploy path for deploy/oke/** (quadseven/infra#2266).
+#
+# WHY THIS EXISTS. These manifests moved here from quadseven/infra on
+# 2026-08-06 (infra#2255) and their deploy path did not come with them:
+# infra's `sync.k8s-manifests` only watches `production/oke/manifests/**` in
+# that repo. So from the split until this workflow, every merged change to
+# deploy/oke/ was applied to nothing. Measured 2026-08-07 against the
+# ConfigMaps the live home-exit pod actually mounts, FOUR of the seven shipped
+# files were stale: zippie_home.py (live 625L / git 735L), transport.py
+# (598/708), datapath.py (433/453), and retransmit.py (same line count,
+# different content). The manifests looked live and editable the whole time.
+#
+# READ THIS BEFORE EDITING - the prerequisites, so nobody rediscovers them:
+#
+#   1. AWS role `zippie-oke-deploy` (infra#2266, defined in quadseven/infra at
+#      pulumi/aws-cicd-bootstrap/oidc.py). It trusts ONLY
+#      `repo:quadseven@59060157/zippie@1325186606:ref:refs/heads/main` and the
+#      plain-name twin, and grants ONLY read on the five /infra/oci-operator
+#      parameters the oke-kubeconfig composite needs. The ARN is hardcoded
+#      below rather than kept in a repo secret, matching how macchina
+#      references `somatic-scripts-ssm-reader`: an ARN is not a secret, and a
+#      literal is one less thing that can silently resolve to an empty string.
+#
+#   2. NO `environment:` ON ANY JOB HERE, and this is load-bearing, not
+#      stylistic. Declaring a GitHub environment makes GitHub rewrite the OIDC
+#      `sub` claim to the `:environment:<name>` form. The role deliberately
+#      trusts neither that form nor an `:environment:*` wildcard, so adding one
+#      breaks authentication with an STS AccessDenied that reads like a broken
+#      role. If an approval gate is ever wanted, add that one environment name
+#      to the trust policy in infra IN THE SAME CHANGE. There is a guard for
+#      this in the render job.
+#
+#   3. The composite action is referenced CROSS-REPO by full path, pinned to
+#      the commit that last changed it. quadseven/infra is private, but its
+#      Actions access level is `user`, so this resolves. Do NOT try to reuse
+#      infra's `_reusable.pulumi-stack.yml` instead: it contains a local
+#      `uses: ./.github/actions/...`, and a `./`-relative action inside a
+#      reusable workflow resolves against the CALLER's checkout, which this
+#      repo does not have (infra#1144 found this the hard way).
+#
+# WHY THERE IS NO `pull_request` APPLY, OR EVEN PR-TIME CLUSTER ACCESS. The
+# role's trust stops at main on purpose. deploy/oke/zippie-home is the home
+# exit for a live bond with nine provisioned peers across three clients; a
+# PR-assumable role would hand every PR branch an admin kubeconfig for that
+# cluster, and a PR can edit this very file. So the PR gate is a LOCAL render
+# with no credentials, and the cluster diff runs on main in the same job as
+# the apply, immediately before it, in the log.
+#
+# NEVER ADD `kubectl delete` HERE. `kubectl apply` cannot prune, which is a
+# deliberate trade: removing a manifest from git leaves the live object alone
+# and someone has to delete it by hand. That is the safe direction for a
+# namespace carrying someone's internet connection.
+#
+# WHY THERE IS A SCHEDULE (#38). The push trigger plans only the targets whose
+# files changed in that push, which is right for shipping a change and useless
+# for correcting drift - drift exists precisely when nothing has changed. On
+# 2026-08-07, after the deploy path above landed, a push to main ran GREEN and
+# applied nothing:
+#
+#     ##[notice]nothing to apply (docs-only change, a deleted target, or a
+#     dispatch-only target).
+#     --- plan ---
+#     (empty)
+#
+# The commit touched only a workflow file, so the plan was empty - while the
+# live pod was still 3 of 7 shipped files behind git. A human noticed; a manual
+# workflow_dispatch fixed it. Nothing in the pipeline would ever have.
+#
+# A scheduled DRIFT CHECK was considered and rejected in #38: an alert nobody
+# actions is a nicer way of being told you are still broken. So the schedule
+# RE-APPLIES instead. `kubectl diff` still runs first, so a converged cluster
+# reports `no change` on every target and the apply is a no-op - a ConfigMap
+# whose content is unchanged keeps its configMapGenerator hash, so nothing
+# restarts. A scheduled run only restarts the home exit when there IS drift,
+# which is the whole point.
+#
+#   CADENCE: 17 minutes past every sixth hour (00:17, 06:17, 12:17, 18:17 UTC).
+#   Six hours bounds how long drift can stand at a quarter of a day, against
+#   the FORTNIGHT it stood in the incident this whole path exists for, and four
+#   no-op runs a day on a self-hosted runner cost nothing worth counting. Not
+#   hourly: every run holds the `deploy-oke-manifests` concurrency group, so it
+#   would queue ahead of real deploys for no benefit on a repo that changes a
+#   handful of times a day. Not :00 - GitHub delays or DROPS scheduled runs at
+#   the top of the hour under load, and this is a workflow whose silence is the
+#   failure mode.
+#
+#   FAILURE MUST BE VISIBLE, because a cron that dies reports "no drift" by
+#   silence, and this estate has two catalogued cases of exactly that (a cron
+#   dead for 61 days, `Bot - Grug Pulse` failing unnoticed for 73). Three
+#   things are wired for it, and the third one's gap is stated rather than
+#   glossed:
+#     1. A failed scheduled run goes red in Actions and GitHub emails the
+#        account that last edited the cron expression.
+#     2. The `cadence` job below fails the run if no scheduled reconcile has
+#        SUCCEEDED in 24 hours, and it runs on pushes and dispatches too - so
+#        ordinary repo activity surfaces a dead cron, not just the cron itself.
+#     3. It CANNOT catch total silence on a repo nobody touches: if neither the
+#        schedule nor a push ever runs, nothing evaluates the check. Closing
+#        that needs an off-repo observer. The estate already has one -
+#        `gha-metrics-emitter` in quadseven/infra emits
+#        `gha.workflow_run.count{repo,workflow,event}` to Datadog every minute
+#        - but its ORG_REPOS_DEFAULT does not list zippie (verified
+#        2026-08-09), so there is no zippie data to build a no-data monitor on.
+#        Adding zippie there plus a Datadog monitor is infra-side work.
+#
+#   GitHub also DISABLES a repo's scheduled workflows after 60 days with no
+#   repository activity, and emails the owner when it does. zippie pushed on
+#   2026-08-10 and every day of the week before, so this is a note, not a risk
+#   today - but a quiet quarter would silently stop this reconcile, and case 3
+#   above is exactly the state that cannot see it.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/oke/**'
+      - '.github/workflows/deploy.oke-manifests.yml'
+  schedule:
+    # Reconcile every auto-mode target against main - see "WHY THERE IS A
+    # SCHEDULE" above. A schedule ALWAYS runs on the default branch, so the
+    # OIDC sub stays `ref:refs/heads/main`, which is the only thing the
+    # zippie-oke-deploy role trusts. Do NOT add a trigger that can run this
+    # workflow off main.
+    - cron: '17 */6 * * *'
+  pull_request:
+    paths:
+      - 'deploy/oke/**'
+      - '.github/workflows/deploy.oke-manifests.yml'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Single target to act on (zippie-home | zippie-hub | zippie-clienthome). Empty = whatever the last commit on main changed."
+        required: false
+      preview:
+        description: "Preview only - print the cluster diff and stop. Nothing is applied."
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+  # Read-only, and only the `cadence` job uses it: listing this workflow's own
+  # past runs to prove the schedule is still firing. GITHUB_TOKEN cannot read
+  # /actions/workflows/*/runs without it.
+  actions: read
+
+# Never cancel in flight: a cancelled run can leave half the plan applied.
+#
+# A schedule firing during a push deploy therefore QUEUES rather than cancelling
+# it, which is the behaviour #38 asked for. One caveat that is real and
+# accepted: GitHub keeps at most one pending run per concurrency group, so if a
+# third run arrives the queued one is cancelled. A cancelled scheduled reconcile
+# is a skipped cycle, not a broken one - the next cron picks it up, and the
+# `cadence` job below tolerates three consecutive misses before it complains.
+concurrency:
+  group: deploy-oke-manifests
+  cancel-in-progress: false
+
+jobs:
+  # Fail-closed trust gate, mirroring check.agent-tests.yml. No checkout:
+  # evaluates PR author trust only, so nothing untrusted runs on a self-hosted
+  # runner.
+  guard:
+    name: trust gate (collaborator-only on self-hosted)
+    runs-on: arc-zippie
+    timeout-minutes: 2
+    steps:
+      - name: "Block untrusted (non-collaborator) PRs on self-hosted runner"
+        if: ${{ github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) }}
+        run: |
+          echo "::error::PR validation restricted to repo collaborators."
+          exit 1
+
+  # The watchdog on the schedule itself (#38). Deliberately a SEPARATE job with
+  # no `needs:` on deploy, in either direction: a broken deploy must not hide a
+  # dead cron, and a dead cron must not block the reconcile that would have
+  # fixed the cluster. It reports red on its own.
+  #
+  # No `needs: guard`: this job never runs on a pull_request, so the code it
+  # checks out is always the default branch's and there is nothing untrusted
+  # for the trust gate to gate. It reads two API endpoints with a read-only
+  # token and touches no cluster.
+  #
+  # It DOES check out now, which it did not before #234. The logic it runs was
+  # wrong in a way that only a test could have caught - it asked a run-level
+  # question from inside the run - and logic that cannot be tested is logic
+  # that gets to be wrong for eighteen hours while looking like a cluster
+  # problem. Mirroring it into a tested module and leaving a copy inline would
+  # reintroduce the two-sources problem this workflow already rejected for its
+  # target table, so the module is the only copy.
+  cadence:
+    if: github.event_name != 'pull_request'
+    name: assert the reconcile schedule is still firing
+    runs-on: arc-zippie
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          # Nothing here pushes; the token is only wanted for the API read
+          # below, which takes it from `env` explicitly.
+          persist-credentials: false
+      - name: Age of the last successful reconcile
+        env:
+          # `gh` is NOT installed on srv-unraid-gha, and jq is not guaranteed
+          # either, so this is stdlib python against the REST API - the same
+          # choice infra's emitters make for the same reason.
+          RECONCILE_TOKEN: ${{ github.token }}
+          # Three consecutive 6-hourly windows. Tight enough that a dead cron
+          # is a next-day finding rather than a fortnight one, loose enough to
+          # ride out a runner reboot or a queued-then-cancelled cycle without
+          # crying wolf - a watchdog that fires on ordinary maintenance gets
+          # muted, and a muted watchdog is the thing it was built to prevent.
+          MAX_AGE_HOURS: '24'
+          WORKFLOW_FILE: deploy.oke-manifests.yml
+        run: |
+          set -euo pipefail
+          python3 deploy/oke/reconcile_cadence.py
+
+  # PR-time gate, and a hard prerequisite of the apply below. NO credentials,
+  # NO cluster: this is what catches a kustomization that does not build, a
+  # file missing from configMapGenerator, or unparseable YAML - before it
+  # reaches main, where the apply is automatic.
+  render:
+    needs: guard
+    name: render manifests (no cluster)
+    runs-on: arc-zippie
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Every entry under deploy/oke is registered in the table
+        # THE GUARD THAT WAS MISSING, and the reason this job exists on PRs.
+        #
+        # The apply job rejects a changed path it cannot find in the table -
+        # correctly, that is the whole point - but it only runs on main. So
+        # adding a file under deploy/oke/ passed every PR check and then failed
+        # the deploy AFTER the merge, twice in one afternoon (#100 added
+        # unreferenced-configmaps.py, #101 added tests/). Worse than a red
+        # workflow: the planner dies BEFORE applying anything, so main sat with
+        # a revisionHistoryLimit change that was merged, green, and not live.
+        #
+        # This asks the question at PR time and in both directions - nothing
+        # unregistered on disk, no row pointing at something that is gone.
+        run: |
+          set -euo pipefail
+          TARGETS_FILE=deploy/oke/targets.tsv
+          NAMES=$(awk '$1 !~ /^#/ && NF >= 4 { print $1 }' "$TARGETS_FILE")
+
+          # A guard that cannot fire is worse than no guard: prove the lookup
+          # rejects something before trusting it to accept everything.
+          if printf '%s\n' "$NAMES" | grep -qx "definitely-not-a-real-target"; then
+            echo "::error::the registration check matches a name that is not in the table - it would pass anything"; exit 1
+          fi
+
+          # From git, not the filesystem. The apply job plans from
+          # `git diff --name-only`, so the set this validates has to be the set
+          # that one reads - and a stray __pycache__ or a half-finished
+          # scratch dir in a runner's workspace must not be able to fail a PR.
+          FAILED=0
+          for base in $(git ls-files deploy/oke/ | cut -d/ -f3 | sort -u); do
+            case "$base" in *.md) continue;; esac
+            printf '%s\n' "$NAMES" | grep -qx "$base" || {
+              echo "::error file=$TARGETS_FILE::'$base' exists under deploy/oke/ but has no row in $TARGETS_FILE. Add one: mode auto or dispatch if it should be deployed, mode none if it is tooling. Until then the apply on main will fail on it."
+              FAILED=1; }
+          done
+          for name in $NAMES; do
+            git ls-files --error-unmatch "deploy/oke/$name" >/dev/null 2>&1 || {
+              echo "::error file=$TARGETS_FILE::$TARGETS_FILE has a row for '$name', which does not exist under deploy/oke/. Remove the row or restore the path."
+              FAILED=1; }
+          done
+          [ "$FAILED" = "0" ] && echo "every entry under deploy/oke/ is registered"
+          exit $FAILED
+
+      - name: Render every target locally
+        run: |
+          set -euo pipefail
+          command -v kubectl >/dev/null 2>&1 || {
+            echo "::error::kubectl is not on PATH on this runner - the render gate cannot run"; exit 1; }
+
+          # ONE table, shared with the apply job. See deploy/oke/targets.tsv.
+          TARGETS_FILE=deploy/oke/targets.tsv
+          [ -f "$TARGETS_FILE" ] || {
+            echo "::error::$TARGETS_FILE is missing - every job in this workflow reads it"; exit 1; }
+
+          render_file() {  # $1 = bare multi-doc yaml
+            # kustomize will not read a bare file, and `kubectl apply
+            # --dry-run=client` reaches the apiserver for discovery. Wrap the
+            # file in a throwaway kustomization instead: full local parse, zero
+            # network.
+            local t rc=0
+            t=$(mktemp -d)
+            cp "$1" "$t/"
+            printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - %s\n' \
+              "$(basename "$1")" > "$t/kustomization.yaml"
+            # `|| rc=$?`, not `; rc=$?`: under `set -e` the bare form would
+            # abort the shell before the assignment ever ran.
+            kubectl kustomize "$t" || rc=$?
+            rm -rf "$t"
+            return $rc
+          }
+
+          FAILED=0
+          while read -r name flag path; do
+            [ -n "$name" ] || continue
+            echo "::group::render $name ($path)"
+            if [ "$flag" = "-k" ]; then
+              OUT=$(kubectl kustomize "$path") || OUT=""
+            else
+              OUT=$(render_file "$path") || OUT=""
+            fi
+            # An empty render is the failure that looks like success: kustomize
+            # exits 0 on a kustomization whose resources all vanished.
+            DOCS=$(printf '%s\n' "$OUT" | grep -c '^apiVersion:' || true)
+            if [ "${DOCS:-0}" -lt 1 ]; then
+              echo "::error::$name rendered $DOCS documents - refusing to call that a pass"
+              FAILED=1
+            else
+              echo "$name rendered OK ($DOCS documents)"
+            fi
+            # `|| true` is not decoration: head exits after 40 lines, printf
+            # takes SIGPIPE, and `set -o pipefail` turns that into exit 141 -
+            # which under `set -e` aborted this loop after the FIRST target,
+            # silently rendering only one of three and still exiting green.
+            printf '%s\n' "$OUT" | head -40 || true
+            echo "::endgroup::"
+          done <<TARGETS
+          $(awk '$1 !~ /^#/ && NF >= 4 && $2 != "none" { print $1, $3, $4 }' "$TARGETS_FILE")
+          TARGETS
+          exit $FAILED
+
+      - name: Assert no job in this workflow declares an environment
+        # Guards prerequisite 2 in the header. A future edit adding
+        # `environment:` here would rewrite the OIDC sub claim and break the
+        # apply with an AccessDenied that reads like a broken IAM role. Catch
+        # it at PR time, with a message that names the cause.
+        run: |
+          set -euo pipefail
+          WF=.github/workflows/deploy.oke-manifests.yml
+          PAT='^[[:space:]]+environment:([[:space:]]|$)'
+          # A guard that cannot fire is worse than no guard, so prove the
+          # pattern still matches a real declaration before trusting its
+          # silence.
+          printf '    environment: aws-prod\n' | grep -qE "$PAT" || {
+            echo "::error::the environment-guard pattern no longer matches a real declaration - it would pass silently. Fix the pattern."; exit 1; }
+          if grep -nE "$PAT" "$WF"; then
+            echo "::error::this workflow must declare NO GitHub environment. One rewrites the OIDC sub claim to the :environment: form, which arn:aws:iam::317164914846:role/zippie-oke-deploy does not trust. Add the environment name to pulumi/aws-cicd-bootstrap/oidc.py in quadseven/infra first."
+            exit 1
+          fi
+          echo "no environment declared - the OIDC sub stays in ref form"
+
+  deploy:
+    # main only. workflow_dispatch also lands here (a dispatch on main emits
+    # the same `ref:refs/heads/main` sub the role trusts); `preview: true`
+    # stops after the diff.
+    if: github.event_name != 'pull_request'
+    # An unrenderable manifest must never reach an apply.
+    needs: [guard, render]
+    name: diff then apply against k8s-oke
+    runs-on: arc-zippie
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          # HEAD~1..HEAD is how the changed-target plan is computed. Squash
+          # merges land as one commit, so depth 2 is enough.
+          fetch-depth: 2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+        with:
+          # Hardcoded, not a secret: an ARN is not sensitive, and a missing
+          # repo secret would resolve to an empty string and drop
+          # role-to-assume from the inputs entirely - which is how infra#693
+          # failed silently on every run. Created by pulumi/aws-cicd-bootstrap
+          # in quadseven/infra (infra#2266).
+          role-to-assume: arn:aws:iam::317164914846:role/zippie-oke-deploy
+          role-session-name: gh-zippie-oke-deploy
+          aws-region: us-east-1
+
+      - name: Generate k8s-oke kubeconfig
+        # Cross-repo composite from the private quadseven/infra repo (its
+        # Actions access level is `user`, the same mechanism macchina uses for
+        # load-ssm-secrets). Pinned to the commit that last CHANGED this
+        # action, not to a moving main.
+        uses: quadseven/infra/.github/actions/oke-kubeconfig@07cd409e6891f10ad219b725e231eaeaaf576a0b
+        with:
+          cluster-name: k8s-oke
+
+      - name: Plan the targets
+        id: plan
+        env:
+          DISPATCH_TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          # noglob: DISPATCH_TARGET is operator input and is word-split below.
+          # A value of `*` must not expand against the working tree.
+          set -f
+          PLAN="$RUNNER_TEMP/plan.txt"; : > "$PLAN"
+
+          # THE TABLE. Every applyable path under deploy/oke/ is enumerated
+          # here on purpose. infra's sync workflow infers the shape from the
+          # changed path and truncates to four segments, which fails loud on a
+          # layout it does not recognise (infra#1785); an explicit allowlist
+          # fails loud on an UNKNOWN target instead, which is the earlier and
+          # more obvious error.
+          #
+          # mode=auto     applied on push to main when its files changed, AND
+          #               on every scheduled reconcile whether anything
+          #               changed or not (#38).
+          # mode=dispatch NEVER applied by a push, and NEVER by the schedule.
+          #               zippie-clienthome is dispatch-only because its
+          #               committed `zippie-clienthome-clients` ConfigMap is a
+          #               PLACEHOLDER (`clients.json: []`) and the manifest
+          #               says so: real client keys are provisioned out of
+          #               band. Auto-applying it would overwrite live pairing
+          #               state with an empty list the first time anyone
+          #               touched that directory - and a schedule would do it
+          #               again every six hours. Its image IS published now
+          #               (#110) and the manifest pins a digest, but the pod
+          #               still could not start: the GHCR package is private,
+          #               and nothing has granted this namespace a pull secret
+          #               for it. See #17.
+          #               Apply it deliberately, via workflow_dispatch with
+          #               target=zippie-clienthome, once it has a Secret
+          #               instead of a placeholder.
+          #
+          # ONE table, read two ways: spec_for() looks a single name up, and
+          # the scheduled reconcile enumerates the auto rows FROM THE SAME
+          # TEXT. It was a `case` statement until #38; a case cannot be
+          # enumerated, and the alternative - a second, hand-maintained list of
+          # "targets the schedule covers" - would drift out of step with this
+          # one the first time a target was added. Silent divergence between
+          # two copies of the same truth is the exact bug this workflow exists
+          # to close, so it does not get to have one.
+          TARGETS_FILE=deploy/oke/targets.tsv
+          [ -f "$TARGETS_FILE" ] || {
+            echo "::error::$TARGETS_FILE is missing - every job in this workflow reads it"; exit 1; }
+          TABLE=$(awk '$1 !~ /^#/ && NF >= 4' "$TARGETS_FILE")
+          # A table that parsed to nothing would make the schedule plan nothing
+          # and every push candidate unknown - fail on it rather than act on it.
+          [ -n "$TABLE" ] || { echo "::error::$TARGETS_FILE parsed to zero rows"; exit 1; }
+          KNOWN=$(printf '%s\n' "$TABLE" | awk '$2 != "none" { printf "%s ", $1 }')
+
+          spec_for() {  # $1 = target name -> "<mode> <flag> <path>", 1 if unknown
+            local row
+            row=$(printf '%s\n' "$TABLE" | awk -v n="$1" '$1 == n { print $2, $3, $4 }')
+            [ -n "$row" ] || return 1
+            printf '%s\n' "$row"
+          }
+
+          if [ -n "${DISPATCH_TARGET:-}" ]; then
+            CANDIDATES="$DISPATCH_TARGET"
+            SOURCE=explicit
+          elif [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+            # THE POINT OF #38. A changed-file plan is empty exactly when
+            # reconciling matters, because drift exists precisely when nothing
+            # has changed. So the schedule does not look at the diff at all: it
+            # plans every auto row, every time. Non-auto rows are not even
+            # candidates here - the mode gate below is a second line, not the
+            # first, so a bug in it still cannot make the schedule apply
+            # zippie-clienthome.
+            CANDIDATES=$(printf '%s\n' "$TABLE" | awk '$2 == "auto" { print $1 }')
+            SOURCE=schedule
+            EXCLUDED=$(printf '%s\n' "$TABLE" | awk '$2 != "auto" { printf "%s ", $1 }')
+            # Printed every run, not assumed: this line is the standing
+            # evidence that the schedule leaves the dispatch-only targets alone.
+            echo "::notice::scheduled reconcile - planning every auto target regardless of what changed. Excluded (not auto): ${EXCLUDED:-none}"
+          else
+            # .md filtered BEFORE the path is collapsed to a target name, so a
+            # docs-only commit is not an apply trigger at any depth. awk, not
+            # `grep -v`: grep exits 1 when every path is filtered out, and
+            # `set -e` would then fail the run on the filter itself.
+            CANDIDATES=$(git diff --name-only HEAD~1 HEAD -- deploy/oke/ \
+              | awk '!/\.md$/' | cut -d/ -f3 | sort -u)
+            SOURCE=changed
+          fi
+
+          FAILED=0
+          for name in $CANDIDATES; do
+            [ -n "$name" ] || continue
+            if ! SPEC=$(spec_for "$name"); then
+              echo "::error::'$name' is not in deploy/oke/targets.tsv. Deployable targets: ${KNOWN:-none}. Anything you add under deploy/oke/ must get a row there - mode auto or dispatch to deploy it, mode none to say it is tooling. It is NOT applied until you do."
+              FAILED=1; continue
+            fi
+            # shellcheck disable=SC2086
+            set -- $SPEC
+            mode=$1; flag=$2; path=$3
+            if [ "$mode" = "none" ]; then
+              # Registered tooling, not a manifest. Announced rather than
+              # dropped silently: "the planner ignored it" and "the planner
+              # never saw it" look identical in a green log, and only one of
+              # them is correct.
+              echo "::notice::$name is registered as tooling (mode=none) - nothing to apply for it."
+              continue
+            fi
+            if [ "$mode" = "dispatch" ] && [ "$SOURCE" != "explicit" ]; then
+              echo "::warning::$name is dispatch-only and was NOT applied. Its committed clients.json is a placeholder that would overwrite live pairing state. Apply it deliberately: workflow_dispatch with target=$name."
+              continue
+            fi
+            if [ ! -e "$path" ]; then
+              if [ "$SOURCE" = "changed" ] && git diff --name-only --diff-filter=D HEAD~1 HEAD -- "deploy/oke/$name/" | grep -q .; then
+                echo "::notice::$name was deleted in this commit - skipping. kubectl apply cannot prune, so remove the live objects by hand."
+              elif [ "$SOURCE" = "schedule" ]; then
+                # The schedule plans from the table, not from a diff, so a
+                # missing path here means the table points at something that no
+                # longer exists. Failing is right: a reconcile that quietly
+                # skips a target is the drift it was built to remove.
+                echo "::error::the target table lists $path for $name, and it does not exist in this checkout. Remove the row, or restore the path - the scheduled reconcile will not skip it quietly."
+                FAILED=1
+              else
+                echo "::error::$path does not exist and was not deleted by this commit - check the target name."
+                FAILED=1
+              fi
+              continue
+            fi
+            echo "$name $flag $path" >> "$PLAN"
+          done
+          [ "$FAILED" = "0" ] || exit 1
+
+          if [ ! -s "$PLAN" ]; then
+            if [ "$SOURCE" = "schedule" ]; then
+              # The table has auto rows, so an empty scheduled plan is not a
+              # no-op - it means the table or the filter above broke. Going
+              # green here would reproduce 2026-08-07 exactly: a run that
+              # reports success while reconciling nothing.
+              echo "::error::the scheduled reconcile planned NOTHING. That is a broken target table, not a quiet day - every auto row should be in this plan."
+              exit 1
+            fi
+            echo "::notice::nothing to apply (docs-only change, a deleted target, or a dispatch-only target)."
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "empty=false" >> "$GITHUB_OUTPUT"
+          fi
+          { echo "### Deploy plan"; echo '```'; cat "$PLAN"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          echo "--- plan ---"; cat "$PLAN"
+
+      - name: Preview (kubectl diff against the live cluster)
+        if: steps.plan.outputs.empty == 'false'
+        run: |
+          set -uo pipefail
+          FAILED=0
+          while read -r name flag path; do
+            echo "::group::diff $name ($path)"
+            # kubectl diff exit codes: 0 = identical, 1 = differences found,
+            # >1 = a real error. Treating 1 as failure would make every real
+            # deploy red; treating >1 as success would apply blind.
+            #
+            # `|| rc=$?`, NOT `; rc=$?` - the same trap already documented on
+            # the kustomize helper above, missed here. GitHub runs `run:` steps
+            # under `bash -e -o pipefail {0}` by DEFAULT, and the `set -uo
+            # pipefail` at the top of this step does not clear `-e`. So the
+            # bare form aborts the step the instant diff returns 1, before the
+            # case below can classify it - which is exactly what happened on
+            # the first real deploy (run 31218414313): the diff printed in
+            # full, then the step exited 1 without ever reaching "the changes
+            # above will be applied".
+            #
+            # This is the failure mode the whole workflow exists to avoid: a
+            # deploy path that cannot succeed the moment it has something to
+            # deploy.
+            rc=0
+            kubectl diff "$flag" "$path" || rc=$?
+            case "$rc" in
+              0) echo "$name: no change" ;;
+              1)
+                echo "$name: the changes above will be applied"
+                # On a push this is the normal case - you changed something.
+                # On a schedule it is a finding: a converged cluster reports
+                # `no change` on every target, so a difference means either a
+                # push deploy did not land or something edited the live objects
+                # outside git. The reconcile is correcting it either way, and
+                # this annotation is how anyone learns it happened.
+                if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+                  echo "::warning::DRIFT CORRECTED: $name differed from main on a scheduled reconcile. A converged cluster diffs clean, so find out what wrote to it - the diff above is what was standing."
+                fi
+                ;;
+              *) echo "::error::kubectl diff failed for $name (exit $rc) - refusing to apply blind"; FAILED=1 ;;
+            esac
+            echo "::endgroup::"
+          done < "$RUNNER_TEMP/plan.txt"
+          exit $FAILED
+
+      - name: Stop here (preview only)
+        if: ${{ inputs.preview == true }}
+        run: echo "::notice::preview=true - the diff above is the whole run. Nothing was applied."
+
+      - name: Apply
+        id: apply
+        if: ${{ steps.plan.outputs.empty == 'false' && inputs.preview != true }}
+        run: |
+          set -uo pipefail
+          FAILED=0
+          while read -r name flag path; do
+            echo "::group::apply $name ($path)"
+            if [ "$flag" = "-k" ]; then
+              # Server-side, matching how this object is already managed: the
+              # live zippie-home Deployment's managedFields show
+              # `kubectl/Apply` (verified 2026-08-07). --force-conflicts takes
+              # ownership back from any hand-run apply.
+              kubectl apply -k "$path" --server-side --force-conflicts \
+                || { echo "::error::failed to apply $name"; FAILED=1; }
+            else
+              # Client-side for the remaining bare files. zippie-hub used to be
+              # one of these; it moved to -k in #37 so its ConfigMap could be
+              # generated from git, which DOES flip it from
+              # `kubectl-client-side-apply` to server-side. That flip is
+              # deliberate and --force-conflicts above takes ownership back;
+              # zippie-home has run this way since 2026-08-07. The "Verify
+              # rollouts" step below is what catches it if the migration goes
+              # wrong, so do not skip reading it on the first run after this.
+              kubectl apply -f "$path" \
+                || { echo "::error::failed to apply $name"; FAILED=1; }
+            fi
+            echo "::endgroup::"
+          done < "$RUNNER_TEMP/plan.txt"
+          exit $FAILED
+
+      - name: Verify rollouts
+        # Runs even if Apply partially failed: whatever DID apply mutated the
+        # cluster and still has to be verified. A deploy is not done until the
+        # workload is Ready - infra#1892 spent 2026-07-19 with three green
+        # deploys sitting on top of live outages because the rollout checks
+        # ended in `|| true`.
+        if: ${{ always() && contains(fromJSON('["success","failure"]'), steps.apply.outcome) }}
+        run: |
+          set -uo pipefail
+          FAILED=0
+          while read -r name flag path; do
+            # Discovery must NOT green-skip: an RBAC or API error here would
+            # silently verify nothing.
+            if ! objs=$(kubectl get "$flag" "$path" \
+                  -o custom-columns='K:.kind,N:.metadata.name,NS:.metadata.namespace' \
+                  --no-headers --request-timeout=30s 2>&1); then
+              echo "::error::workload discovery failed for $name - cannot verify its rollouts"
+              printf '%s\n' "$objs" | head -5
+              FAILED=1; continue
+            fi
+            while read -r kind obj ns; do
+              case "$kind" in
+                Deployment|DaemonSet|StatefulSet)
+                  echo "waiting for $kind/$obj in $ns..."
+                  # No --request-timeout: rollout status holds a long-lived
+                  # watch, and a per-request timeout below --timeout would
+                  # abort legitimately slow rollouts.
+                  if ! kubectl rollout status "$kind/$obj" -n "$ns" --timeout=180s; then
+                    echo "::error::rollout of $kind/$obj in $ns did not complete"
+                    FAILED=1
+                    { kubectl get pods -n "$ns" -o wide --request-timeout=30s | head -15; } || true
+                  fi
+                  ;;
+              esac
+            done <<< "$objs"
+          done < "$RUNNER_TEMP/plan.txt"
+          exit $FAILED
+
+      - name: Prove the cluster is running THIS commit's code
+        # The whole point of infra#2266. A green apply is not evidence: the
+        # existing guard (test_manifest_copy_in_sync.py) compares git to git,
+        # and both sides agreed perfectly for a fortnight while the pod ran
+        # something else.
+        #
+        # This reads the ConfigMaps the RUNNING pod mounts - resolved from the
+        # live Deployment's volume list, so it follows the configMapGenerator
+        # hash roll automatically - and byte-compares every shipped file
+        # against the checkout.
+        #
+        # `-o jsonpath='{.data.datapath.py}'` RETURNS AN EMPTY STRING here:
+        # jsonpath reads the dot in the filename as a path separator, and that
+        # produced a confident false "everything is drifted" during triage. Use
+        # go-template with `index`, which takes the key literally.
+        if: ${{ always() && steps.apply.outcome == 'success' }}
+        run: |
+          set -uo pipefail
+          if ! grep -q '^zippie-home ' "$RUNNER_TEMP/plan.txt"; then
+            echo "::notice::zippie-home was not in this plan - the content check does not apply"
+            exit 0
+          fi
+          NS=zippie
+          # Identity pinned to the pre-rename name on purpose - see the
+          # kustomization's header. Renaming the Deployment would start a
+          # SECOND hostNetwork pod fighting for the same UDP ports.
+          DEP=zippie-home
+
+          cm_for() {  # $1 = volume name -> the ConfigMap it currently mounts
+            local tmpl
+            tmpl='{{range .spec.template.spec.volumes}}{{if .configMap}}{{if eq .name "'"$1"'"}}{{.configMap.name}}{{end}}{{end}}{{end}}'
+            kubectl -n "$NS" get deploy "$DEP" -o go-template="$tmpl"
+          }
+
+          T=$(mktemp -d); FAILED=0
+          check() {  # $1 = configmap, $2 = key, $3 = file in the checkout
+            kubectl -n "$NS" get cm "$1" -o go-template='{{index .data "'"$2"'"}}' > "$T/$2"
+            if diff -q "$3" "$T/$2" >/dev/null; then
+              echo "  $2  SAME"
+            else
+              echo "::error::$2 in ConfigMap $1 does NOT match $3 - the pod is not running this commit"
+              diff -u "$3" "$T/$2" | head -30
+              FAILED=1
+            fi
+          }
+
+          SCRIPT_CM=$(cm_for scripts)
+          PKG_CM=$(cm_for transport-pkg)
+          if [ -z "$SCRIPT_CM" ] || [ -z "$PKG_CM" ]; then
+            echo "::error::could not resolve the mounted ConfigMap names from deploy/$DEP in $NS - volumes 'scripts' and 'transport-pkg' are expected"
+            rm -rf "$T"; exit 1
+          fi
+          echo "mounted: scripts=$SCRIPT_CM transport-pkg=$PKG_CM"
+          check "$SCRIPT_CM" zippie_home.py deploy/oke/zippie-home/zippie_home.py
+          # Held EQUAL to the configMapGenerator list in the kustomization, not
+          # merely overlapping - the same rule the drift guard enforces on the
+          # zippie-pkg directory. Adding a module means editing both.
+          for f in __init__.py classify.py datapath.py home_transport.py retransmit.py transport.py; do
+            check "$PKG_CM" "$f" "deploy/oke/zippie-home/zippie-pkg/$f"
+          done
+          rm -rf "$T"
+          [ "$FAILED" = "0" ] && echo "::notice::every shipped file in the running pod matches this commit"
+          exit $FAILED

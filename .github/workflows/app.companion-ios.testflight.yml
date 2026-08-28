@@ -1,0 +1,313 @@
+name: App - zippie companion - TestFlight (self-hosted mac mini) - build -> sign -> upload -> distribute
+
+# Builds the Zippie companion iOS app on the self-hosted macOS runner
+# (the self-hosted macOS runner), signs with the shared Apple Distribution cert in the
+# runner's CI keychain plus the "zippie companion AppStore" profile, uploads to
+# App Store Connect, and releases the build to the internal testers' phones.
+#
+# Ported from macchina's app.companion.testflight.yml, which has been shipping
+# this way since 2026-06. Deliberately the SAME shape so one pipeline's fixes
+# apply to both; ci/asc.py is a verbatim copy, parameterised by ASC_APP_ID.
+#
+# FASTLANE-FREE: xcodegen + xcodebuild + xcrun altool + ci/asc.py.
+#
+# Required repo secrets (seeded from SSM /infra/apple/*):
+#   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8   App Store Connect API key
+#   CI_KEYCHAIN_PASSWORD                     unlocks the runner's CI keychain
+#
+# Runner prerequisites, all satisfied 2026-08-03:
+#   - infra has its OWN runner instance on the mini (~/actions-runner-infra).
+#     `quadseven` is a USER account, so org-level runners do not exist and the
+#     mini must be registered per repo (infra#2155).
+#   - The CI keychain is macchina-ci.keychain-db. It is NOT macchina-specific:
+#     it holds the ONE team Apple Distribution identity that signs both apps.
+#   - "zippie companion AppStore" profile installed. It was INVALID in the
+#     portal until 2026-08-03 (an invalid profile cannot be repaired, only
+#     recreated against a live cert) - regenerate via the ASC API if it ever
+#     goes invalid again, then drop it in ~/Library/MobileDevice/Provisioning
+#     Profiles/<uuid>.mobileprovision.
+
+on:
+  # MANUAL-ONLY, matching macchina and Operator's standing rule that TestFlight
+  # releases are never automatic. Merging to main does NOT upload a build.
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-zippie-companion-testflight
+  cancel-in-progress: false
+
+env:
+  SCHEME: ZippieCompanion
+  PROJECT: ZippieCompanion.xcodeproj
+  BUNDLE_ID: app.zippie.companion
+  TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+  SIGN_IDENTITY: "Apple Distribution"
+  PROFILE_NAME: "zippie companion AppStore"
+  # Every embedded extension is a separate bundle id and signs with its own
+  # profile. All must exist on the runner or exportArchive fails late.
+  TUNNEL_PROFILE_NAME: "zippie companion tunnel AppStore"
+  # Added for the home-screen widget extension (issue #244). Its App ID and
+  # this profile have NOT been created in the developer portal as of this
+  # change - see ci/ExportOptions.plist - so this workflow will fail at the
+  # verification step below until that portal step is done, rather than
+  # burning a full archive first.
+  WIDGET_PROFILE_NAME: "zippie companion widget AppStore"
+  # Zippie Companion in App Store Connect. asc.py defaults to macchina's id,
+  # so this MUST be set or builds would be counted against the wrong app.
+  ASC_APP_ID: "6797142616"
+  # THE SAME TRAP AS ASC_APP_ID, and it was not caught the first time. asc.py
+  # also defaults ASC_BETA_GROUP_ID to a MACCHINA group. Unset, build 4 was
+  # POSTed to macchina's "Internal All Builds" group, the call failed, asc.py's
+  # lenient 422 handling read it as success, and the step went green with the
+  # build never reaching a single zippie tester.
+  ASC_BETA_GROUP_ID: "8c3f797d-9e0d-4ede-b387-cb8cfa968a5e"  # Zippie Companion / Internal
+
+jobs:
+  testflight:
+    name: Build + upload + distribute to TestFlight
+    runs-on: [self-hosted, macOS, ARM64, mac-mini]
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: companion
+    steps:
+      # fetch-depth: 0 because the release-notes step below filters history by
+      # PATH, and the default shallow checkout is depth 1 - `git log` would see a
+      # single commit and could only ever describe that one, whatever it touched.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Select the installed Xcode
+        run: |
+          set -euo pipefail
+          # xcodes installs to /Applications/Xcode-<version>.app; pick the newest.
+          # The runner's shell defaults to CommandLineTools, where xcodebuild
+          # does not exist - so this step is required, not cosmetic.
+          XAPP=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$XAPP" ] || { echo "::error::no Xcode.app found - run 'xcodes install' on the runner"; exit 1; }
+          echo "DEVELOPER_DIR=$XAPP/Contents/Developer" >> "$GITHUB_ENV"
+          echo "Using $XAPP"
+          "$XAPP/Contents/Developer/usr/bin/xcodebuild" -version
+
+      - name: Resolve the CI signing keychain path
+        # Computed at run time rather than declared as a workflow-level
+        # `env:`, which is a LITERAL - `$HOME` does not expand there - and a
+        # hardcoded absolute path would publish the runner account's name into
+        # a public repo. The runner's own .env wins if it exports CI_KEYCHAIN.
+        run: |
+          set -euo pipefail
+          KC="${CI_KEYCHAIN:-$HOME/Library/Keychains/macchina-ci.keychain-db}"
+          test -f "$KC" || { echo "::error::CI keychain not found at $KC"; exit 1; }
+          echo "CI_KEYCHAIN=$KC" >> "$GITHUB_ENV"
+
+      - name: Unlock the CI signing keychain
+        env:
+          KC_PASS: ${{ secrets.CI_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          security unlock-keychain -p "$KC_PASS" "$CI_KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$CI_KEYCHAIN"
+          # Put the CI keychain on the search list (preserve the login keychain).
+          security list-keychains -d user -s "$CI_KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
+          security find-identity -p codesigning "$CI_KEYCHAIN" | head
+
+      - name: Verify the signing profiles are present and valid
+        run: |
+          set -euo pipefail
+          # An INVALID or missing profile fails LATER, inside exportArchive, with
+          # an error that does not name the profile. Checking here turns ~8
+          # minutes of wasted build into an immediate, readable failure.
+          #
+          # EVERY profile, not just the app's. Each embedded extension ships
+          # inside the app and is signed separately, so a run with the app
+          # profile present and an extension's profile missing passed this gate
+          # and then died in exportArchive - exactly the wasted build this step
+          # exists to prevent, reintroduced by adding a second target and again
+          # by adding a third (the widget, issue #244).
+          # NOT `security cms -D`. That is the obvious way to read a profile and
+          # it FAILS ON THIS RUNNER: it tries to import certs into a keychain,
+          # and with no logged-in GUI session that returns
+          # "cert import failed: Write permissions error", so every profile
+          # reads as absent and the gate fails with the profiles correctly
+          # installed. Verified on the macOS runner 2026-08-05.
+          #
+          # A .mobileprovision is CMS-signed but its plist is embedded as
+          # plaintext, so it can be read without touching a keychain at all.
+          # sed cannot do it either - it bails on the surrounding binary.
+          python3 - "$PROFILE_NAME" "$TUNNEL_PROFILE_NAME" "$WIDGET_PROFILE_NAME" <<'PY'
+          import glob, os, plistlib, re, sys
+
+          want = set(sys.argv[1:])
+          found = {}
+          for path in glob.glob(os.path.expanduser(
+                  "~/Library/MobileDevice/Provisioning Profiles/*.mobileprovision")):
+              with open(path, "rb") as fh:
+                  raw = fh.read()
+              m = re.search(rb"<plist.*?</plist>", raw, re.S)
+              if not m:
+                  continue
+              try:
+                  pl = plistlib.loads(m.group(0))
+              except Exception:
+                  continue
+              name = pl.get("Name")
+              if name in want:
+                  # A duplicate name means two profiles claim one app id and
+                  # which one signs is down to filesystem order.
+                  if name in found:
+                      print("::error::two installed profiles are both named %r: %s and %s"
+                            % (name, found[name], path))
+                      sys.exit(1)
+                  found[name] = path
+                  print("profile present: %s -> %s" % (name, os.path.basename(path)))
+
+          # Report EVERY missing profile before failing. Exiting on the first
+          # sends the operator to install one, rerun, and be told about the next.
+          missing = sorted(want - set(found))
+          for name in missing:
+              print("::error::profile %r not installed on this runner" % name)
+          sys.exit(1 if missing else 0)
+          PY
+
+      - name: Stage the App Store Connect API key for altool
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.private_keys"
+          printf '%s' "$ASC_KEY_P8" > "$HOME/.private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          chmod 600 "$HOME/.private_keys/AuthKey_${ASC_KEY_ID}.p8"
+
+      - name: Python deps for the ASC helper
+        run: |
+          set -euo pipefail
+          # Recreate the venv from scratch every run: the self-hosted runner's
+          # /tmp persists, so a brew python upgrade leaves a reused venv with
+          # dangling symlinks. Invoke pip as a MODULE, not the bin/pip wrapper.
+          rm -rf /tmp/zippie-asc-venv
+          python3 -m venv /tmp/zippie-asc-venv
+          /tmp/zippie-asc-venv/bin/python -m ensurepip --upgrade
+          /tmp/zippie-asc-venv/bin/python -m pip install --quiet --disable-pip-version-check pyjwt cryptography requests
+
+      - name: Substitute the Apple Team ID into the checked-in signing config
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          sed -i '' "s/__APPLE_TEAM_ID__/$TEAM_ID/g" project.yml ci/ExportOptions.plist
+
+      - name: Generate the Xcode project
+        run: $HOME/bin/xcodegen generate
+
+      # THE EXTENSION DOES NOT LINK WITHOUT THIS. The Go datapath is built
+      # from source rather than committed (~23 MB of binary), so a runner with
+      # no framework produces an extension that cannot start client mode -
+      # and the failure arrives at runtime, on a phone, as a tunnel that comes
+      # up and carries nothing.
+      - name: Build the Go datapath xcframework
+        run: |
+          set -euo pipefail
+          GOMOBILE_VERSION=v0.0.0-20260803200217-62cee1672c8e
+          go install "golang.org/x/mobile/cmd/gomobile@$GOMOBILE_VERSION"
+          go install "golang.org/x/mobile/cmd/gobind@$GOMOBILE_VERSION"
+          export PATH="$HOME/go/bin:$PATH"
+          gomobile init
+          scripts/build-datapath-framework.sh
+          # Assert rather than trust: a bind that half-failed leaves a
+          # directory behind, and xcodebuild's error for a broken framework
+          # names the app, not the framework.
+          test -d Frameworks/Zippie.xcframework/ios-arm64 \
+            || { echo "xcframework has no device slice"; exit 1; }
+
+      - name: Compute next build number
+        id: build_number
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          N=$(/tmp/zippie-asc-venv/bin/python ci/asc.py next-build-number)
+          echo "Next build number: $N"
+          echo "value=$N" >> "$GITHUB_OUTPUT"
+
+      - name: Archive (signed)
+        env:
+          BUILD_NUMBER: ${{ steps.build_number.outputs.value }}
+        run: |
+          set -euo pipefail
+          # The manual cert + profile live on the app target's Release config in
+          # project.yml, NOT on this command line: passing
+          # PROVISIONING_PROFILE_SPECIFIER globally applies it to the Datadog SPM
+          # package targets too, which fail with "does not support provisioning
+          # profiles".
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/Zippie.xcarchive \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $CI_KEYCHAIN"
+          test -d build/Zippie.xcarchive
+
+      - name: Export + sign the IPA (App Store, manual)
+        run: |
+          set -euo pipefail
+          xcodebuild -exportArchive \
+            -archivePath build/Zippie.xcarchive \
+            -exportPath build/export \
+            -exportOptionsPlist ci/ExportOptions.plist \
+            OTHER_CODE_SIGN_FLAGS="--keychain $CI_KEYCHAIN"
+          ls -la build/export
+
+      - name: Upload to App Store Connect
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          IPA=$(ls build/export/*.ipa | head -1)
+          echo "Uploading $IPA"
+          xcrun altool --upload-app -f "$IPA" -t ios \
+            --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+
+      - name: Distribute to internal testers (release the build)
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          BUILD_NUMBER: ${{ steps.build_number.outputs.value }}
+        run: /tmp/zippie-asc-venv/bin/python ci/asc.py distribute "$BUILD_NUMBER"
+
+      - name: Set TestFlight "What to Test" notes from the iOS history
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          BUILD_NUMBER: ${{ steps.build_number.outputs.value }}
+        run: |
+          set -euo pipefail
+          # PATH-FILTERED, because this is an iOS build. Taking HEAD's commit
+          # message meant an Android-only merge became the release notes for a
+          # TestFlight build - which is what shipped on 2026-08-12, where the
+          # notes read "target API 36, which Google Play now requires" on an
+          # iOS build containing no such change.
+          #
+          # companion/ is the iOS app and its kit; the Android app lives in
+          # companion-android/ and the router agent in travel/, so this filter
+          # cannot pick up either of them.
+          NOTES="$(git log -10 --no-merges --pretty=format:'- %s' -- companion/)"
+          [ -n "${NOTES//[[:space:]]/}" ] || NOTES="Routine update (build $BUILD_NUMBER)."
+          TESTFLIGHT_NOTES="$NOTES" /tmp/zippie-asc-venv/bin/python ci/asc.py set-notes "$BUILD_NUMBER"
+
+      - name: Cleanup staged key
+        if: always()
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        run: rm -f "$HOME/.private_keys/AuthKey_${ASC_KEY_ID}.p8"

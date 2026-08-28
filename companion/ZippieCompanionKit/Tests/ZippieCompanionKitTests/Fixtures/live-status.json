@@ -1,0 +1,72 @@
+{
+  "mode": "aggregate",
+  "datapath": "packet",
+  "primary": "companion-iphone",
+  "paths": [
+    {
+      "name": "ethernet",
+      "state": "down",
+      "effective_weight": 0,
+      "rtt_ms": null,
+      "loss_pct": 100.0,
+      "label": "Ethernet WAN",
+      "interface": null,
+      "tx_bytes": 0,
+      "rx_bytes": 0,
+      "last_error": "no interface matched",
+      "relay_endpoint": ""
+    },
+    {
+      "name": "hotspot",
+      "state": "degraded",
+      "effective_weight": 8,
+      "rtt_ms": 520.9374749974813,
+      "loss_pct": 0.0,
+      "label": "Phone hotspot",
+      "interface": "apclix0",
+      "tx_bytes": 0,
+      "rx_bytes": 0,
+      "last_error": null,
+      "relay_endpoint": ""
+    },
+    {
+      "name": "dongle4g",
+      "state": "down",
+      "effective_weight": 0,
+      "rtt_ms": null,
+      "loss_pct": 100.0,
+      "label": "Google Fi 4G (T-Mobile)",
+      "interface": null,
+      "tx_bytes": 0,
+      "rx_bytes": 0,
+      "last_error": "no interface matched",
+      "relay_endpoint": ""
+    },
+    {
+      "name": "companion-iphone",
+      "state": "degraded",
+      "effective_weight": 0,
+      "rtt_ms": null,
+      "loss_pct": 0.0,
+      "label": "iPhone (Verizon)",
+      "interface": "br-lan",
+      "tx_bytes": 0,
+      "rx_bytes": 0,
+      "last_error": "healthy, held out of bond until proven (2/8)",
+      "relay_endpoint": "10.20.0.151:51999"
+    },
+    {
+      "name": "companion-co-operator",
+      "state": "degraded",
+      "effective_weight": 0,
+      "rtt_ms": null,
+      "loss_pct": 0.0,
+      "label": "Co-operator iPhone (Verizon)",
+      "interface": "br-lan",
+      "tx_bytes": 0,
+      "rx_bytes": 0,
+      "last_error": "healthy, held out of bond until proven (2/8)",
+      "relay_endpoint": "10.20.0.100:51999"
+    }
+  ]
+}

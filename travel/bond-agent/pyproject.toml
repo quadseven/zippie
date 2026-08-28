@@ -1,0 +1,60 @@
+[project]
+name = "zippie"
+version = "0.1.0"
+description = "Personal multipath internet bonding agent, self-hosted"
+readme = "README.md"
+# 3.9, not 3.11: the primary target is the GL-MT3000, whose GL firmware is built
+# on OpenWrt 21.02 and ships Python 3.9.15 with no newer build in the feed. The
+# agent runs there today (verified live 2026-07-27) - every module carries
+# `from __future__ import annotations`, so the `X | None` hints are strings, and
+# the only real 3.11 dependency was stdlib `tomllib`, which config.py already
+# falls back to `tomli` for. Raising this floor again would silently drop
+# support for the device this agent exists to run on.
+requires-python = ">=3.9"
+dependencies = [
+  "pyyaml>=6.0",
+  "tomli>=2.0; python_version < '3.11'",
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+# Split on purpose (GHSA-6w46-j5rx-g56g, Dependabot alert 10). pytest through
+# 9.0.2 puts its temp dirs at a predictable /tmp/pytest-of-{user} path, which a
+# local user on the same machine can pre-create (CWE-379). The fix landed in
+# 9.0.3 - but pytest 9 requires Python >=3.10, and this project's floor is 3.9
+# because that is what the GL-MT3000 runs. There is no patched pytest for 3.9.
+#
+# So: anywhere that CAN take the patched line now must, and the 3.9 case is
+# pinned below 9 explicitly rather than resolving there by accident. The
+# residual is accepted rather than fixed - the advisory is local-attacker-only
+# (CVSS AV:L) and pytest here runs on ephemeral single-tenant ARC runner pods,
+# never on the router. Dropping the 3.9 test job to clear the alert would trade
+# a real guard (it is what catches 3.10+ syntax before it reaches the device)
+# for a theoretical one.
+dev = [
+  "pytest>=9.0.3; python_version >= '3.10'",
+  "pytest>=8.0,<9; python_version < '3.10'",
+  "ruff>=0.6",
+]
+
+[project.scripts]
+zippie = "zippie.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["zippie"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+# Match requires-python above. Left at py311 this lints AGAINST 3.11 semantics
+# while the code must actually run on the MT3000's 3.9 - it was already flagging
+# config.py's tomllib/tomli version guard as "outdated" when that guard is the
+# only reason the agent imports at all on the target device.
+target-version = "py39"

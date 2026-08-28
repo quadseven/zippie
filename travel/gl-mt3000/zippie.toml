@@ -1,0 +1,177 @@
+# Live config for the GL-MT3000 "Suzu". Paths are matched by INTERFACE only:
+# SSIDs are user-editable at any moment and must never be load-bearing
+# (2026-07-30, hotspot renamed mid-trip and the SSID-matched path fell out).
+#
+# TRACKED HERE (#154), where it was previously hand-maintained only on the
+# router (docs/state-of-play.md, "Nothing persists" - caps, labels and tiers
+# lived in /etc/zippie/zippie.toml with nothing to diff them against). Editing
+# this file and `cat`-ing it to /etc/zippie/zippie.toml is now how a change to
+# this router's paths gets reviewed, instead of an SSH session nobody can
+# diff. Deploying a change here is a MANUAL step - see
+# travel/gl-mt3000/README.md ("Config goes to /etc/zippie/zippie.toml the same
+# way (cat | ssh)"). scripts/deploy-openwrt.sh never reads or pushes this
+# file; it only ever copies travel/bond-agent/zippie/*.py.
+#
+# server_public_key below is a PLACEHOLDER, not the real key - the real value
+# is deliberately not checked in (muster#101 tracks rotating it off a static
+# hardcoded value entirely). Before running the cat | ssh deploy step, replace
+# <server-public-key> with the real value from wherever muster#101 lands it.
+[home]
+endpoint = "dns-e.example-home.invalid"
+ports = [51900, 51901, 51902, 51903]
+server_public_key = "<server-public-key>"
+dns = ["1.1.1.1", "9.9.9.9"]
+allowed_ips = ["0.0.0.0/0", "::/0"]
+persistent_keepalive = 3
+# HOME OVER THE WIRE (#258). At home suzu's WAN sits on the house LAN while
+# `endpoint` above resolves to 203.0.113.33 - the house's OWN public address.
+# The edge does not implement hairpin NAT and egresses through a VPN, so the
+# ethernet leg dialling it is answered by nothing: measured rx=0, loss=100%,
+# never_handshaked=true after nine hours of uptime (#204). Every byte therefore
+# left over metered cellular with a free cable plugged in.
+#
+# Applied ONLY when a leg's own address is inside `network`, because this is a
+# travel router: away from home nothing matches and the public endpoint is used
+# unchanged, with no trip-checklist item to forget.
+#
+# THE PORT IS NOT `home_port`. 51902 is the port the edge router FORWARDS to
+# the home transport's 51931; inside the house that forward does not apply.
+# Verified on the home server 2026-08-21 - `ss -lunp` shows python3 bound to
+# 0.0.0.0:51931 and NOTHING listening on 51902.
+lan_endpoints = [
+    { network = "192.0.2.0/24", address = "192.0.2.141", port = 51931 },
+]
+
+[policy]
+mode = "aggregate"
+# Packet datapath (#2112). All legs spray to ONE home port; 51902 is the
+# public port redirected to the home transport on 51931.
+datapath = "packet"
+transport_port = 51830
+home_port = 51902
+probe_interval_ms = 1000
+# Automatic idle economy (#260). At three legs this reduces the zippie probe
+# floor to 51 transport bytes/s (3 legs x request+reply x 17 B / 2 s), or
+# 11.93 MB/day including zippie framing, IPv4/UDP headers and one 25 s
+# WireGuard keepalive. Two missed probes still fit inside the existing 6 s
+# stale window, while real WireGuard data restores the 1 s cadence.
+idle_after_s = 60
+idle_probe_interval_ms = 2000
+idle_persistent_keepalive = 25
+# The Fi dongle legitimately runs 800-1000ms; the 400ms default marked
+# it DOWN, which is right for a peer link and wrong for a reserve.
+failover_rtt_ms = 1500
+degraded_rtt_ms = 250
+
+# GbE WAN - whatever the WAN port is plugged into (hotel ethernet, another
+# router). eth0 is this platform WAN port name.
+[[paths]]
+name = "ethernet"
+label = "Ethernet WAN"
+tier = 1
+priority = 10
+cost_class = "free"
+match = { type = "interface", interface = "eth0" }
+
+# 5GHz station radio (apclix0). #154: split out of a single "apcli*" glob that
+# also matched apcli0 (2.4GHz) - invisible while only one radio was
+# associated, and a real collision the moment a phone joins 2.4GHz while this
+# radio holds an AP. Interfaces are now matched by their exact name, one path
+# each, so the two can never claim each other (zippie/agent.py's
+# _match_by_interface tries an exact name lookup before it ever falls back to
+# fnmatch, and "apclix0" cannot fnmatch-match "apcli0" or vice versa).
+#
+# `name` STAYS "hotspot" on purpose. It is the stable identifier that keys
+# this leg's provisioned WireGuard key, its usage.json counter and its
+# retransmit state (zippie/models.py, PathConfig.name) - and this leg is LIVE,
+# carrying real traffic through apclix0 right now (verified via
+# /api/status, 2026-08-12: state=up, in_bond=true, ~989MB tx / ~478MB rx
+# accumulated). Renaming it would start a brand-new leg from zero on the next
+# deploy and orphan the key already provisioned for it on the home server.
+# Deploying THIS file only changes what apclix0 is allowed to match (was:
+# "apcli*", now: exactly "apclix0") - the name, and everything keyed by it,
+# is unchanged, so the leg keeps its history across the restart deploying
+# this file requires.
+#
+# Despite the label, apclix0 is currently associated to an access point
+# called M2000, not a phone (#153 tracks fixing the label to say so
+# automatically from the live SSID; a legs.json override already renders it
+# as "Wi-Fi Repeater - M2000" on the console ahead of that landing).
+#
+# monthly_cap_gb is UNSET here, not carried over from the old glob's 50. That
+# 50 was a phone's plan size applied to whichever radio happened to answer -
+# right for a phone, meaningless for the M2000's own uplink, which is
+# genuinely metered (T-Mobile, 172.56.163.44, AS21928, mobile: true) but on a
+# plan this repo does not know the size of. Leaving it unset means
+# over_soft_limit simply never fires for this leg rather than firing against
+# an invented number; usage.json keeps accumulating real bytes regardless, so
+# nothing is lost by waiting for the operator to fill in the real cap.
+[[paths]]
+name = "hotspot"
+label = "Phone hotspot"
+tier = 1
+priority = 20
+cost_class = "metered"
+match = { type = "interface", interface = "apclix0" }
+
+# 2.4GHz station radio (apcli0). #154: the other half of the split above. Idle
+# as of the 2026-08-12 survey ("ESSID: unknown", no IPv4) - a free slot for
+# whatever joins this band next, historically an actual phone hotspot (unlike
+# apclix0's M2000).
+#
+# New identity, deliberately: nothing has ever carried under the name
+# "hotspot-2ghz", so there is no key, counter or retransmit history to lose by
+# giving it one. It cannot collide with "hotspot" above - each path's `match`
+# names a single physical interface, and zippie/agent.py's match_interfaces
+# excludes an interface from every OTHER path the instant one path claims it.
+#
+# monthly_cap_gb carries forward the pre-#154 config's 50 GB, kept here
+# because this slot is the one actually likely to host a phone, and 50 GB is
+# what every other phone-hotspot path in this repo assumes as a starting
+# point (see configs/examples/zippie.toml) - not a new number invented for
+# this PR.
+#
+# label is deliberately absent, not hardcoded. Empty falls back to the name
+# itself (zippie/models.py, PathConfig.label), and #153 is adding automatic
+# SSID-derived labels for exactly this kind of leg - a value written here now
+# would just be overwritten, or worse, silently shadow what #153 derives.
+[[paths]]
+name = "hotspot-2ghz"
+tier = 1
+priority = 30
+cost_class = "metered"
+monthly_cap_gb = 50
+match = { type = "interface", interface = "apcli0" }
+
+[agent]
+# /var is a symlink to tmpfs on OpenWrt, so the default state_dir loses the
+# console token AND the usage counters on every reboot. See store.py.
+state_dir = "/etc/zippie/state"
+# 0.0.0.0: the Caddy front for pathbond.ts.example-home.invalid needs a routable ip;
+# GL nginx owns :443 so tailscale serve cannot front this. GET-only handler.
+dashboard_host = "0.0.0.0"
+
+# Migration rung for #158: when all three are set, the same console also listens
+# over HTTPS while this HTTP listener stays up for existing phones. Certificate
+# issuance and phone pinning are separate operator steps; no trust root is
+# selected here.
+# dashboard_tls_port = 8788
+# dashboard_tls_cert = "/etc/zippie/tls/console.crt"
+# dashboard_tls_key = "/etc/zippie/tls/console.key"
+
+# NO STATIC COMPANION LEGS. Removed 2026-08-07 (zippie#34).
+#
+# Phones announce themselves to /api/legs/announce and hold a 45s lease, so a
+# phone that is present is a leg and a phone that is absent is not. A static
+# entry cannot express that, and it did active harm twice over:
+#
+#   1. It PREVENTED the real thing from working. match_interfaces excludes
+#      legs on relay endpoint, so the static companion-iphone claimed
+#      10.20.0.151:51999 and the announced leg (iphone-8fe5) was refused the
+#      bridge, left interface=None, DOWN, and out of the bond. The same phone
+#      appeared twice in the app, once alive and once dead.
+#   2. companion-co-operator dialled a phone that has never run the relay, forever,
+#      reporting "no reply yet" and churning the transport link table.
+#
+# If a phone needs a fixed name or weight, that is a legs.json override, not a
+# path. Previous file kept at zippie.toml.bak-static-companions.

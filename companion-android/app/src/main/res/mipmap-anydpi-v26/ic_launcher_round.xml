@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Same two layers as ic_launcher; a launcher that asks for the round variant
+     on API 26+ still applies its own mask, so this exists only so that
+     android:roundIcon resolves on every API level it is declared for. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@mipmap/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <!-- THEMED ICONS, Android 13+. The launcher throws the colour away and
+         recolours this silhouette to match the wallpaper. Without it the app
+         simply does not participate: on a themed home screen every other icon
+         goes monochrome and this one stays full-colour, which is the thing
+         that looks broken. Same geometry as the foreground so the mark does
+         not appear to move when the user turns the setting on. -->
+    <monochrome android:drawable="@mipmap/ic_launcher_monochrome" />
+</adaptive-icon>

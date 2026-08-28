@@ -1,0 +1,18 @@
+15:58:00 === zippie chaos run ===
+15:58:00 legs: eth0 apcli0 eth2 
+15:58:00 baseline nexthops: dev pb0 weight 32 dev pb1 weight 104 
+15:58:00 deadline armed: all netem cleared in 180s regardless
+15:58:00 --- 1 latency spike  (dev=apcli0  rule='delay 400ms 80ms'  hold=25s)
+15:58:00     before: dev pb0 weight 32 dev pb1 weight 104 
+15:58:25     during: changes=2 withdraw_s=-1   dev pb0 weight 32 dev pb1 weight 16 
+15:58:51     after:  changes=2 recover_s=1    dev pb0 weight 32 dev pb1 weight 32 dev pb2 weight 24 
+15:58:51 --- 2 brownout 30% loss  (dev=apcli0  rule='loss 30%'  hold=25s)
+15:58:51     before: dev pb0 weight 32 dev pb1 weight 32 dev pb2 weight 24 
+15:59:16     during: changes=2 withdraw_s=-1   dev pb0 weight 32 dev pb1 weight 40 dev pb2 weight 24 
+15:59:41     after:  changes=1 recover_s=1    dev pb0 weight 32 dev pb1 weight 56 dev pb2 weight 24 
+15:59:41 --- 3 hard blackhole  (dev=apcli0  rule='loss 100%'  hold=25s)
+15:59:41     before: dev pb0 weight 32 dev pb1 weight 56 dev pb2 weight 24 
+16:00:06     during: changes=1 withdraw_s=-1   dev pb0 weight 32 dev pb1 weight 16 dev pb2 weight 24 
+16:00:31     after:  changes=1 recover_s=1    dev pb0 weight 32 dev pb1 weight 56 dev pb2 weight 24 
+16:00:31 final nexthops: dev pb0 weight 32 dev pb1 weight 56 dev pb2 weight 24 
+16:00:31 === DONE ===

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Entitlements for the home-screen widget extension (issue #244).
+
+     App Group only - this extension never touches NetworkExtension. The
+     group is how it reads the same RelayStatus the app and the tunnel
+     extension already share; it must match
+     RelayConfiguration.appGroupIdentifier exactly, same requirement as the
+     other two targets. -->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.app.zippie.companion</string>
+    </array>
+</dict>
+</plist>

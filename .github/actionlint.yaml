@@ -1,0 +1,7 @@
+# Self-hosted runner labels used by this repo. Without this, actionlint flags
+# every one of them as "unknown label" and the noise buries real findings.
+self-hosted-runner:
+  labels:
+    - srv-unraid-gha
+    - srv-unraid-gha-iot
+    - mac-mini

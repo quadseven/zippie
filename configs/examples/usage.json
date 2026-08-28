@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "legs": {
+    "starlink": {
+      "usage_gb": 12.4,
+      "period_start": "2026-08-01",
+      "previous_usage_gb": 41.2,
+      "previous_period_start": "2026-07-01"
+    },
+    "fi-operator": { "usage_gb": 5.1, "period_start": "2026-08-01" },
+    "verizon-operator": { "usage_gb": 8.0, "period_start": "2026-07-14" }
+  },
+  "note": "THE AGENT WRITES THIS FILE. It lives at /var/lib/zippie/usage.json and holds bytes the agent measured, not anything a carrier reported. Shown here so the shape is readable; copying it over a live file DISCARDS real measured usage.",
+  "note_period": "usage_gb covers the CURRENT billing period only. period_start anchors it: at the next start (or tick) where the period containing today differs, usage_gb rolls to 0 and the old total is kept as previous_usage_gb. The period is a calendar month unless the leg has a billing_day in legs.json, which is the carrier's cycle day - verizon-operator above is on the 14th. Keyed by 'legs', not 'paths'."
+}

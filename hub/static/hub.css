@@ -1,0 +1,98 @@
+/* The zippie system on the web. Tokens are generated; this file is composition
+   only, and introduces no colour, size or spacing of its own. */
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--c-ground);
+  color: var(--c-primary);
+  font: var(--t-body-size)/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  /* Tabular figures everywhere a number can change, so values do not jitter
+     as they update. Same rule as the phone. */
+  font-variant-numeric: tabular-nums;
+}
+
+#app {
+  max-width: 940px;
+  /* ONE horizontal margin that everything aligns to, hairlines included, so
+     the page has one left edge. */
+  margin: 0 auto;
+  padding: var(--s-section) var(--s-margin) var(--s-major);
+}
+
+.head { padding-block: var(--s-section) var(--s-tight); }
+
+h1 {
+  font-size: var(--t-display-size);
+  font-weight: 600;
+  letter-spacing: -0.8px;
+  margin: 0;
+}
+
+.sub { color: var(--c-secondary); margin: var(--s-snug) 0 0; max-width: 60ch; }
+
+.section {
+  font-size: var(--t-section-size);
+  font-weight: 600;
+  margin: var(--s-section) 0 var(--s-snug);
+}
+
+.nodes { list-style: none; margin: 0; padding: 0; }
+
+/* Hairlines instead of cards. A card round each node would add three edges and
+   a shadow to say what the whitespace already says. */
+.node + .node { border-top: 1px solid var(--c-rule); }
+
+.node > summary {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: var(--s-snug);
+  align-items: baseline;
+  padding-block: var(--s-base);
+  cursor: pointer;
+  list-style: none;
+}
+.node > summary::-webkit-details-marker { display: none; }
+
+.name { font-size: var(--t-label-size); font-weight: 500; }
+.kind { color: var(--c-tertiary); font-size: var(--t-caption-size); margin-left: var(--s-tight); }
+.word { font-size: var(--t-caption-size); color: var(--c-secondary); }
+.word.carrying { color: var(--c-live); }
+.age  { font-size: var(--t-caption-size); color: var(--c-tertiary); }
+
+/* Each node's legs as one row of ticks: the shape of the node at a glance,
+   without making a five-leg router and a two-leg phone look alike. */
+.legs { display: flex; gap: 2px; grid-column: 1 / -1; margin-top: var(--s-hair); }
+.tick { height: 3px; flex: 1 1 auto; border-radius: 2px; background: var(--c-rule); }
+.tick.carrying { background: var(--c-live); }
+.tick.degraded { background: var(--c-degraded); }
+.tick.down     { background: var(--c-down); }
+
+.detail { padding: 0 0 var(--s-base); }
+.leg {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: var(--s-snug);
+  align-items: baseline;
+  padding-block: var(--s-tight);
+}
+.leg + .leg { border-top: 1px solid var(--c-rule); }
+.note { grid-column: 1 / -1; color: var(--c-secondary); font-size: var(--t-caption-size); }
+.note.bad { color: var(--c-down); }
+
+.foot {
+  margin-top: var(--s-section);
+  padding-top: var(--s-base);
+  border-top: 1px solid var(--c-rule);
+  color: var(--c-tertiary);
+  font-size: var(--t-caption-size);
+}
+.foot p { margin: 0 0 var(--s-hair); }
+
+@media (max-width: 560px) {
+  /* Density is the only thing that changes between surfaces. */
+  h1 { font-size: 32px; }
+  .node > summary { grid-template-columns: 1fr auto; }
+  .age { grid-column: 2; }
+}

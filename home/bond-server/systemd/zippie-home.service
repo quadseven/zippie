@@ -1,0 +1,13 @@
+[Unit]
+Description=Zippie home WireGuard multipath exit
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/zippie-home up
+ExecStop=/usr/local/bin/zippie-home down
+
+[Install]
+WantedBy=multi-user.target

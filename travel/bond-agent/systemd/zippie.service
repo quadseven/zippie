@@ -1,0 +1,14 @@
+[Unit]
+Description=Zippie multipath travel agent
+After=network-online.target NetworkManager.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/zippie up
+Restart=on-failure
+RestartSec=2
+Environment=ZIPPIE_CONFIG=/etc/zippie/zippie.toml
+
+[Install]
+WantedBy=multi-user.target

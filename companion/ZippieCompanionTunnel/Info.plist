@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Info.plist for the packet-tunnel extension (ADR 0020, phase 2).
+
+     HAND WRITTEN, unlike the app target's, which uses GENERATE_INFOPLIST_FILE.
+     Two reasons:
+
+       1. NSExtension is a nested dictionary. The INFOPLIST_KEY_* build settings
+          that drive generation carry flat values only, so the one key that makes
+          this bundle a packet-tunnel provider cannot be expressed that way.
+       2. It is the load-bearing declaration in the whole target. If
+          NSExtensionPointIdentifier is wrong the extension builds, signs,
+          embeds, and is simply never loaded - the tunnel start fails with a
+          generic error that never mentions the plist. That belongs in a diff a
+          reviewer can read.
+
+     NSExtensionPrincipalClass uses $(PRODUCT_MODULE_NAME) because Swift class
+     names are module-qualified when looked up by NSClassFromString. A bare
+     "PacketTunnelProvider" here resolves to nil and the extension dies on load.
+
+     The version keys track the app's via build settings. They MUST match the
+     containing app exactly or App Store Connect rejects the upload; the
+     TestFlight workflow passes CURRENT_PROJECT_VERSION on the xcodebuild
+     command line, which applies to every target, so the build number stays in
+     lockstep automatically. MARKETING_VERSION does not - it is pinned in
+     project.yml on both targets and has to be changed in both places. -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>$(DEVELOPMENT_LANGUAGE)</string>
+    <key>CFBundleDisplayName</key>
+    <string>Zippie Cellular Leg</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>$(PRODUCT_NAME)</string>
+    <key>CFBundlePackageType</key>
+    <string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>NSExtension</key>
+    <dict>
+        <key>NSExtensionPointIdentifier</key>
+        <string>com.apple.networkextension.packet-tunnel</string>
+        <key>NSExtensionPrincipalClass</key>
+        <string>$(PRODUCT_MODULE_NAME).PacketTunnelProvider</string>
+    </dict>
+</dict>
+</plist>

@@ -1,0 +1,5 @@
+{
+  "advancedSecurityOverrides": {
+    "developerSettings": "DEVELOPER_SETTINGS_ALLOWED"
+  }
+}

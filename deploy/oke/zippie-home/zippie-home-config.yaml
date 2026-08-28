@@ -1,0 +1,43 @@
+# Operator-set values. Deliberately a ConfigMap, not baked into the Deployment:
+# the endpoint WILL change (FiOS IPs move, and the exit may relocate to a public
+# host to avoid the port-forward entirely - see README). Changing it does not
+# rekey the server or invalidate provisioned clients.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zippie-home-config
+  namespace: zippie
+data:
+  # The UDM keeps this current via its built-in Cloudflare DDNS (inadyn).
+  # Using the NAME, not the IP, because FiOS addresses move - and the name is
+  # only trustworthy now that the duplicate-A-record bug is fixed and guarded
+  # (custom.cloudflare.dns.duplicate_names). Before that cleanup this name
+  # resolved to a stale IP half the time, which would have sent half of every
+  # travel client's WireGuard handshakes to a stranger.
+  endpoint: "dns-e.example-home.invalid"
+  # One UDP port per bonded path, forwarded on the gateway to this node
+  # (see README for why that is unavoidable with bare WireGuard).
+  #
+  # NOT 51820. The k8s-oke cluster mesh interface `wg-cluster` already binds
+  # UDP 51820 on every node, and hostNetwork means we share that port space -
+  # the first deploy died with "RTNETLINK answers: Address in use" on
+  # `ip link set up dev pb-home0`. Verified on the node:
+  #     wg show interfaces        -> wg-cluster
+  #     wg show wg-cluster listen-port -> 51820
+  # 519xx is clear of both that and Tailscale (41641).
+  ports: "51900,51901,51902,51903"
+  # Empty = auto-detect from the node's default route.
+  wan_iface: ""
+  # PACKET DATAPATH (#2112). Empty = route mode only, the proven default.
+  #
+  # transport_port is the LOCAL port the userspace transport binds. Public
+  # ports are REDIRECTed to it, and that DNAT is the only reason firewalld on
+  # this node delivers them at all (#2134) - a direct bind receives nothing.
+  #
+  # transport_public_ports is the staged rollout control: list ONE spare public
+  # port and the transport gets it while route mode keeps 51901 and its live
+  # tunnels. Empty (with transport_port set) means the transport claims ALL
+  # public ports, which is the flag day - do not do that until the staged
+  # rollout has been measured (#2136).
+  transport_port: "51931"
+  transport_public_ports: "51902"

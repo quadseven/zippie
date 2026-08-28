@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Zippie Companion</string>
+
+    <!-- The notification is not decoration: it is the exemption that keeps the
+         relay alive with the screen off, and the only place the owner of the
+         phone can see that it is spending their cellular for the bond. -->
+    <string name="relay_channel_name">Contributing to the bond</string>
+    <string name="relay_channel_description">Shown while this phone is lending its cellular to the zippie router.</string>
+    <string name="relay_notification_title">Zippie relay</string>
+    <string name="relay_starting">Starting</string>
+    <string name="relay_stop">Stop</string>
+
+    <!-- MDM-configurable settings. AAPT requires title/description on a
+         <restriction> to be string RESOURCES, not literals - a literal fails
+         resource linking with "is incompatible with attribute description". -->
+    <string name="mc_token_title">Router write token</string>
+    <string name="mc_token_desc">The router console write token, so this phone can announce itself as a bond leg without anyone typing it. Reads are open; writes are not.</string>
+    <string name="mc_console_title">Router console on the LAN</string>
+    <string name="mc_console_desc">host:port of the router console on its own network, for example 10.20.0.1:8787. The LAN address, never the tailnet one - the tailnet console answers from anywhere, so announcing to it would tell a router to dial a private address on a network this phone is not on.</string>
+    <string name="mc_home_host_title">Home transport host</string>
+    <string name="mc_home_host_desc">Public hostname of the home transport this phone relays to.</string>
+    <string name="mc_home_port_title">Home transport port</string>
+    <string name="mc_home_port_desc">UDP port of the home transport. 1-65535; anything else is ignored.</string>
+    <string name="mc_listen_port_title">Relay listen port</string>
+    <string name="mc_listen_port_desc">UDP port the router dials on this phone. 1-65535; anything else is ignored, because binding 0 takes a random port and the router would dial one nothing is on.</string>
+    <string name="mc_autostart_title">Start relaying automatically</string>
+    <string name="mc_autostart_desc">Begin relaying without anyone opening the app. Absent means no - a phone must never start relaying because a key was missing.</string>
+    <string name="mc_dd_token_title">Datadog client token</string>
+    <string name="mc_dd_token_desc">Lets this phone report its own relay decisions over cellular, which is the only channel that survives the router being unreachable. Blank disables telemetry.</string>
+    <string name="mc_dd_site_title">Datadog site</string>
+    <string name="mc_dd_site_desc">Intake host, e.g. datadoghq.com. Leave blank for US1.</string>
+    <string name="mc_home_screen_title">Use this phone as a home screen</string>
+    <string name="mc_home_screen_desc">Only for a dedicated leg - a phone whose job is carrying the bond. It makes the bond status the phone\'s home screen. Leave this off for any phone somebody uses as a phone: turning it on makes Android ask which home app to use.</string>
+</resources>

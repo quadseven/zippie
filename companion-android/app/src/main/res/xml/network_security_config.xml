@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The router's console speaks plain HTTP on its own LAN; the tailnet copy of the
+  same console speaks HTTPS. This file lets the first one through WITHOUT
+  turning cleartext back on for the app as a whole.
+
+  usesCleartextTraffic="true" on the application tag would have been one
+  attribute and would also have permitted plain HTTP to every host on earth,
+  including a captive portal that answers every DNS query with its own address -
+  a phone that joins hotel wifi and starts posting to whatever "zippie" resolves
+  to there. The allowance is therefore pinned to the literal LAN address.
+
+  This list must track RelayConfiguration.consoleLanHost. A console moved to a
+  different address fails with "Cleartext HTTP traffic not permitted", which the
+  status screen shows verbatim - it reads like a bug and is actually this file.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- suzu's LAN address. NO LONGER a default anywhere: #157 emptied
+             RelayConfiguration.consoleLanHost to "", so this literal is now the
+             ONLY place the address is pinned - and it is a compiled resource no
+             managed-configuration key can reach. Push a console at any other
+             address through MDM and the app stores it, displays it, and then
+             cannot talk to it. That is #156, and it is why this file matters. -->
+        <domain includeSubdomains="false">10.20.0.1</domain>
+        <!-- For an adb-forwarded console during bring-up on a desk. -->
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>

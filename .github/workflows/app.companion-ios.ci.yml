@@ -1,0 +1,163 @@
+# Zippie companion CI (ADR 0020, infra#2112).
+#
+# Two jobs on purpose, and the split matters:
+#
+#   kit   - `swift test` on the platform-neutral core. No Xcode project, no
+#           simulator, no signing. This is where the verdict logic lives, and
+#           it is the logic that decides whether the whole companion design is
+#           viable, so it must stay testable on a bare toolchain.
+#   app   - `xcodegen generate` + `xcodebuild` for the simulator with signing
+#           OFF. Proves the SwiftUI target still compiles and the generated
+#           project is valid, without needing certificates.
+#
+# TestFlight is deliberately NOT here. That is a separate, manually-triggered
+# workflow on the Mac mini runner, matching the macchina Companion rule that a
+# human promotes builds rather than a merge doing it.
+name: zippie companion
+
+# THE `kit` JOB NOW GATES EVERY PR. The `app` job does not - see below.
+#
+# This file used to be dispatch-only, on the grounds that "the macOS runner is
+# registered to quadseven/macchina ONLY, and a repo-scoped runner cannot serve
+# another repository - so infra has no macOS runner". THAT PREMISE IS NO LONGER
+# TRUE, verified 2026-08-10: the `gomobile` job in check.agent-tests.yml runs on
+# the identical label set `[self-hosted, macOS, ARM64, mac-mini]` and has
+# succeeded on zippie PRs all week. A macOS runner does serve this repo.
+#
+# The cost of leaving it dispatch-only was concrete rather than theoretical:
+# quadseven/zippie#97 changed the relay verdict and added 18 tests, and NOTHING
+# in CI ran them. 244 Swift tests existed and gated nothing, which is the same
+# shape as the mobile bind module's five tests (#26) - a suite that looks like
+# coverage and is not wired to anything.
+#
+# `paths:` keeps it off PRs that cannot affect it, so the mac mini is not woken
+# for a router-only change.
+on:
+  pull_request:
+    paths:
+      - 'companion/**'
+      - '.github/workflows/app.companion-ios.ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'companion/**'
+      - '.github/workflows/app.companion-ios.ci.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: companion-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kit:
+    name: kit tests
+    runs-on: [self-hosted, macOS, ARM64, mac-mini]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v4
+      # XCTest SHIPS WITH XCODE, NOT WITH THE COMMAND LINE TOOLS, and
+      # `xcode-select -p` on this mac mini points at
+      # /Library/Developer/CommandLineTools. Without this the whole suite fails
+      # to COMPILE with `error: no such module 'XCTest'` on every test file -
+      # which reads like a broken checkout rather than a toolchain selection.
+      #
+      # Found by turning this job on: it passes locally, where full Xcode is
+      # selected, and failed on its first real run here. The `app` job below
+      # already had this step; `kit` never needed it while it was
+      # dispatch-only and nobody dispatched it.
+      #
+      # Same shape as the gomobile job in check.agent-tests.yml, which carries
+      # the identical fix for the identical reason on the identical machine.
+      - name: locate Xcode
+        run: |
+          set -euo pipefail
+          # find, not ls: a glob through ls mangles unusual filenames (SC2012).
+          XAPP=$(find /Applications -maxdepth 1 -name 'Xcode*.app' | sort | head -1)
+          [ -n "$XAPP" ] || { echo "::error::no Xcode.app found - run 'xcodes install'"; exit 1; }
+          echo "DEVELOPER_DIR=$XAPP/Contents/Developer" >> "$GITHUB_ENV"
+      - name: swift test
+        working-directory: companion/ZippieCompanionKit
+        run: |
+          set -euo pipefail
+          swift test 2>&1 | tee /tmp/kit-test.log
+          # A green exit with zero tests executed is not a pass. Guard against
+          # a rename or a broken target silently reducing coverage to nothing.
+          grep -qE "Executed [1-9][0-9]* test" /tmp/kit-test.log \
+            || { echo "::error::no tests actually executed"; exit 1; }
+
+  app:
+    name: app builds
+    # RUNS ON EVERY PR now that it builds what it links (#94). Until then this
+    # job was dispatch-only because the tunnel target links
+    # Frameworks/Zippie.xcframework, which is gitignored and which no step
+    # built - so xcodebuild only succeeded when a leftover framework happened
+    # to be in the mac mini's workspace, and CI could be green against a
+    # framework that did not match the Go source.
+    runs-on: [self-hosted, macOS, ARM64, mac-mini]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v4
+      - name: locate toolchain
+        run: |
+          set -euo pipefail
+          # find, not ls: a glob through ls mangles unusual filenames (SC2012).
+          XAPP=$(find /Applications -maxdepth 1 -name 'Xcode*.app' | sort | head -1)
+          [ -n "$XAPP" ] || { echo "::error::no Xcode.app found - run 'xcodes install'"; exit 1; }
+          echo "DEVELOPER_DIR=$XAPP/Contents/Developer" >> "$GITHUB_ENV"
+          # Explicit if/else rather than A && B || C, which is not if-then-else:
+          # C also runs when A is true but B fails (SC2015).
+          if [ -x "$HOME/bin/xcodegen" ]; then
+            XG="$HOME/bin/xcodegen"
+          else
+            XG=$(command -v xcodegen)
+          fi
+          [ -n "$XG" ] || { echo "::error::xcodegen not found on runner"; exit 1; }
+          echo "XCODEGEN=$XG" >> "$GITHUB_ENV"
+      # BUILD THE FRAMEWORK THIS RUN LINKS (#94).
+      #
+      # `companion/Frameworks/` is gitignored - deliberately, it is ~23 MB of
+      # binary for two architectures and the build script explains why it is
+      # built from source rather than committed. The consequence nobody had
+      # closed: no step here built it, so xcodebuild succeeded only when a
+      # leftover from some earlier manual build happened to be in the
+      # workspace. On this runner that leftover was dated 2026-08-06. A clean
+      # checkout failed, and a change to the Go datapath could not break the
+      # app build, because the app build was not using it.
+      #
+      # Removing it first is the point, not tidiness: it turns "a framework is
+      # present" into "the framework was built from the source in this commit".
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: travel/datapath-go/mobile/go.mod
+          cache-dependency-path: travel/datapath-go/mobile/go.sum
+      - name: build the datapath xcframework from source
+        run: |
+          set -euo pipefail
+          # DERIVED FROM go.mod, not a second literal. check.agent-tests.yml
+          # pins the same tool and says the version "is the one the module
+          # already requires" - so reading it from the module keeps the two
+          # jobs from drifting apart, which a copied constant would not.
+          # Still pinned, and still never @latest: this is the machine that
+          # holds the Apple Distribution key.
+          GOMOBILE_VERSION=$(cd travel/datapath-go/mobile \
+            && go list -m -f '{{.Version}}' golang.org/x/mobile)
+          echo "gomobile pinned to $GOMOBILE_VERSION (from mobile/go.mod)"
+          go install "golang.org/x/mobile/cmd/gomobile@$GOMOBILE_VERSION"
+          go install "golang.org/x/mobile/cmd/gobind@$GOMOBILE_VERSION"
+          export PATH="$HOME/go/bin:$PATH"
+          gomobile init
+          rm -rf companion/Frameworks/Zippie.xcframework
+          companion/scripts/build-datapath-framework.sh
+          test -d companion/Frameworks/Zippie.xcframework \
+            || { echo "::error::the framework was not produced"; exit 1; }
+      - name: generate project
+        working-directory: companion
+        run: $XCODEGEN generate
+      - name: build for simulator (unsigned)
+        working-directory: companion
+        run: |
+          set -euo pipefail
+          xcodebuild -project ZippieCompanion.xcodeproj \
+            -scheme ZippieCompanion \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build 2>&1 | tail -40

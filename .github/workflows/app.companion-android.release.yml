@@ -1,0 +1,169 @@
+name: App - zippie companion android - signed release APK (manual)
+
+# MANUAL ONLY. Merging to main does not produce a release build, matching the
+# rule the iOS side already follows in app.companion-ios.testflight.yml: a human
+# promotes builds, a merge does not. There is no `push:` trigger here and there
+# must never be one.
+#
+# It also publishes NOWHERE. The APK is a workflow artifact you download and
+# sideload with `adb install`. No Play Console, no store, no upload of any kind
+# - that is a separate decision with a developer account and a review loop
+# behind it (#55 lists both routes; this is the sideload route).
+#
+# THE REAL SIGNING KEY DOES NOT EXIST YET (checked 2026-08-10: 227 SSM
+# parameters, nothing under /infra/android/). Until Operator runs the ceremony in
+# companion-android/README.md, `keystore: release` fails immediately with the
+# command to run, and `keystore: throwaway` produces an installable build signed
+# with a key created and destroyed inside the job.
+#
+# Repo secrets, once the key exists (seeded from SSM /infra/android/*, exactly
+# as the ASC_* secrets are seeded from /infra/apple/*):
+#   ANDROID_KEYSTORE_BASE64    base64 of the PKCS12 keystore
+#   ANDROID_KEYSTORE_PASSWORD  store password
+#   ANDROID_KEY_ALIAS          key alias
+#   ANDROID_KEY_PASSWORD       key password
+
+on:
+  workflow_dispatch:
+    inputs:
+      keystore:
+        description: 'Which key signs it'
+        type: choice
+        required: true
+        default: release
+        options:
+          - release
+          - throwaway
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-companion-android-release
+  cancel-in-progress: false
+
+jobs:
+  apk:
+    name: build + sign + verify
+    runs-on: [self-hosted, macOS, ARM64, mac-mini]
+    timeout-minutes: 40
+    env:
+      # Mapped at job level rather than tested through the `secrets` context in
+      # an `if:`, which is not reliably available there. An unset secret arrives
+      # as an empty string and the step below says so in one line.
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          # The version code is the commit count; a shallow clone would produce
+          # a smaller one and mint a version that goes backwards.
+          fetch-depth: 0
+
+      # STAGING AND BUILDING ARE ONE STEP ON PURPOSE. Splitting them would mean
+      # handing the passwords between steps through $GITHUB_ENV, which is a file
+      # on disk and which interprets a value containing a newline as further
+      # assignments. Here the secrets are shell variables in one process, the
+      # keystore is deleted by the trap whether the build passes or fails, and
+      # neither ever becomes an argument that `ps` could read.
+      # The bundle is built ONLY on the real-key path. A throwaway-signed .aab
+      # is worse than none: Play binds an app to its upload key permanently, so
+      # a bundle uploaded under a test key would have to be abandoned along with
+      # the package name.
+
+      - name: Resolve the Android SDK location
+        # Computed at run time, never written into this file. A job-level
+        # `env:` is a LITERAL string - `$HOME` does not expand there - and a
+        # hardcoded absolute path would publish the runner account's name into
+        # a public repo. Honors the runner's own .env if it exports
+        # ANDROID_HOME, else falls back to the standard macOS location under
+        # whatever $HOME the runner user happens to have.
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
+          test -d "$SDK" || { echo "::error::Android SDK not found at $SDK"; exit 1; }
+          {
+            echo "ANDROID_HOME=$SDK"
+            echo "ANDROID_SDK_ROOT=$SDK"
+          } >> "$GITHUB_ENV"
+
+      - name: Build and verify the release APK and Play bundle
+        if: ${{ inputs.keystore == 'release' }}
+        env:
+          ZIPPIE_BUILD_BUNDLE: "1"
+        run: |
+          set -euo pipefail
+          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo "::error::No release signing key is configured for this repo."
+            echo "The key does not exist yet. Create it once, back it up, then seed it:"
+            echo "  companion-android/README.md -> 'Release builds and signing'"
+            echo "Or dispatch this workflow again with keystore: throwaway to get an"
+            echo "installable test build now (it cannot be upgraded by a real build)."
+            exit 1
+          fi
+          for var in ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            # Indirect expansion so no password is ever an argument to anything.
+            if [ -z "${!var:-}" ]; then
+              echo "::error::$var is not set, but ANDROID_KEYSTORE_BASE64 is - the secrets are half-seeded"
+              exit 1
+            fi
+          done
+
+          # OUTSIDE the checkout. A keystore written into the working tree is
+          # one `git add -A` away from being public forever, and the gradle
+          # build refuses a keystore inside the repo for the same reason.
+          # Trailing X's, no suffix after them: BSD mktemp (this is a Mac)
+          # rejects a template whose X's are not last, and the file extension is
+          # not something keytool or gradle care about.
+          KEYSTORE="$(mktemp "$RUNNER_TEMP/zippie-release.XXXXXX")"
+          trap 'rm -f "$KEYSTORE"' EXIT INT TERM
+          # No `echo "$SECRET" | base64 -d`: the value never becomes an
+          # argument, and openssl reads it from stdin. `tr` first because a
+          # secret stored with line wrapping still has to decode.
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" \
+            | tr -d '\n\r ' \
+            | openssl base64 -d -A -out "$KEYSTORE"
+          chmod 600 "$KEYSTORE"
+          test -s "$KEYSTORE" || { echo "::error::the decoded keystore is empty"; exit 1; }
+
+          export ZIPPIE_KEYSTORE_PATH="$KEYSTORE"
+          export ZIPPIE_KEYSTORE_PASSWORD="$ANDROID_KEYSTORE_PASSWORD"
+          export ZIPPIE_KEY_ALIAS="$ANDROID_KEY_ALIAS"
+          export ZIPPIE_KEY_PASSWORD="$ANDROID_KEY_PASSWORD"
+          companion-android/ci/build-signed-apk.sh
+
+      - name: Build and verify a THROWAWAY-signed APK
+        if: ${{ inputs.keystore == 'throwaway' }}
+        run: |
+          set -euo pipefail
+          companion-android/ci/with-throwaway-keystore.sh \
+            companion-android/ci/build-signed-apk.sh
+
+      - name: Sweep any staged keystore
+        # The trap above already removes it on every normal and failing exit.
+        # This catches the case the trap cannot: the runner being killed
+        # mid-step, on a machine whose RUNNER_TEMP outlives the process.
+        if: ${{ always() }}
+        run: rm -f "$RUNNER_TEMP"/zippie-release.*
+
+      - name: Upload the Play bundle
+        if: ${{ inputs.keystore == 'release' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zippie-companion-release-aab
+          path: companion-android/app/build/dist/*.aab
+          if-no-files-found: error
+
+      - name: Upload the APK
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zippie-companion-release-apk-${{ inputs.keystore == 'throwaway' && 'THROWAWAY-KEY' || 'signed' }}
+          path: companion-android/app/build/dist/*.apk
+          # 30 days. Long enough to sideload onto both Pixels without a rebuild,
+          # short enough that a stale build is not sitting around to be
+          # installed by mistake months later.
+          retention-days: 30
+          if-no-files-found: error

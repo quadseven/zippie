@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive icon (API 26+). The launcher supplies the mask, so the two layers
+  must be able to survive being cropped to a circle, a squircle, or a teardrop
+  depending on the device: the background bleeds to the full 108dp and the
+  foreground mark is drawn well inside the 72dp safe zone.
+
+  Pre-26 launchers ignore this file and use the pre-masked mipmap-*/ic_launcher
+  bitmaps instead, which is why both exist.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@mipmap/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <!-- THEMED ICONS, Android 13+. The launcher throws the colour away and
+         recolours this silhouette to match the wallpaper. Without it the app
+         simply does not participate: on a themed home screen every other icon
+         goes monochrome and this one stays full-colour, which is the thing
+         that looks broken. Same geometry as the foreground so the mark does
+         not appear to move when the user turns the setting on. -->
+    <monochrome android:drawable="@mipmap/ic_launcher_monochrome" />
+</adaptive-icon>

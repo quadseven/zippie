@@ -1,0 +1,157 @@
+# The home end for PHONE CLIENTS, deployed BESIDE the live zippie-home.
+#
+# ============================================================================
+# THIS HAS NEVER RUN. Read this before assuming it is idle infrastructure.
+# ============================================================================
+#
+# Decision, 2026-08-09 (#17): KEEP AND BUILD IT, do not delete. It is the home
+# end for client mode (#27), which is the feature the operator actually wants
+# away from the travel router - "i need to see my current wifi and my cellular
+# connection BONDED and routed via zippie at home". Nothing else in the tree
+# answers a phone client, so deleting this would delete the destination.
+#
+# What is DONE: the program exists (`travel/datapath-go/cmd/zippie-clienthome`),
+# and `build.clienthome-image.yml` both BUILDS and PUBLISHES it on every PR
+# that touches the datapath, so the Dockerfile can no longer rot unnoticed and
+# the image below is a real thing you can pull. Verified 2026-08-10:
+# linux/amd64, read back out of the registry and proven equal to the digest the
+# build produced. The binary's flags (-listen -tun -clients -admin) match the
+# args below exactly, checked 2026-08-09.
+#
+# What is NOT done, so applying this still will not give you a running pod:
+#
+#   1. `clients.json` below is a PLACEHOLDER. It must become a Secret with real
+#      keys, which needs the pairing ceremony (#31).
+#   2. The GHCR package is PRIVATE, because this repo is. Pulling it needs an
+#      image pull secret in the `zippie` namespace, and there is none - so the
+#      pod would sit in ImagePullBackOff on the credential rather than on a
+#      missing image. That is deploy-side work and is not wired here, because
+#      wiring a pull secret that does not exist would be worse than saying so.
+#   3. There is nothing on the other end until the phone client ships (#27).
+#
+# The deploy target is `dispatch` only in deploy/oke/targets.tsv, which is what
+# keeps an apply from happening by accident.
+#
+# amd64 matters: the nodeSelector below pins to an amd64 node, so an arm64
+# image would schedule and never start.
+#
+# Deliberately a second Deployment on its own port with its own TUN, not a
+# change to the running one. zippie-home is carrying the household's traffic
+# through the travel router right now; it does not get to be the test subject
+# for a new code path. If this pod crashloops, suzu's bond is unaffected.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: zippie
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zippie-clienthome-clients
+  namespace: zippie
+data:
+  # PLACEHOLDER. Real client keys are provisioned out of band until the pairing
+  # ceremony exists (infra#2251) and MUST NOT be committed - this file is a
+  # shape, not a credential store. Replace with a Secret before any phone is
+  # paired.
+  clients.json: |
+    []
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zippie-clienthome
+  namespace: zippie
+spec:
+  replicas: 1
+  # RECREATE, not RollingUpdate. Two replicas would each hold their own TUN and
+  # their own reply table, and a client's frames would land on whichever pod the
+  # Service picked - so half its traffic would arrive at a pod that has never
+  # heard of it and be dropped as an unknown client.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: zippie-clienthome}
+  template:
+    metadata:
+      labels: {app: zippie-clienthome}
+    spec:
+      # Pinned to the ONE LAN worker, by name. Selecting on arch alone was too
+      # broad: it would place a NET_ADMIN pod holding a TUN device on any
+      # amd64 node that ever joins, including a future cloud one, where
+      # hostNetwork would expose it to a very different neighbourhood.
+      nodeSelector:
+        kubernetes.io/hostname: k8s-oke-lan-srv-unraid-worker-01
+      # hostNetwork because the phone's frames arrive from the internet at the
+      # house on a fixed port; a pod IP would need a hairpin for every packet.
+      # It is the reason every other permission here is scoped as tightly as
+      # it is.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: clienthome
+          # Pinned BY DIGEST to an image that exists. This line used to read
+          # `zippie-clienthome:dev  # replaced by CI; never :latest` - nothing
+          # replaced it, because nothing published anything, and the tag
+          # existed in no registry.
+          #
+          # CI does not rewrite this line, and should not: a pipeline that
+          # edits the manifest it deploys makes "what is running" a question
+          # about the pipeline rather than about git. But it is not left on
+          # trust either - `build.clienthome-image.yml` FAILS if this digest is
+          # not the one the commit publishes, and prints the line to paste.
+          # This pin was stale against its own branch for three commits before
+          # that guard existed, which is why it exists.
+          #
+          # That check is only possible because the digest is a function of the
+          # build context and nothing else - no build timestamp, no commit sha
+          # in the image config. So changing the datapath is a two-push loop:
+          # push the change, read the digest out of the red check, paste, push.
+          #
+          # The readable twin of this digest is the tag `sha-807e7430784f`.
+          # More than one tag may point here, and that is information rather
+          # than a bug: those commits did not change the image.
+          image: ghcr.io/quadseven/zippie-clienthome@sha256:7a4059dc06c7f8a0076624025621e4ad069f6d79ebdeb43a273aa253af995787
+          args:
+            - -listen=:51920           # NOT 51901/51902 - those are the live bond
+            - -tun=zippie0
+            - -clients=/etc/zippie/clients.json
+            - -admin=:8788
+          securityContext:
+            capabilities:
+              # DROP EVERYTHING FIRST. A container starts with a default set
+              # that includes CHOWN, SETUID, SETGID and more - none of which
+              # this process uses, and all of which are worth having if you
+              # get code execution inside a pod that already has host network.
+              drop: ["ALL"]
+              # NET_ADMIN is the one that opens /dev/net/tun. It is genuinely
+              # required: without it the TUN ioctl fails and the process exits.
+              add: ["NET_ADMIN"]
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - {name: clients, mountPath: /etc/zippie, readOnly: true}
+            - {name: tun, mountPath: /dev/net/tun}
+          livenessProbe:
+            httpGet: {path: /livez, port: 8788}
+            initialDelaySeconds: 5
+          # SEPARATE from liveness on purpose: the process can be alive while no
+          # client has ever been heard from, and conflating those hides exactly
+          # the failure worth alerting on.
+          readinessProbe:
+            httpGet: {path: /readyz, port: 8788}
+            initialDelaySeconds: 5
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 256Mi}
+      volumes:
+        - name: clients
+          configMap: {name: zippie-clienthome-clients}
+        - name: tun
+          # The DEVICE, not the directory. Mounting /dev/net handed the
+          # container every device node in it; only /dev/net/tun is used.
+          hostPath: {path: /dev/net/tun, type: CharDevice}

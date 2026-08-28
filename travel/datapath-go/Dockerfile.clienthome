@@ -1,0 +1,29 @@
+# zippie-clienthome: the home end for phone clients.
+#
+# SCRATCH, not alpine. The binary is static Go with no cgo, so there is nothing
+# for a base image to provide except attack surface - and this process holds
+# NET_ADMIN and a TUN device, which is exactly where a shell in the image is
+# worth the most to an attacker.
+#
+# Built from source in CI rather than pushed from a laptop, so what runs is
+# what is in git.
+#
+# The base is pinned BY DIGEST, not by `golang:1.23-alpine`. A tag is a moving
+# pointer: the same commit built a week apart would pick up a different
+# toolchain and produce a different binary, with nothing in the build log to
+# say so. The digest is the multi-arch index for golang:1.23-alpine as resolved
+# on 2026-08-10; bump it deliberately, in a commit that says why.
+FROM golang:1.23-alpine@sha256:383395b794dffa5b53012a212365d40c8e37109a626ca30d6151c8348d380b5f AS build
+WORKDIR /src
+COPY . .
+# CGO off makes the binary static, which is what allows FROM scratch below.
+# Trimpath keeps build-host paths out of the binary.
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
+      -o /out/zippie-clienthome ./cmd/zippie-clienthome
+
+FROM scratch
+COPY --from=build /out/zippie-clienthome /zippie-clienthome
+# No shell, no package manager, no writable filesystem needed. The clients file
+# is mounted read-only; state is held in memory because the reply table is
+# rebuilt from traffic within seconds of a restart.
+ENTRYPOINT ["/zippie-clienthome"]

@@ -1,0 +1,436 @@
+name: Build - clienthome image
+
+# Builds AND PUBLISHES zippie-clienthome. Replaces check.clienthome-image.yml,
+# which built the image and threw it away.
+#
+# THIS DOES NOT DEPLOY ANYTHING. zippie-clienthome is `dispatch` in
+# deploy/oke/targets.tsv on purpose - its committed ConfigMap is a placeholder
+# (`clients.json: []`) and auto-applying it would overwrite live pairing state
+# with an empty list. Publishing an image is not deploying it; nothing here
+# touches the cluster.
+#
+# WHERE IT PUBLISHES, AND WHY IT IS NOT registry.ts.example-home.invalid
+# ------------------------------------------------------------------
+# GHCR, as `ghcr.io/<owner>/zippie-clienthome`. Three registries were on the
+# table; this is the only one that can publish today, and it is also the one
+# the estate's written standard asks for.
+#
+#   registry.ts.example-home.invalid (the in-cluster registry). Pushing needs the push
+#   password at SSM /infra/cluster/registry/push_pass. zippie's OIDC role
+#   `zippie-oke-deploy` reads exactly five parameters and that is not one of
+#   them - verified against the live inline policy `zippie-oke-deploy-ssm-read`
+#   on 2026-08-10, not read off IaC. Granting it is an IAM change in
+#   quadseven/infra, and a repo does not get to mint its own deploy
+#   credentials. infra's `_reusable.build-to-cluster-registry.yml` cannot be
+#   borrowed either, for two independent reasons: it delivers its build context
+#   as a configMap of TOP-LEVEL FILES ONLY (a Go build needs cmd/, zippie/,
+#   go.mod and go.sum as a tree), and it calls `uses: ./.github/actions/...`,
+#   which inside a reusable resolves against the CALLER's checkout - the trap
+#   deploy/oke/README.md already records from infra#1144.
+#
+#   ECR. Same missing-credential problem plus a bill, in the week the estate
+#   spent cutting AWS spend.
+#
+#   GHCR. Needs no credential at all: GITHUB_TOKEN plus `packages: write`.
+#   quadseven/infra-public/docs/standards/python-k8s-app.md says outright
+#   "Prefer GHCR over a self-hosted in-cluster registry: it's free for the org,
+#   natively multi-arch, and removes a stateful component from the cluster",
+#   and `registry-type` defaults to `ghcr` in both shipping reusables there.
+#   quadseven/meow-now already publishes this way through
+#   build.container-multiarch.yml, so the mechanism is proven in this estate
+#   rather than assumed.
+#
+# The one consequence, stated rather than glossed: zippie is a PRIVATE repo, so
+# the package is private, so PULLING it into k8s-oke will need an
+# imagePullSecret in the `zippie` namespace. None exists. That is deploy-side
+# work and the deploy is blocked on other things anyway (#17, #31).
+#
+# WHY NOT THE SHARED build.container.yml REUSABLE
+# ------------------------------------------------------------------
+# It is single-arch, which is what this image wants, but its `registry-type` is
+# still "'ecr' (OIDC) or 'none' (build-only). 'ghcr' is a follow-up" at
+# infra-public HEAD (7603d34, the SHA this repo already pins). Its multi-arch
+# sibling DOES speak GHCR, but its matrix is hardcoded to build arm64 as well,
+# on a GitHub-hosted arm64 runner, for an image whose Deployment pins to ONE
+# named amd64 node. So the steps are inlined here, using the same SHA-pinned
+# actions infra-public uses, rather than paying for an arm64 build that can
+# never be scheduled.
+#
+# TAGGING: ONE IMMUTABLE TAG PER COMMIT, AND NOTHING ELSE
+# ------------------------------------------------------------------
+# `sha-<12>` of the commit that was built. No `:latest`, no `:main`, no `:dev`.
+#   - A mutable tag makes "what is running" unanswerable, which is exactly the
+#     question this workload's manifest could not answer when it named
+#     `zippie-clienthome:dev`, a tag that existed in no registry.
+#   - `:latest` churn plus imagePullPolicy: Always is what bloated the estate's
+#     other registry past its free tier.
+# The manifest pins by DIGEST, not by this tag; the tag exists so a digest can
+# be traced back to a commit by eye. Several tags CAN point at one digest, and
+# that is information rather than a bug: it says those commits did not change
+# the image.
+#
+# THE DIGEST IS A FUNCTION OF THE SOURCE, NOT OF THE BUILD
+# ------------------------------------------------------------------
+# `SOURCE_DATE_EPOCH=0` plus `rewrite-timestamp=true`, and no per-commit label,
+# so the image config carries no build timestamp and no commit sha, and the
+# timestamps of the files inside the layer are rewritten too. Two builds of the
+# same context against the same (digest-pinned) base produce the SAME digest.
+#
+# That is not decoration. Without it the pin guard below cannot exist: the
+# digest a commit produces would depend on when it was built and on its own
+# sha, so a pin could never be written into the commit that produces it -
+# unsatisfiable by construction. Rebuilding an identical tree used to give a
+# different digest every time (measured: 2fd948c gave a7cef0b2..., 8663af6 gave
+# db9250be..., same source), and the first version of this workflow shipped a
+# manifest pin that was stale against its own branch HEAD as a direct result.
+# The determinism is what turns "remember to re-pin" into a red check.
+#
+# Measured both ways rather than argued. SOURCE_DATE_EPOCH ALONE was not
+# enough - 3641d79 gave d3387d13..., fdd7944 gave e76a7eff..., same source -
+# because it does not touch the timestamps of the files inside the layer. With
+# `rewrite-timestamp=true` as well, 807e743 and bbc3504 both published
+# sha256:7a4059dc..., which is the property this depends on.
+#
+# It costs the loss of `org.opencontainers.image.revision`. The commit is still
+# recoverable - that is exactly what the `sha-<12>` tags are - and a label that
+# makes every rebuild a new digest buys traceability by destroying the property
+# that lets anything verify the pin.
+#
+# WHY PULL REQUESTS PUBLISH TOO
+# ------------------------------------------------------------------
+# The house pattern elsewhere is `push: ${{ github.event_name != 'pull_request'
+# }}`. Not here. A publish path that only ever runs on main is a publish path
+# whose first execution is on main, and this repo has been bitten twice in a
+# week by exactly that shape - deploy/oke/targets.tsv exists because two green
+# PRs broke the apply after merge. Tags are immutable and commit-scoped, so a
+# PR build cannot clobber anything.
+#
+# Fork PRs build without publishing: GITHUB_TOKEN is read-only there, so a push
+# would fail on credentials rather than on anything real.
+#
+# What that costs, stated rather than discovered later: on a pull_request the
+# paths filter below is matched against the PR's WHOLE diff, not against the
+# last push, so every push to a PR that has touched the datapath rebuilds. With
+# the determinism above, a rebuild of unchanged source re-pushes the SAME
+# digest under an additional tag rather than storing another copy, so the churn
+# is tags, not megabytes.
+#
+# THE PIN GUARD, AND WHEN IT DOES NOT RUN
+# ------------------------------------------------------------------
+# The last step fails if deploy/oke/zippie-clienthome/zippie-clienthome.yaml
+# does not pin the digest this commit just published. A guard that fires on
+# ordinary work gets switched off, so here is every case where it stays quiet,
+# deliberately:
+#
+#   - FORK PR. Nothing was published (a fork's GITHUB_TOKEN cannot write
+#     packages), so there is no digest to compare. Skipped, with a warning that
+#     says so - never a silent pass.
+#   - A CHANGE THAT CANNOT AFFECT THE PIN. If neither the build context nor the
+#     manifest changed, this workflow does not run at all. That is safe because
+#     the paths below are exactly the two inputs the guard reads: change the
+#     image and it runs; change the pin and it runs. A docs-only PR cannot
+#     invalidate a pin it did not touch.
+#   - A RE-RUN. Same source, same digest, so it passes again.
+#
+# It DOES fire, correctly, if the runner's buildkit changes what it emits for
+# unchanged source. That is a real change to the published artifact, and the
+# failure names the digest to paste.
+#
+# Changing the datapath is therefore a two-push loop: push the change, the
+# guard fails and prints the new digest, paste it into the manifest, push
+# again. That is deliberate. The alternative - CI rewriting the manifest it
+# deploys - makes "what is running" a question about the pipeline rather than
+# about git, and this repo has spent a fortnight on that class of question
+# already.
+#
+# RETENTION: there is none, deliberately. If GHCR storage ever needs pruning,
+# prune by what no manifest points at, never by age. An age-based retention
+# pass in this estate deleted a live in-use image.
+
+on:
+  pull_request:
+    paths:
+      # Glob the build context rather than enumerating files: enumeration fails
+      # OPEN, so a new source file would silently stop being covered.
+      - 'travel/datapath-go/**'
+      # The manifest is here because the last step guards the digest pinned in
+      # it. These paths are the guard's two inputs - what the image is built
+      # from, and what claims to name it - so a change that can invalidate the
+      # pin cannot dodge the check by not touching the datapath.
+      - 'deploy/oke/zippie-clienthome/**'
+      - '.github/workflows/build.clienthome-image.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'travel/datapath-go/**'
+      - 'deploy/oke/zippie-clienthome/**'
+      - '.github/workflows/build.clienthome-image.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write   # GHCR push. Nothing here needs id-token: no AWS is touched.
+
+concurrency:
+  group: build-clienthome-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: clienthome image (build + publish)
+    # GitHub-hosted amd64. Native for the target arch, so no QEMU tax, and this
+    # runs only on datapath changes - the low-frequency case the estate's
+    # runner policy allows on a private repo. It also does not tie up the one
+    # self-hosted runner the deploy path needs.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          # THE PR HEAD COMMIT, not the merge commit. The default for a
+          # pull_request event is refs/pull/N/merge, a synthetic commit that is
+          # not in the repo's history - so tagging the image after it would
+          # name something nobody can check out later. Building the head commit
+          # is what makes `sha-<12>` mean "this tree produced this image".
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # The build and push use the registry credential, never
+          # git-over-HTTPS back to this repo.
+          persist-credentials: false
+
+      - name: Resolve image ref, tag and whether to publish
+        id: meta
+        env:
+          OWNER: ${{ github.repository_owner }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # GHCR rejects an uppercase path. github.repository_owner is
+          # lowercase today; downcasing costs nothing and survives a rename.
+          image="ghcr.io/$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')/zippie-clienthome"
+
+          sha="${PR_HEAD_SHA:-$GITHUB_SHA}"
+
+          # The whole point of checking out the head commit above. If these
+          # ever disagree, the tag would name a tree that was not built, so
+          # stop rather than publish a lie.
+          head="$(git rev-parse HEAD)"
+          if [ "$head" != "$sha" ]; then
+            echo "::error::checked out $head but would tag $sha - the tag would not name the built tree"
+            exit 1
+          fi
+
+          # A fork PR gets a read-only GITHUB_TOKEN, so it cannot push. Build
+          # anyway (the Dockerfile is still worth validating) and say why.
+          publish=true
+          if [ -n "$PR_HEAD_REPO" ] && [ "$PR_HEAD_REPO" != "$THIS_REPO" ]; then
+            publish=false
+            echo "fork PR ($PR_HEAD_REPO): building without publishing"
+          fi
+
+          {
+            echo "image=$image"
+            echo "tag=sha-${sha:0:12}"
+            echo "sha=$sha"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+          echo "will build $image:sha-${sha:0:12} (publish=$publish)"
+
+      - name: Guard - native amd64 CPU, no QEMU
+        # The Deployment pins to k8s-oke-lan-srv-unraid-worker-01, an amd64
+        # node. An arm64 image would schedule there and never start. Building
+        # on a foreign-arch runner would either fall back to emulation or fail
+        # deep in the build; this fails first, and says why.
+        run: |
+          set -euo pipefail
+          host="$(uname -m)"
+          [ "$host" = "x86_64" ] || {
+            echo "::error::linux/amd64 build needs an x86_64 runner, got $host"; exit 1; }
+          echo "native amd64 build on $host"
+
+      - name: Set up Docker Buildx (NO setup-qemu)
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        if: ${{ steps.meta.outputs.publish == 'true' }}
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: travel/datapath-go
+          file: travel/datapath-go/Dockerfile.clienthome
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+          # Links the package to this repository in the GitHub UI. CONSTANT on
+          # purpose: `org.opencontainers.image.revision` used to sit here too,
+          # and a per-commit label puts the commit sha in the image config,
+          # which changes the digest on every build of identical source. That
+          # is what made the pin unguardable. The commit is recoverable from
+          # the `sha-<12>` tag instead.
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          # TWO settings, and BOTH are needed - this was measured the hard way.
+          #
+          # SOURCE_DATE_EPOCH (below, as env so buildx forwards it to the
+          # exporter as well as to the frontend) fixes the image config's
+          # `created` and the history timestamps.
+          #
+          # `rewrite-timestamp=true` fixes the timestamps of the FILES INSIDE
+          # the layer. Without it the copied binary keeps the mtime it happened
+          # to get during that build, so the layer tar differs, so the digest
+          # differs - which is exactly what happened when only SOURCE_DATE_EPOCH
+          # was set: 3641d79 gave d3387d13..., fdd7944 gave e76a7eff..., same
+          # source, same base, same build arg. An identical-looking build arg
+          # is not evidence of a reproducible build.
+          #
+          # push lives in the exporter rather than in the action's `push:` input
+          # because `--push` and `--output` cannot both be given.
+          outputs: type=image,push=${{ steps.meta.outputs.publish }},rewrite-timestamp=true
+          # Single-arch with no attestation manifest, so the digest below is the
+          # image itself rather than an index wrapping it.
+          provenance: false
+        env:
+          SOURCE_DATE_EPOCH: '0'
+
+      - name: Verify the published image is the one that was built
+        id: verify
+        if: ${{ steps.meta.outputs.publish == 'true' }}
+        # "The job went green" is not evidence that anything was published. Read
+        # the tag BACK from the registry and require that its digest is the one
+        # the build reported, and that the architecture is the one the node can
+        # run. An empty digest is its own failure: build-push-action reports
+        # none when it did not push, which would otherwise pass silently.
+        env:
+          REF: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+          BUILT: ${{ steps.build.outputs.digest }}
+          SOURCE_SHA: ${{ steps.meta.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          [ -n "$BUILT" ] || {
+            echo "::error::the build reported no digest, so nothing was pushed"; exit 1; }
+
+          found="$(docker buildx imagetools inspect "$REF" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          [ "$found" = "$BUILT" ] || {
+            echo "::error::$REF resolves to $found but the build produced $BUILT"; exit 1; }
+
+          arch="$(docker buildx imagetools inspect "$REF" --format '{{json .Image}}' | jq -r '.os + "/" + .architecture')"
+          [ "$arch" = "linux/amd64" ] || {
+            echo "::error::$REF is $arch, but the Deployment pins to an amd64 node"; exit 1; }
+
+          echo "published $REF"
+          echo "digest    $BUILT"
+          echo "platform  $arch"
+
+          # The guard below compares against what the REGISTRY returned, not
+          # against what the build claimed. They are equal or this step already
+          # failed; using the read-back value keeps it that way if that ever
+          # stops being true.
+          echo "digest=$found" >> "$GITHUB_OUTPUT"
+          {
+            echo "### clienthome image published"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| ref | \`$REF\` |"
+            echo "| digest | \`$BUILT\` |"
+            echo "| platform | \`$arch\` |"
+            echo "| commit | \`$SOURCE_SHA\` |"
+            echo ""
+            echo "Pin the manifest by digest: \`${REF%%:*}@$BUILT\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Guard - the manifest pins the digest this commit publishes
+        if: ${{ steps.meta.outputs.publish == 'true' }}
+        # The pin went stale on this workflow's OWN branch within three commits
+        # of being introduced, and nothing noticed - it read as precise while
+        # naming an image built from an earlier commit. Same class as the tag
+        # that existed in no registry. This is what notices.
+        env:
+          MANIFEST: deploy/oke/zippie-clienthome/zippie-clienthome.yaml
+          PUBLISHED: ${{ steps.verify.outputs.digest }}
+          IMAGE: ${{ steps.meta.outputs.image }}
+        run: |
+          set -euo pipefail
+
+          # The extractor, as one expression used twice: once on a known-good
+          # sample to prove it can still match, and once on the real file. A
+          # guard whose pattern has quietly stopped matching passes everything,
+          # which is worse than not having it - so it is never trusted to be
+          # silent without being shown to fire first.
+          extract() { sed -n 's|^ *image: *[^ #]*@\(sha256:[0-9a-f]\{64\}\) *$|\1|p'; }
+
+          sample="sha256:$(printf 'f%.0s' $(seq 64))"
+          got="$(printf '          image: ghcr.io/o/i@%s\n' "$sample" | extract)"
+          [ "$got" = "$sample" ] || {
+            echo "::error::the digest-pin pattern no longer matches a real image line - it would pass silently. Fix the pattern."
+            exit 1; }
+
+          pinned="$(extract < "$MANIFEST")"
+          count="$(printf '%s' "$pinned" | grep -c . || true)"
+          [ "$count" = "1" ] || {
+            echo "::error::expected exactly one digest-pinned image line in $MANIFEST, found $count. Pin the image by digest: $IMAGE@$PUBLISHED"
+            exit 1; }
+
+          if [ "$pinned" != "$PUBLISHED" ]; then
+            # FATAL ON main, ADVISORY ON A PULL REQUEST.
+            #
+            # The pin is consumed at DEPLOY time and zippie-clienthome is
+            # dispatch-only, so a mismatch on a feature branch is not a fault -
+            # it is the ordinary state of any commit that changed the datapath
+            # and has not yet been given the digest its own build produced.
+            #
+            # Failing there coupled two unrelated things: #116 touched
+            # travel/datapath-go/zippie/frame.go, a change about NACK timing,
+            # and went red for not editing a Kubernetes manifest belonging to a
+            # workload nothing deploys. A guard that reds an author's PR for
+            # something they did not do wrong is a guard that gets switched off,
+            # and a switched-off guard is worse than none - which is the same
+            # reasoning this file already applies to its own extractor.
+            #
+            # On main the mismatch is real drift, and it stays fatal.
+            if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
+              LEVEL=warning
+            else
+              LEVEL=error
+            fi
+            echo "::$LEVEL::$MANIFEST pins $pinned but this commit publishes $PUBLISHED. Update the image line to: $IMAGE@$PUBLISHED"
+            {
+              echo "### The clienthome manifest pin is stale"
+              echo ""
+              echo "| | |"
+              echo "|---|---|"
+              echo "| pinned | \`$pinned\` |"
+              echo "| published | \`$PUBLISHED\` |"
+              echo ""
+              echo "Set the \`image:\` line in \`$MANIFEST\` to:"
+              echo ""
+              echo "\`\`\`"
+              echo "          image: $IMAGE@$PUBLISHED"
+              echo "\`\`\`"
+              echo ""
+              echo "The digest is a function of the build context, so pasting"
+              echo "this and pushing again is the whole fix - the rebuild will"
+              echo "produce the same digest."
+            } >> "$GITHUB_STEP_SUMMARY"
+            [ "$LEVEL" = "warning" ] || exit 1
+          fi
+
+          echo "$MANIFEST pins $pinned, which is what this commit published"
+
+      - name: Say plainly that nothing was published
+        if: ${{ steps.meta.outputs.publish != 'true' }}
+        # A skipped publish must not read as a successful one, and the pin
+        # guard above is skipped with it - there is no published digest to
+        # compare against on a fork PR.
+        run: |
+          set -euo pipefail
+          echo "::warning::built but NOT published - a fork PR's GITHUB_TOKEN cannot write packages. The manifest pin was NOT checked, because there is no published digest to check it against."

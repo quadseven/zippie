@@ -1,0 +1,54 @@
+/*
+  GENERATED FROM design/tokens.json - DO NOT EDIT.
+  Run design/generate.py after changing a token.
+*/
+
+:root {
+  /* the page */
+  --c-ground: #FBFBFB;
+  /* raised surfaces, used sparingly */
+  --c-raised: #FFFFFF;
+  /* text */
+  --c-primary: #141414;
+  /* supporting text, tinted from the ground and never neutral gray */
+  --c-secondary: #5C5F66;
+  /* the quietest text; a reserve leg is not news */
+  --c-tertiary: #8C8F99;
+  /* hairlines, the structural device in place of cards */
+  --c-rule: #E0E0E0;
+  /* CARRYING TRAFFIC RIGHT NOW - the only accent, and it means exactly one thing */
+  --c-live: #1757D6;
+  /* holding on, not failing - amber because crying wolf in a car is worse than saying nothing */
+  --c-degraded: #B37105;
+  /* not carrying */
+  --c-down: #B82E26;
+  --s-hair: 4px;
+  --s-tight: 8px;
+  --s-snug: 12px;
+  --s-base: 16px;
+  --s-roomy: 24px;
+  --s-section: 40px;
+  --s-major: 56px;
+  --s-margin: 20px;
+  --t-display-size: 40px;
+  --t-title-size: 22px;
+  --t-section-size: 15px;
+  --t-label-size: 17px;
+  --t-body-size: 17px;
+  --t-caption-size: 13px;
+  --t-figure-size: 17px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --c-ground: #0E0E0E;
+    --c-raised: #1B1B1B;
+    --c-primary: #F5F5F5;
+    --c-secondary: #9EA3AE;
+    --c-tertiary: #737882;
+    --c-rule: #333333;
+    --c-live: #70A3FF;
+    --c-degraded: #FAB840;
+    --c-down: #FF7366;
+  }
+}

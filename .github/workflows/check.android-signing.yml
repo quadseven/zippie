@@ -1,0 +1,108 @@
+name: Check - android release signing (throwaway key)
+
+# PROVES THE RELEASE PIPELINE ON EVERY PR, WITHOUT A RELEASE KEY.
+#
+# check.android.yml runs the unit tests and `assembleDebug`. A debug APK is
+# signed with the SDK's shared debug key, which every Android developer on Earth
+# also has - so it proves the app compiles and proves nothing about whether a
+# distributable build exists (#55). Until this file existed, nothing in this
+# repo produced an installable artifact.
+#
+# THIS JOB NEVER TOUCHES THE REAL SIGNING KEY. It generates a throwaway one
+# inside the job, uses it once, and deletes it - see
+# companion-android/ci/with-throwaway-keystore.sh. There is no `secrets.`
+# reference anywhere in this file, deliberately, so a PR from any branch cannot
+# reach release key material by editing a workflow.
+#
+# The real key is used by app.companion-android.release.yml, which is
+# workflow_dispatch only and never fires on a merge.
+#
+# The APK it uploads IS installable and is the fastest way to get the app onto a
+# Pixel today. What it is not is upgradeable: a later build signed with the real
+# key has a different certificate, and Android refuses to install over an app
+# whose signer does not match. Uninstall first, which discards the on-device
+# DataBudget counters.
+
+on:
+  pull_request:
+    paths:
+      - 'companion-android/**'
+      - '.github/workflows/check.android-signing.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'companion-android/**'
+      - '.github/workflows/check.android-signing.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-signing-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: trust gate (collaborator-only on self-hosted)
+    runs-on: arc-zippie
+    timeout-minutes: 2
+    steps:
+      - name: "Block untrusted (non-collaborator) PRs on self-hosted runner"
+        if: ${{ github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) }}
+        run: |
+          echo "::error::PR validation restricted to repo collaborators."
+          exit 1
+
+  release-apk:
+    needs: guard
+    name: signed release APK (throwaway key)
+    # The mac mini, for the same reason check.android.yml is there: it is the
+    # machine with the Android SDK, and apksigner / aapt2 / zipalign come with
+    # it. Verified present on the macOS runner 2026-08-10 (build-tools 34.0.0).
+    runs-on: [self-hosted, macOS, ARM64, mac-mini]
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          # THE VERSION CODE IS THE COMMIT COUNT, so the whole history has to be
+          # here. A shallow clone does not fail the count, it returns a small
+          # number - which would mint version codes that go backwards. The build
+          # script refuses to run on a shallow clone rather than trusting this
+          # line to stay correct.
+          fetch-depth: 0
+
+      - name: Resolve the Android SDK location
+        # Computed at run time, never written into this file. A job-level
+        # `env:` is a LITERAL string - `$HOME` does not expand there - and a
+        # hardcoded absolute path would publish the runner account's name into
+        # a public repo. Honors the runner's own .env if it exports
+        # ANDROID_HOME, else falls back to the standard macOS location under
+        # whatever $HOME the runner user happens to have.
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
+          test -d "$SDK" || { echo "::error::Android SDK not found at $SDK"; exit 1; }
+          {
+            echo "ANDROID_HOME=$SDK"
+            echo "ANDROID_SDK_ROOT=$SDK"
+          } >> "$GITHUB_ENV"
+
+      - name: Build and verify a release APK with a throwaway key
+        run: |
+          set -euo pipefail
+          companion-android/ci/with-throwaway-keystore.sh \
+            companion-android/ci/build-signed-apk.sh
+
+      - name: Upload the APK
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          # THROWAWAY-KEY in the artifact name, TESTKEY in the version name and
+          # in the file name. Three places, because the one thing that must not
+          # happen is somebody sideloading this believing it is the release
+          # build and then being unable to upgrade it.
+          name: zippie-companion-release-apk-THROWAWAY-KEY
+          path: companion-android/app/build/dist/*.apk
+          retention-days: 7
+          if-no-files-found: error

@@ -1,0 +1,131 @@
+name: Check - android companion
+
+# THE ANDROID TESTS HAVE NEVER RUN IN CI. companion-android carries five unit
+# test classes - BondLegs, BondStatus, DataBudget, LegIdentity, RouterGuard -
+# and until this workflow existed, `gradle` appeared in no workflow in any
+# repo. They were written, they pass locally, and nothing has ever proved that
+# on a push.
+#
+# That is the same shape as the two gaps called out in check.agent-tests.yml
+# (the agent suite and the Go datapath both ran dark), and it is worse here
+# because Android is the surface with no hardware soak behind it yet.
+#
+# RouterGuard and LegIdentity are the two worth naming: RouterGuard decides
+# whether the phone is allowed to contribute at all, and LegIdentity decides
+# whether a leg endpoint belongs to THIS device. A regression in either is the
+# phantom-leg class of bug, which is exactly what the router-side lease work
+# was undoing.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'companion-android/**'
+      - '.github/workflows/check.android.yml'
+  pull_request:
+    paths:
+      - 'companion-android/**'
+      - '.github/workflows/check.android.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: trust gate (collaborator-only on self-hosted)
+    runs-on: arc-zippie
+    timeout-minutes: 2
+    steps:
+      - name: "Block untrusted (non-collaborator) PRs on self-hosted runner"
+        if: ${{ github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) }}
+        run: |
+          echo "::error::PR validation restricted to repo collaborators."
+          exit 1
+
+  unit:
+    needs: guard
+    name: gradle unit tests + debug assemble
+    # The mac mini, because it is the machine with the Android SDK and NDK
+    # already installed (the gomobile aar bind in check.agent-tests.yml uses
+    # the same paths). Putting this on the Linux runner would mean installing
+    # and maintaining a second SDK for no gain.
+    runs-on: [self-hosted, macOS, ARM64, mac-mini]
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: companion-android
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Resolve the Android SDK location
+        # Computed at run time, never written into this file. A job-level
+        # `env:` is a LITERAL string - `$HOME` does not expand there - and a
+        # hardcoded absolute path would publish the runner account's name into
+        # a public repo. Honors the runner's own .env if it exports
+        # ANDROID_HOME, else falls back to the standard macOS location under
+        # whatever $HOME the runner user happens to have.
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
+          test -d "$SDK" || { echo "::error::Android SDK not found at $SDK"; exit 1; }
+          {
+            echo "ANDROID_HOME=$SDK"
+            echo "ANDROID_SDK_ROOT=$SDK"
+          } >> "$GITHUB_ENV"
+
+      - name: Verify the SDK is actually present
+        # BEFORE gradle, not after. A missing SDK surfaces from gradle as a
+        # long, generic "SDK location not found" failure several minutes in;
+        # naming it here costs a second and says which path is wrong.
+        run: |
+          set -euo pipefail
+          test -d "$ANDROID_HOME" || {
+            echo "::error::ANDROID_HOME=$ANDROID_HOME does not exist on this runner"
+            exit 1
+          }
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+
+      - name: Unit tests
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon testDebugUnitTest 2>&1 | tee /tmp/android-test.log
+          # A green gradle run with zero tests executed is not a pass - the
+          # same guard the Swift kit job carries. Gradle reports "BUILD
+          # SUCCESSFUL" for a module with no tests at all, so the exit code
+          # alone cannot tell the two apart.
+          if ! find app/build/test-results/testDebugUnitTest -name '*.xml' 2>/dev/null | read -r _; then
+            echo "::error::no test result XML produced - no tests actually ran"
+            exit 1
+          fi
+          # Counted with a plain attribute scan rather than an XML parser.
+          # These files are gradle's own output so the content is trusted, but
+          # an XML parser here would be a dependency (and an XXE surface) for
+          # what is one integer on the testsuite element.
+          TOTAL=$(sed -n 's/.*<testsuite [^>]*tests="\([0-9]*\)".*/\1/p' \
+                  app/build/test-results/testDebugUnitTest/*.xml \
+                  | awk '{s+=$1} END {print s+0}')
+          echo "executed $TOTAL tests"
+          if [ "$TOTAL" -eq 0 ]; then
+            echo "::error::test result XML exists but reports zero tests"
+            exit 1
+          fi
+
+      - name: Assemble debug APK
+        # Proves the app still COMPILES, not just that the pure-Kotlin units
+        # pass. The VpnService and the generated design tokens are only
+        # exercised by an actual assemble.
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-test-results
+          path: companion-android/app/build/reports/tests/
+          retention-days: 7
+          if-no-files-found: ignore

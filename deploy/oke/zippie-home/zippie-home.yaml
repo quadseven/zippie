@@ -1,0 +1,231 @@
+# Zippie home exit server (#1986). See README.md for why hostNetwork, why this
+# node, and why inbound UDP is still required.
+#
+# hostNetwork + NET_ADMIN are LOAD-BEARING, not convenience:
+#   - wg must bind the node's real addresses; a pod IP is not reachable from the
+#     internet regardless of what Service wraps it.
+#   - wg-quick's PostUp runs `iptables -t nat -A POSTROUTING -o <wan> -j
+#     MASQUERADE` and `sysctl -w net.ipv4.ip_forward=1`. In a pod netns that
+#     NATs the wrong interface and sets a sysctl nobody reads.
+#
+# Pinned to k8s-oke-lan-srv-unraid-worker-01: kernel WireGuard is confirmed
+# working there (6.12 UEK, module loaded, `ip link add type wireguard` succeeds,
+# verified 2026-07-27). Do NOT let this reschedule - a different node means a
+# different WAN interface, a different public path, and orphaned state.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: zippie
+  labels:
+    app.kubernetes.io/part-of: zippie
+---
+# The server's private key and peer list. Losing this invalidates EVERY
+# provisioned travel client, so it is a real volume, not an emptyDir.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zippie-home-state
+  namespace: zippie
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  # PINNED TO THE VOLUME THAT ALREADY HOLDS THE KEYS, and this is the whole
+  # reason the 2026-08-08 namespace migration was safe (#65).
+  #
+  # This volume carries server.json, clients/ and wireguard/ - the identity of
+  # the home exit and the bundles for nine provisioned peers. Letting local-path
+  # provision a FRESH volume here would have produced a working-looking pod with
+  # a new server key, and every travel client would have failed to handshake
+  # against a router config that pins server_public_key. The failure would have
+  # looked like a network problem, not a storage one.
+  #
+  # So the PV was set to Retain, the old PVC deleted, its claimRef cleared, and
+  # this PVC bound to the same volume by name. The keys were never copied and
+  # never left the cluster.
+  #
+  # A fresh install elsewhere must DROP this line - it names a volume that only
+  # exists on this cluster. This directory has always been specific to k8s-oke.
+  volumeName: pvc-40886936-10df-4898-807f-0c53341a79a0
+  resources:
+    requests:
+      storage: 128Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zippie-home
+  namespace: zippie
+  labels: {app: zippie-home}
+spec:
+  # HOW MANY OLD REPLICASETS TO KEEP, and therefore how many generator
+  # ConfigMaps stay pinned (#64).
+  #
+  # THE GENERATOR IS NOT THE LEAK. `configMapGenerator` mints a new
+  # hash-suffixed ConfigMap on every content change - that is the point, it is
+  # what rolls the pod - and `kubectl apply` cannot prune, so old ones stay.
+  # But each retained ReplicaSet REFERENCES its ConfigMap generation, which is
+  # exactly what makes `kubectl rollout undo` work. So the ConfigMaps are not
+  # junk while the ReplicaSets that name them are kept: deleting them would
+  # silently break rollback, which is this issue's own fourth criterion.
+  #
+  # The unbounded thing was the rollback window. Unset, this defaults to 10, so
+  # each workload pins up to ten ConfigMap generations forever. Reconciled live
+  # 2026-08-10: 11 ConfigMaps, 5 mounted by a running pod, 6 held by a
+  # ReplicaSet, and ZERO referenced by nothing - the accumulation is entirely
+  # retained history, not orphans.
+  #
+  # 3 because the useful rollback is "the one before this", occasionally two
+  # back; past that you deploy a fix forward rather than reaching for a
+  # fortnight-old revision. Raising it is this one line if a longer window is
+  # ever wanted, and Kubernetes garbage-collects the excess ReplicaSets itself -
+  # nothing here deletes anything by hand.
+  revisionHistoryLimit: 3
+  replicas: 1
+  # Recreate, not RollingUpdate: two pods would both try to bind the same UDP
+  # ports on the same node's host network and fight over the same wg interface.
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: zippie-home}
+  template:
+    metadata:
+      # LABELS, NOT ANNOTATIONS. These were annotations, and unified service
+      # tagging only reads pod LABELS - so the agent had no service name for
+      # this pod and fell back to the image, which is why every log line from
+      # it landed as `service:alpine` (quadseven/infra#2265). Nothing errored
+      # and nothing warned; the tags were simply never read. Same shape as
+      # pasto-api and digital-ledger-web, which have always had them as labels.
+      #
+      # The Deployment selector is {app: zippie-home} and stays that way -
+      # extra template labels do not affect matching, and the selector is
+      # immutable anyway.
+      labels:
+        app: zippie-home
+        tags.datadoghq.com/env: prod
+        tags.datadoghq.com/service: zippie-home
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: k8s-oke-lan-srv-unraid-worker-01
+      containers:
+        - name: bond-server
+          image: alpine:3.20
+          # NOTE: apk at start is a shortcut until a proper image is baked and
+          # pushed to registry.ts.example-home.invalid - a restart needs node internet.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              apk add --no-cache wireguard-tools iptables bash python3 >/dev/null
+              install -m 0755 /scripts/zippie_home.py /usr/local/bin/zippie-home
+
+              # init is idempotent: it refuses to rekey without --force, which is
+              # exactly what makes it safe on every pod start. Losing the key
+              # would invalidate every provisioned client.
+              zippie-home init \
+                --public-endpoint "$ZIPPIE_HOME_ENDPOINT" \
+                --ports "$ZIPPIE_HOME_PORTS" \
+                ${ZIPPIE_HOME_WAN:+--wan-iface "$ZIPPIE_HOME_WAN"}
+
+              zippie-home up
+              zippie-home show
+
+              # The home transport (packet datapath, #2112). Runs ONLY when a
+              # transport port is configured, so an unset value leaves this pod
+              # byte-for-byte in its proven route-mode behaviour.
+              #
+              # It binds the REDIRECT TARGET, not the public port: firewalld on
+              # this node only passes unsolicited UDP carrying `ct status dnat`,
+              # so a direct bind on the public port receives nothing while every
+              # iptables counter still says the packet arrived (#2134).
+              #
+              # Supervised in a restart loop rather than left to die quietly. It
+              # is deliberately NOT part of the liveness probe: during the
+              # staged rollout the transport owns only a spare port, so killing
+              # the pod over it would take down route mode - which is carrying
+              # real traffic - to protect something that is not yet.
+              if [ -n "${ZIPPIE_TRANSPORT_PORT:-}" ]; then
+                (
+                  while :; do
+                    echo "[transport] starting on :${ZIPPIE_TRANSPORT_PORT}"
+                    PYTHONPATH=/pkg python3 -m zippie.home_transport \
+                      --listen-port "$ZIPPIE_TRANSPORT_PORT" \
+                      --wg-server-port "${ZIPPIE_HOME_PORTS%%,*}" \
+                      || echo "[transport] exited rc=$? - restarting in 5s"
+                    sleep 5
+                  done
+                ) &
+              else
+                echo "[transport] disabled (ZIPPIE_TRANSPORT_PORT unset) - route mode only"
+              fi
+
+              # wg-quick has done its work; hold the pod so the interface and
+              # its NAT rules persist. Tear down cleanly on SIGTERM so the
+              # MASQUERADE and FORWARD rules do not leak across restarts.
+              trap 'zippie-home down || true; exit 0' TERM INT
+              while :; do sleep 3600 & wait $!; done
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            # The address travel clients dial. A bare FiOS IP works but moves;
+            # point this at DDNS once one exists. Changing it does NOT rekey.
+            - name: ZIPPIE_HOME_ENDPOINT
+              valueFrom:
+                configMapKeyRef: {name: zippie-home-config, key: endpoint}
+            - name: ZIPPIE_HOME_PORTS
+              valueFrom:
+                configMapKeyRef: {name: zippie-home-config, key: ports}
+            # Leave empty to auto-detect from the default route.
+            - name: ZIPPIE_HOME_WAN
+              valueFrom:
+                configMapKeyRef: {name: zippie-home-config, key: wan_iface}
+            - name: ZIPPIE_HOME_STATE
+              value: /var/lib/zippie
+            # Local port the transport binds. Public ports are REDIRECTed to
+            # it. Empty string = route mode only, which is the default and the
+            # currently proven configuration.
+            - name: ZIPPIE_TRANSPORT_PORT
+              valueFrom:
+                configMapKeyRef: {name: zippie-home-config, key: transport_port}
+            # Which public ports the transport claims. One spare port = staged
+            # rollout; empty (with a port set) = the flag day.
+            - name: ZIPPIE_TRANSPORT_PUBLIC_PORTS
+              valueFrom:
+                configMapKeyRef: {name: zippie-home-config, key: transport_public_ports}
+          volumeMounts:
+            - {name: scripts, mountPath: /scripts, readOnly: true}
+            # PYTHONPATH=/pkg, so this must land at /pkg/zippie for
+            # `import zippie.home_transport` to resolve.
+            - {name: transport-pkg, mountPath: /pkg/zippie, readOnly: true}
+            - {name: state, mountPath: /var/lib/zippie}
+            # wg-quick writes/reads the interface config here. Kept on the same
+            # PVC so a restart reuses the existing keys rather than regenerating.
+            - {name: state, mountPath: /etc/wireguard, subPath: wireguard}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            # NET_ADMIN: create the wg interface, write iptables NAT rules.
+            # privileged is NOT used - NET_ADMIN + hostNetwork is sufficient and
+            # a much smaller grant.
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW"]
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+          livenessProbe:
+            # The interface existing is the real health signal - the process can
+            # be alive while wg-quick has been torn down underneath it.
+            exec:
+              command: ["/bin/sh", "-c", "test -e /sys/class/net/pb-home0"]
+            initialDelaySeconds: 60
+            periodSeconds: 60
+            failureThreshold: 3
+      volumes:
+        - name: scripts
+          configMap: {name: zippie-home-script, defaultMode: 0555}
+        - name: transport-pkg
+          configMap: {name: zippie-transport-pkg, defaultMode: 0555}
+        - name: state
+          persistentVolumeClaim: {claimName: zippie-home-state}

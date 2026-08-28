@@ -1,0 +1,204 @@
+# The zippie hub: one page for every node running zippie.
+#
+# Replaces the Caddy block that reverse-proxied zippie.ts.example-home.invalid straight at
+# the one router. That block's own comment predicted this move: "For a second
+# edge router, switch to one handle_path per router and serve a fleet page at
+# /." This is that fleet page.
+#
+# COMPATIBILITY IS THE WHOLE RISK HERE. Both phone apps fetch /api/status and
+# /api/series at this hostname. The hub proxies both to the primary router, so
+# the apps keep working through the cutover; serving only the new /api/nodes
+# would break them the moment DNS moved, and the phones would show "console not
+# reachable" with nothing explaining why.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zippie-hub-config
+  namespace: zippie
+data:
+  hub.json: |
+    {
+      "routers": [
+        {
+          "name": "suzu",
+          "label": "suzu (GL-MT3000)",
+          "status_url": "http://192.0.2.30:8787/api/status"
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zippie-hub
+  namespace: zippie
+spec:
+  replicas: 1
+  # HOW MANY OLD REPLICASETS TO KEEP, and therefore how many generator
+  # ConfigMaps stay pinned (#64).
+  #
+  # THE GENERATOR IS NOT THE LEAK. `configMapGenerator` mints a new
+  # hash-suffixed ConfigMap on every content change - that is the point, it is
+  # what rolls the pod - and `kubectl apply` cannot prune, so old ones stay.
+  # But each retained ReplicaSet REFERENCES its ConfigMap generation, which is
+  # exactly what makes `kubectl rollout undo` work. So the ConfigMaps are not
+  # junk while the ReplicaSets that name them are kept: deleting them would
+  # silently break rollback, which is this issue's own fourth criterion.
+  #
+  # The unbounded thing was the rollback window. Unset, this defaults to 10, so
+  # each workload pins up to ten ConfigMap generations forever. Reconciled live
+  # 2026-08-10: 11 ConfigMaps, 5 mounted by a running pod, 6 held by a
+  # ReplicaSet, and ZERO referenced by nothing - the accumulation is entirely
+  # retained history, not orphans.
+  #
+  # 3 because the useful rollback is "the one before this", occasionally two
+  # back; past that you deploy a fix forward rather than reaching for a
+  # fortnight-old revision. Raising it is this one line if a longer window is
+  # ever wanted, and Kubernetes garbage-collects the excess ReplicaSets itself -
+  # nothing here deletes anything by hand.
+  revisionHistoryLimit: 3
+  # Recreate, not RollingUpdate: client pushes are held in memory, so two
+  # replicas would each hold half the fleet and the page would flicker between
+  # them depending on which one answered.
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: zippie-hub}
+  template:
+    metadata:
+      # UNIFIED SERVICE TAGGING READS POD LABELS, NOT ANNOTATIONS. Without
+      # these the agent tags everything this pod emits with the image name, so
+      # the hub's logs landed as `service:python` and its spans would have too
+      # (quadseven/infra#2265). zippie-home had the same tags as
+      # ANNOTATIONS, which is why its logs read `service:alpine`; both are
+      # fixed the same way, and this is the shape pasto-api and
+      # digital-ledger-web already use.
+      labels:
+        app: zippie-hub
+        tags.datadoghq.com/env: prod
+        tags.datadoghq.com/service: zippie-hub
+    spec:
+      # The LAN worker by name. It is where Caddy already runs and where the
+      # tailnet route to the travel router is direct rather than relayed.
+      nodeSelector:
+        kubernetes.io/hostname: k8s-oke-lan-srv-unraid-worker-01
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: hub
+          # Stock python. The hub is stdlib-only on purpose - it is the piece
+          # that must keep answering when everything it monitors is broken, and
+          # a dependency tree is one more thing that can stop it doing that.
+          image: python:3.12-alpine
+          command: ["python3", "/app/hub.py"]
+          env:
+            - {name: ZIPPIE_HUB_CONFIG, value: /etc/zippie/hub.json}
+            - {name: ZIPPIE_HUB_PORT, value: "8080"}
+            # The ConfigMap mount is flat; see hub.py.
+            - {name: ZIPPIE_HUB_STATIC, value: /app}
+            - name: ZIPPIE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef: {name: zippie-hub-token, key: token}
+            # APM. hub.py builds and posts spans by hand - there is no ddtrace
+            # here and there must not be; the reasons are in the long comment
+            # at the top of hub.py, and the short version is that ddtrace has
+            # no integration for stdlib http.server, so it would add a
+            # dependency tree to the one component that must survive
+            # everything else failing AND still emit zero spans.
+            #
+            # THE UNIX SOCKET, NOT hostIP:8126. This pod is not hostNetwork,
+            # so TCP to the node's 8126 crosses the node's INPUT chain, where
+            # firewalld's reject rules are evaluated after the iptables ACCEPT
+            # - an ACCEPT there is not proof the packet arrives. The agent
+            # daemonset already publishes /var/run/datadog as a
+            # DirectoryOrCreate hostPath and the trace-agent chmods apm.socket
+            # 0o722 so a non-root uid can connect, so mounting it sidesteps
+            # the question. Swap this for http://<hostIP>:8126 if the socket
+            # ever goes away; the code takes either.
+            - {name: DD_TRACE_AGENT_URL, value: "unix:///var/run/datadog/apm.socket"}
+            # CUSTOM METRICS: the hub as the OUTSIDE OBSERVER (#272).
+            #
+            # The bond went down three times in a week and nothing alerted,
+            # because every monitor asks the router to report its own death
+            # over the bond that is dead. The hub is the only component that
+            # can see it - at home, on mains power, wired, outside the thing
+            # that fails - and it emitted spans and no metric at all. It now
+            # states, per router per poll cycle, whether the box answered and
+            # how many legs are carrying, with EXPLICIT values including zero.
+            #
+            # THE SAME SOCKET DIRECTORY THE SPANS ALREADY USE, and for the
+            # identical reason: this pod is not hostNetwork, so a datagram to
+            # the node's 8125 crosses the node's INPUT chain where firewalld's
+            # rejects are evaluated after the iptables ACCEPT. The agent
+            # daemonset publishes dsd.socket beside apm.socket in the hostPath
+            # already mounted below, chmodded so a non-root uid can write, so
+            # this needs NO new volume - only this line. Verified from the
+            # running pod on 2026-08-22: uid 65532 connects and writes.
+            #
+            # Swap for udp://<hostIP>:8125 if the socket ever goes away; the
+            # code takes either, and refuses anything else rather than
+            # pretending to be configured.
+            - {name: DD_DOGSTATSD_URL, value: "unix:///var/run/datadog/dsd.socket"}
+            # Must match the tags.datadoghq.com/* labels above, or the spans
+            # and the logs land under two different service names. The metrics
+            # above carry these as EXPLICIT tags, which is not belt-and-braces:
+            # a test datagram from this pod's socket mount on 2026-08-22
+            # arrived in Datadog with service, kube_namespace and pod_name all
+            # N/A, so origin detection is not enriching that path and a
+            # monitor scoped by service would match nothing without them.
+            - {name: DD_SERVICE, value: zippie-hub}
+            - {name: DD_ENV, value: prod}
+          # hostPort, NOT just a Service. Caddy runs hostNetwork with
+          # dnsPolicy Default, so it uses the NODE's resolver and cannot
+          # resolve *.svc.cluster.local at all - pointing it at the Service
+          # name 502'd every request and took the hostname down until it was
+          # reverted. A hostPort on the same node is reachable at 127.0.0.1,
+          # which is exactly how Caddy reached the router before this.
+          ports:
+            - {containerPort: 8080, hostPort: 8790, name: http}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: app, mountPath: /app, readOnly: true}
+            - {name: config, mountPath: /etc/zippie, readOnly: true}
+            # readOnly is correct even though the hub CONNECTS through these
+            # sockets: the kernel only refuses writes to regular files, dirs
+            # and symlinks on a read-only mount, never to a socket inode, and
+            # this is the mode Datadog's own chart uses. It also keeps the
+            # mount consistent with readOnlyRootFilesystem above. The whole
+            # directory is mounted, so dsd.socket comes with apm.socket and
+            # the metrics added for #272 need no second volume.
+            - {name: dd-apm-socket, mountPath: /var/run/datadog, readOnly: true}
+          livenessProbe:
+            httpGet: {path: /livez, port: 8080}
+            initialDelaySeconds: 5
+          readinessProbe:
+            httpGet: {path: /readyz, port: 8080}
+            initialDelaySeconds: 3
+          resources:
+            requests: {cpu: 25m, memory: 48Mi}
+            limits: {memory: 192Mi}
+      volumes:
+        - name: app
+          configMap: {name: zippie-hub-app}
+        - name: config
+          configMap: {name: zippie-hub-config}
+        # The agent daemonset's own apm socket directory. DirectoryOrCreate
+        # matches how the daemonset declares it, so this cannot be the thing
+        # that creates an empty directory on a node with no agent and then
+        # looks configured.
+        - name: dd-apm-socket
+          hostPath: {path: /var/run/datadog, type: DirectoryOrCreate}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zippie-hub
+  namespace: zippie
+spec:
+  selector: {app: zippie-hub}
+  ports: [{port: 80, targetPort: 8080, name: http}]

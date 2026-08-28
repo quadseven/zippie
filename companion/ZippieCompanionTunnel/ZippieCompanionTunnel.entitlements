@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Entitlements for the packet-tunnel extension (ADR 0020, phase 2).
+
+     BOTH the app and this extension need the networkextension entitlement, and
+     they need it for different reasons: the app to create and control an
+     NETunnelProviderManager, the extension to be loadable as a packet-tunnel
+     provider at all. Granting it to only one is the classic phase 2 mistake -
+     the build succeeds, the app can save a VPN configuration, and
+     startVPNTunnel() then fails with a permission error that names neither
+     target. ADR 0020's 2026-08-02 correction records that this entitlement is
+     SELF-SERVE, not an Apple-gated wait.
+
+     The App Group is how the extension answers the app's "what is the relay
+     doing" without the app being able to reach into the extension's memory.
+     It must match RelayConfiguration.appGroupIdentifier exactly. -->
+<plist version="1.0">
+<dict>
+    <key>com.apple.developer.networking.networkextension</key>
+    <array>
+        <string>packet-tunnel-provider</string>
+    </array>
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.app.zippie.companion</string>
+    </array>
+</dict>
+</plist>

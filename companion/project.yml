@@ -1,0 +1,327 @@
+# XcodeGen spec for the Zippie companion iOS app (ADR 0020, infra#2112).
+#
+# The .xcodeproj is GENERATED, not committed (see .gitignore) - a hand-edited
+# pbxproj is unreviewable and merge-hostile. Regenerate with:
+#
+#     cd companion && xcodegen generate
+#
+# Same shape as macchina's Companion so the Mac mini runner and the
+# fastlane-free xcodegen/xcodebuild/altool pipeline apply unchanged.
+name: ZippieCompanion
+
+options:
+  bundleIdPrefix: app.zippie
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+packages:
+  ZippieCompanionKit:
+    path: ZippieCompanionKit
+  # Datadog on the APP target only. The Kit stays SDK-free so it still builds
+  # and tests on a bare toolchain with `swift test` - same split macchina uses.
+  Datadog:
+    url: https://github.com/DataDog/dd-sdk-ios
+    from: "2.18.0"
+
+targets:
+  ZippieCompanion:
+    type: application
+    platform: iOS
+    sources:
+      # Entitlements are referenced by a build setting, not compiled or copied.
+      # Left in `sources` XcodeGen would hand it to the resources phase and the
+      # app would ship a copy of its own entitlements as a bundle resource.
+      - path: ZippieCompanionApp
+        excludes:
+          - "*.entitlements"
+    dependencies:
+      - package: ZippieCompanionKit
+      - package: Datadog
+        product: DatadogCore
+      - package: Datadog
+        product: DatadogLogs
+      - package: Datadog
+        product: DatadogRUM
+      # APM. Logs answer "what happened", RUM answers "what did the phone do",
+      # and NEITHER answers "how long did the router take to reply, and did it
+      # reply at all" - the question this app is pointed at a travel router to
+      # ask. DatadogTrace also carries the URLSession instrumentation entry
+      # point, which lives in DatadogInternal and is re-exported from here, so
+      # without this product there is no way to instrument a request at all.
+      - package: Datadog
+        product: DatadogTrace
+      # Embeds the packet-tunnel extension into the app's PlugIns directory.
+      # An extension that is not embedded still builds and still signs; it is
+      # simply never found at runtime, and startVPNTunnel() then fails with a
+      # generic configuration error that names nothing (ADR 0020 phase 2).
+      - target: ZippieCompanionTunnel
+      # Same embedding requirement as the tunnel, for the same reason: an
+      # unembedded widget extension builds and signs but WidgetKit never
+      # offers it in the gallery (issue #244).
+      - target: ZippieCompanionWidgetExtension
+    info:
+      path: ZippieCompanionApp/Info.plist
+      properties:
+        # The router's console is PLAIN HTTP on the LAN - a device on your own
+        # wifi with no certificate and no name to put one on.
+        # NSAllowsLocalNetworking is the documented exemption for exactly that:
+        # local addresses only, the public internet still held to TLS.
+        #
+        # WHAT WAS ACTUALLY VERIFIED, because the obvious claim did not hold up.
+        # A build WITHOUT this key still fetched plain HTTP from a private
+        # address (10.0.0.45) on the simulator, so this is NOT proven to be
+        # load-bearing for the current `10.20.0.1:8787` default - ATS is
+        # lenient about raw IP literals. It is kept because the setting is
+        # operator-editable: point it at `suzu.local` or any hostname and ATS
+        # does apply, at which point its absence is a silent connection
+        # failure that reads as "router unreachable". Cheap insurance against
+        # a config change, not a fix for a reproduced failure.
+        #
+        # THIS LIVES HERE RATHER THAN IN AN INFOPLIST_KEY_ SETTING because
+        # NSAppTransportSecurity is a nested dictionary and INFOPLIST_KEY_*
+        # carries flat values only - the flat spelling generated NO key at all,
+        # confirmed by reading the BUILT plist.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.zippie.companion
+        # EXPLICIT, not inherited. Left unset, the target configs fall back to
+        # the project-level PRODUCT_NAME = $(TARGET_NAME), which resolved fine
+        # under Xcode 26.6 locally and came out EMPTY under the runner's 26.5:
+        # the archive then tried to produce "Applications/.app" from two
+        # commands in one target and failed with "Multiple commands produce",
+        # naming no cause. macchina, which has always archived on this runner,
+        # sets PRODUCT_NAME explicitly - that is the working precedent.
+        # Value matches what the name resolved to before, so builds 1-3 and
+        # everything after keep the same product name.
+        PRODUCT_NAME: ZippieCompanion
+        # Without this, every upload lands as MISSING_EXPORT_COMPLIANCE and
+        # cannot be distributed until someone declares it by hand - which is
+        # what happened to build 4, and presumably to builds 1-3 before it.
+        # The app implements no encryption of its own: the relay forwards
+        # OPAQUE bytes that were already WireGuard ciphertext when they
+        # arrived, and everything else is standard system networking over
+        # HTTPS. That is the exempt case, and it matches what builds 1-3 of
+        # this app and every macchina build already declare.
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+        MARKETING_VERSION: "0.3.0"
+        CURRENT_PROJECT_VERSION: "3"
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
+        # KEEP THIS ON even though the target now names a real INFOPLIST_FILE.
+        # The two are not alternatives: Xcode merges INFOPLIST_KEY_* settings on
+        # top of the named file ONLY while this is YES. Removing it silently
+        # dropped CFBundleIconName, the local-network usage string and the
+        # export-compliance flag from the built plist - verified by reading the
+        # BUILT plist, which is the only place the merge is observable.
+        GENERATE_INFOPLIST_FILE: YES
+        # Without this the build produces no CFBundleIconName and the App Store
+        # rejects the upload (90713 + 90022). A missing icon is not a cosmetic
+        # problem - it is a hard upload failure.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_CFBundleDisplayName: "Zippie"
+        # The relay BINDS a UDP listener the router dials over wifi, which is
+        # local network access. Since iOS 14 that raises a privacy prompt, and a
+        # prompt with no usage string is at best unexplained and at worst
+        # refused. An app extension cannot present this prompt at all, so the
+        # grant has to be obtained by the app - one more reason the foreground
+        # relay stays in the UI.
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "Zippie receives frames from the zippie router over the local wifi network and relays them over cellular."
+        # PHASE 2 (ADR 0020). Both the app and the extension carry
+        # com.apple.developer.networking.networkextension; the app needs it to
+        # drive NETunnelProviderManager, the extension to be loadable as a
+        # packet-tunnel provider. Adding this file changes what the
+        # "zippie companion AppStore" profile must contain - a profile minted
+        # before the App ID gained Network Extensions and App Groups will fail
+        # codesign, and cannot be repaired, only regenerated.
+        CODE_SIGN_ENTITLEMENTS: ZippieCompanionApp/ZippieCompanion.entitlements
+        #
+        # Phase 1 needed NO entitlement. requiredInterfaceType is a plain
+        # Network.framework parameter, not a restricted capability - which is
+        # why the harness shipped long before any of the above existed.
+        #
+        # AUTOMATIC signing here, unlike macchina Companion's Manual + match
+        # profile. This target only has to run on a developer's own device to
+        # answer one question; automatic lets Xcode register the App ID and
+        # mint a development profile with no portal round-trip. Switch to
+        # Manual + a distribution profile when TestFlight is wired (#2155).
+        DEVELOPMENT_TEAM: "__APPLE_TEAM_ID__"
+        # Automatic for day-to-day device runs, so a developer opening the
+        # project is not dragged through distribution signing just to run the
+        # probe on their own phone.
+        CODE_SIGN_STYLE: Automatic
+    # Release signing lives HERE, not on the xcodebuild command line. Passing
+    # PROVISIONING_PROFILE_SPECIFIER as a CLI flag applies it to EVERY target
+    # in the build, including the Datadog SPM package targets - which fail with
+    # "does not support provisioning profiles". Scoping it to this target's
+    # Release config is the only way to sign the app without signing the
+    # dependencies.
+    #
+    # NESTED UNDER settings:, NOT beside it. xcodegen reads per-configuration
+    # overrides at settings.configs; a `configs:` key at target level is not
+    # part of the target spec and is silently IGNORED - no warning, no error,
+    # it simply does not reach the project. That is how this shipped signing
+    # Release with CODE_SIGN_STYLE Automatic and an "Apple Development"
+    # identity, which failed the first archive on the runner looking for
+    # development profiles that were never going to exist. Verified with
+    # `xcodebuild -showBuildSettings`, which is the only honest way to check:
+    # the generated project is the truth, not the spec that produced it.
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          PROVISIONING_PROFILE_SPECIFIER: "zippie companion AppStore"
+
+  # The packet-tunnel extension - phase 2 of ADR 0020, and the difference
+  # between a demo and a product.
+  #
+  # It exists for ONE property: an NEPacketTunnelProvider is the only self-serve
+  # mechanism on iOS that gives a third-party process indefinite background
+  # execution with the network up. It is configured to capture none of the
+  # phone's traffic - see PacketTunnelProvider.inertNetworkSettings for exactly
+  # how, and for the risk that carries.
+  #
+  # NO DATADOG HERE, on purpose. Network Extension providers are killed without
+  # warning when they exceed an undocumented memory ceiling (reported around
+  # 50 MB for packet tunnels), and the app is where the SDK's cost is
+  # affordable. The extension reports through the App Group instead and the app
+  # forwards it to Datadog.
+  ZippieCompanionTunnel:
+    type: app-extension
+    platform: iOS
+    sources:
+      # Info.plist and entitlements are named by build settings. XcodeGen would
+      # otherwise add them to the resources phase, which for Info.plist means
+      # shipping a duplicate that shadows nothing and confuses everyone.
+      - path: ZippieCompanionTunnel
+        excludes:
+          - "Info.plist"
+          - "*.entitlements"
+    dependencies:
+      # LINKED, NOT EMBEDDED. An app extension may not contain a Frameworks
+      # directory of its own - App Store validation rejects the whole upload
+      # with "contains disallowed file 'Frameworks'" (90206), which is how
+      # build 8 failed. The framework is embedded ONCE in the containing app
+      # and found at runtime through the runpath below, which is also why it
+      # ships 23 MB once rather than twice.
+      - framework: Frameworks/Zippie.xcframework
+        embed: false
+      # The SAME package the app links, not a copy of CellularRelay. The relay
+      # is the one piece of this system that has been proven against a real
+      # router and a real radio; forking it so the extension could have its own
+      # would mean two relays drifting apart, and only one of them tested.
+      - package: ZippieCompanionKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.zippie.companion.tunnel
+        # Explicit for the same reason as the app target - see the note there.
+        PRODUCT_NAME: ZippieCompanionTunnel
+        # MUST match the app's. App Store Connect rejects an upload whose
+        # extension version differs from its containing app. CURRENT_PROJECT_VERSION
+        # is overridden per-build by the TestFlight workflow's xcodebuild
+        # command line, which applies to every target, so the build number stays
+        # in lockstep on its own - MARKETING_VERSION does not, and has to be
+        # bumped in both places.
+        MARKETING_VERSION: "0.3.0"
+        CURRENT_PROJECT_VERSION: "3"
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
+        # Hand written rather than generated: NSExtension is a nested dictionary
+        # and INFOPLIST_KEY_* settings carry flat values only.
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: ZippieCompanionTunnel/Info.plist
+        # From <App>.app/PlugIns/<Ext>.appex/<binary>, the app's Frameworks
+        # directory is two levels up. Without this the extension links but
+        # cannot LOAD the framework at runtime, and the failure names the
+        # extension rather than the missing library.
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../../Frameworks"
+        CODE_SIGN_ENTITLEMENTS: ZippieCompanionTunnel/ZippieCompanionTunnel.entitlements
+        DEVELOPMENT_TEAM: "__APPLE_TEAM_ID__"
+        CODE_SIGN_STYLE: Automatic
+    # Nested under settings:, not beside it - see the note on the app target.
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          # A SECOND profile, for a SECOND App ID. An extension is a separate
+          # bundle id and cannot ride the app's profile. Created in the portal
+          # 2026-08-05 against app.zippie.companion.tunnel with Network
+          # Extensions and App Groups enabled, and ci/ExportOptions.plist names
+          # it so exportArchive fails loudly rather than silently leaving the
+          # extension unsigned.
+          PROVISIONING_PROFILE_SPECIFIER: "zippie companion tunnel AppStore"
+
+  # The home-screen widget extension (issue #244): "is it working, and on
+  # what", answered without opening the app. Small and medium only - see
+  # ZippieCompanionWidget/RelayWidget.swift for why large and interactivity
+  # are both explicitly out of scope.
+  ZippieCompanionWidgetExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ZippieCompanionWidget
+        excludes:
+          - "Info.plist"
+          - "*.entitlements"
+      # SHARED, NOT COPIED. Ink/Kind/Space are the semantic tokens the widget
+      # is required to use (issue #244 rule 3) and the app already owns them
+      # in one file - adding a second copy here is exactly the "three
+      # surfaces negotiate a colour by hand" failure design/tokens.json exists
+      # to make impossible. Theme.swift has no dependency on anything else in
+      # the app target, so it compiles standalone as a second target member.
+      - path: ZippieCompanionApp/Design/Theme.swift
+    dependencies:
+      # The same SPM package the app and the tunnel use - WidgetTimeline.build
+      # and RelayStatusStore are exactly the two calls this extension makes.
+      - package: ZippieCompanionKit
+      # NO Datadog, and even more deliberately than the tunnel's "no Datadog"
+      # (see that target's comment): a WidgetKit extension's memory ceiling is
+      # smaller than a packet-tunnel provider's, and it is created and torn
+      # down far more often - once per timeline refresh - so the SDK's
+      # startup cost is paid on a much tighter budget for no benefit; nothing
+      # here is worth instrumenting that the app does not already cover.
+      # NO Zippie.xcframework either - this extension never touches the
+      # datapath, only RelayStatusStore's UserDefaults read (confirmed by
+      # grepping for "import Zippie" - only ClientTunnel.swift has it).
+    #
+    # NO `info:` KEY HERE, deliberately, matching the tunnel target rather
+    # than the app target. `info:` tells xcodegen to WRITE the Info.plist
+    # itself and overwrite whatever is on disk - it did exactly that the
+    # first time this was tried, silently dropping the hand-written
+    # NSExtension dictionary below that makes this bundle a widget at all.
+    # INFOPLIST_FILE + GENERATE_INFOPLIST_FILE: NO is the combination that
+    # leaves the checked-in file alone.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.zippie.companion.widget
+        PRODUCT_NAME: ZippieCompanionWidget
+        MARKETING_VERSION: "0.3.0"
+        CURRENT_PROJECT_VERSION: "3"
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: ZippieCompanionWidget/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ZippieCompanionWidget/ZippieCompanionWidget.entitlements
+        DEVELOPMENT_TEAM: "__APPLE_TEAM_ID__"
+        # Automatic for day-to-day device runs, same reasoning as the app
+        # target: Xcode registers the App ID and mints a development profile
+        # itself, no portal round trip needed to run this on a developer's
+        # own phone.
+        CODE_SIGN_STYLE: Automatic
+    # Nested under settings:, not beside it - see the note on the app target.
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          # A THIRD profile, for a THIRD App ID - and unlike the app's and the
+          # tunnel's, THIS ONE DOES NOT EXIST YET. Creating app.zippie.companion
+          # .widget in the developer portal with App Groups enabled, and
+          # minting "zippie companion widget AppStore" against it, is a manual
+          # portal step this change could not perform. Until that is done, a
+          # Release archive of this target will fail signing - loudly, at
+          # export, per ci/ExportOptions.plist's own note - rather than
+          # producing an unsigned widget that fails to load on a device.
+          PROVISIONING_PROFILE_SPECIFIER: "zippie companion widget AppStore"

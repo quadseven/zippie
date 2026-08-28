@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Entitlements for the containing app (ADR 0020, phase 2).
+
+     The packet-tunnel value is shared with the extension, on purpose. The app
+     does not run a packet tunnel itself, but NETunnelProviderManager - saving
+     the VPN configuration and calling startVPNTunnel() - is gated on the SAME
+     com.apple.developer.networking.networkextension entitlement. Without it the
+     configuration saves and the start silently fails.
+
+     dns-settings belongs only to this containing app. It lets
+     NEDNSSettingsManager install the user's own NextDNS resolver; the packet
+     tunnel extension never edits the system DNS settings.
+
+     Adding this file changes what the "zippie companion AppStore" provisioning
+     profile must contain. A profile minted before these capabilities existed
+     will fail codesign with "does not support the Network Extensions
+     capability" - the profile has to be regenerated in the portal AFTER the App
+     ID gains Network Extensions and App Groups. -->
+<plist version="1.0">
+<dict>
+    <key>com.apple.developer.networking.networkextension</key>
+    <array>
+        <string>packet-tunnel-provider</string>
+        <string>dns-settings</string>
+    </array>
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.app.zippie.companion</string>
+    </array>
+</dict>
+</plist>
