@@ -71,12 +71,21 @@ jobs:
         # whatever $HOME the runner user happens to have.
         run: |
           set -euo pipefail
-          SDK="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
-          test -d "$SDK" || { echo "::error::Android SDK not found at $SDK"; exit 1; }
-          {
-            echo "ANDROID_HOME=$SDK"
-            echo "ANDROID_SDK_ROOT=$SDK"
-          } >> "$GITHUB_ENV"
+          # Masked first: anything written to $GITHUB_ENV is echoed in the
+          # `env:` group of EVERY subsequent step, so a home path put there
+          # leaks once per step - the same trap a repo *variable* would be.
+          echo "::add-mask::$HOME"
+          # VALIDATE the ambient value, never overwrite it. The runner's own
+          # .env exports a neutral ANDROID_HOME; re-deriving one here would
+          # clobber it and publish whatever path we computed.
+          # NOTE: no apostrophe in this message. Bash parses the `word` in
+          # ${VAR:?word} for quoting even inside double quotes, so a lone
+          # apostrophe is an unterminated single quote and the whole script
+          # dies with "unexpected EOF" before it ever runs.
+          : "${ANDROID_HOME:?ANDROID_HOME is not set - the self-hosted runner .env must export it}"
+          test -d "$ANDROID_HOME" \
+            || { echo "::error::Android SDK not found at the configured ANDROID_HOME"; exit 1; }
+          echo "Android SDK present."
 
       - name: Verify the SDK is actually present
         # BEFORE gradle, not after. A missing SDK surfaces from gradle as a

@@ -264,7 +264,11 @@ jobs:
             -exportPath build/export \
             -exportOptionsPlist ci/ExportOptions.plist \
             OTHER_CODE_SIGN_FLAGS="--keychain $CI_KEYCHAIN"
-          ls -la build/export
+          # Deliberately NOT `ls -la`: its owner column prints the runner
+          # account's username into a public Actions log, which no path
+          # change can prevent. Permissions, size and name are what this
+          # line is actually for.
+          ls -la build/export | awk '{print $1, $5, $9}'
 
       - name: Upload to App Store Connect
         env:
