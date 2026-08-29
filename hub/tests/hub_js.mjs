@@ -24,7 +24,7 @@
 //
 // CALIBRATED AGAINST THE LIVE PAGE, 2026-08-10 (#56). The first six checks
 // below assert behaviour that was measured in Chrome against the running hub
-// before this file was written - expanding `suzu` and sampling across four poll
+// before this file was written - expanding `the travel router` and sampling across four poll
 // cycles gave open=true at t=5.3/11.3/17.3/23.3s, each time with
 // sameNode=false. The shim reproduces that, which is the reason to believe it
 // about the last three, where a browser cannot reach: `expanded` is module
@@ -102,23 +102,23 @@ function check(name, got, want) {
 }
 
 // ---------------------------------------------------- expanded state (#56)
-render([node('suzu')]);
+render([node('travel-router')]);
 await settle();
 check('a row starts collapsed', rows()[0].open, false);
 
 rows()[0].open = true;
 await settle();
-check('a click registers in the set', openNames(), ['suzu']);
+check('a click registers in the set', openNames(), ['travel-router']);
 
-render([node('suzu')]);
-render([node('suzu')]);
-render([node('suzu')]);
+render([node('travel-router')]);
+render([node('travel-router')]);
+render([node('travel-router')]);
 await settle();
 check('it survives three polls (live: open=true at 23.3 s)', rows()[0].open, true);
 
 rows()[0].open = false;
 await settle();
-render([node('suzu')]);
+render([node('travel-router')]);
 await settle();
 check('a collapse persists too, which is the same bug with the opposite sign',
       rows()[0].open, false);

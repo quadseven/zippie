@@ -1,7 +1,11 @@
 # Self-hosted runner labels used by this repo. Without this, actionlint flags
 # every one of them as "unknown label" and the noise buries real findings.
+#
+# KEEP THIS IN STEP WITH `runs-on`. It previously declared two labels no
+# workflow had used since the move to arc-zippie, and did NOT declare
+# arc-zippie itself - so it was simultaneously carrying dead entries and
+# failing to cover the one label every Linux job here actually runs on.
 self-hosted-runner:
   labels:
-    - srv-unraid-gha
-    - srv-unraid-gha-iot
+    - arc-zippie
     - mac-mini

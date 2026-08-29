@@ -12,12 +12,12 @@ class LegIdentityTest {
 
     @Test
     fun `an endpoint that names this phone matches`() {
-        assertTrue(LegIdentity.identifies("10.20.0.100:51999", 51999, "10.20.0.100"))
+        assertTrue(LegIdentity.identifies("10.99.0.100:51999", 51999, "10.99.0.100"))
     }
 
     @Test
     fun `the other phone on the same wifi does not match`() {
-        assertFalse(LegIdentity.identifies("10.20.0.151:51999", 51999, "10.20.0.100"))
+        assertFalse(LegIdentity.identifies("10.99.0.151:51999", 51999, "10.99.0.100"))
     }
 
     /**
@@ -26,10 +26,10 @@ class LegIdentityTest {
      */
     @Test
     fun `the port must match too`() {
-        assertFalse(LegIdentity.identifies("10.20.0.100:51998", 51999, "10.20.0.100"))
-        assertFalse(LegIdentity.identifies("10.20.0.100", 51999, "10.20.0.100"))
-        assertFalse(LegIdentity.identifies("10.20.0.100:", 51999, "10.20.0.100"))
-        assertFalse(LegIdentity.identifies("10.20.0.100:abc", 51999, "10.20.0.100"))
+        assertFalse(LegIdentity.identifies("10.99.0.100:51998", 51999, "10.99.0.100"))
+        assertFalse(LegIdentity.identifies("10.99.0.100", 51999, "10.99.0.100"))
+        assertFalse(LegIdentity.identifies("10.99.0.100:", 51999, "10.99.0.100"))
+        assertFalse(LegIdentity.identifies("10.99.0.100:abc", 51999, "10.99.0.100"))
     }
 
     /**
@@ -47,24 +47,24 @@ class LegIdentityTest {
      */
     @Test
     fun `two legs sharing a host but not a port are never confused`() {
-        val localIp = "10.20.0.100"
+        val localIp = "10.99.0.100"
         assertTrue(
             "this phone's own endpoint must still match",
-            LegIdentity.identifies("10.20.0.100:51999", 51999, localIp),
+            LegIdentity.identifies("10.99.0.100:51999", 51999, localIp),
         )
         assertFalse(
             "a neighbour phone on the same address but a different port must not " +
                 "be claimed as this one",
-            LegIdentity.identifies("10.20.0.100:52000", 51999, localIp),
+            LegIdentity.identifies("10.99.0.100:52000", 51999, localIp),
         )
     }
 
     @Test
     fun `missing evidence never matches`() {
-        assertFalse(LegIdentity.identifies(null, 51999, "10.20.0.100"))
-        assertFalse(LegIdentity.identifies("", 51999, "10.20.0.100"))
-        assertFalse(LegIdentity.identifies("10.20.0.100:51999", 51999, null))
-        assertFalse(LegIdentity.identifies("10.20.0.100:51999", 51999, ""))
+        assertFalse(LegIdentity.identifies(null, 51999, "10.99.0.100"))
+        assertFalse(LegIdentity.identifies("", 51999, "10.99.0.100"))
+        assertFalse(LegIdentity.identifies("10.99.0.100:51999", 51999, null))
+        assertFalse(LegIdentity.identifies("10.99.0.100:51999", 51999, ""))
     }
 
     @Test

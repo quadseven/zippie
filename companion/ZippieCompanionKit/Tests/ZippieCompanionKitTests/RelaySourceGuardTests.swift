@@ -18,7 +18,7 @@ final class RelaySourceGuardTests: XCTestCase {
     /// datagram and have it forwarded over the user's CELLULAR to the home
     /// endpoint - their bytes, your data plan, your home transport.
     func testAPublicSourceIsNotAPlausibleRouter() {
-        for ip in ["8.8.8.8", "1.1.1.1", "203.0.113.9", "100.93.210.210"] {
+        for ip in ["8.8.8.8", "1.1.1.1", "203.0.113.9", "100.64.100.1"] {
             XCTAssertFalse(
                 CellularRelay.isLocalEndpoint(endpoint(ip)),
                 "\(ip) was accepted as a router; the relay would forward a "
@@ -35,7 +35,7 @@ final class RelaySourceGuardTests: XCTestCase {
     }
 
     func testLanSourcesAreAccepted() {
-        for ip in ["10.20.0.1", "192.168.8.1", "172.16.0.1", "172.31.255.254",
+        for ip in ["10.99.0.1", "192.168.8.1", "172.16.0.1", "172.31.255.254",
                    "169.254.1.1", "127.0.0.1"] {
             XCTAssertTrue(
                 CellularRelay.isLocalEndpoint(endpoint(ip)),

@@ -201,15 +201,15 @@ def scan_ssids(interfaces: list[str] | None = None) -> set[str]:
 # "Client" is iwinfo's own word for a station radio - the same string
 # `list_wifi_interfaces()` matches on above. Named here too because #153's
 # consumer (agent.apply_auto_labels) needs to tell a station radio apart from
-# an AP radio (ra0/rax0, broadcasting Suzu/_IOT/_WERK) and from a plain
+# an AP radio (ra0/rax0, broadcasting its own SSIDs) and from a plain
 # ethernet WAN, and comparing against a stray literal in two files is how the
 # two quietly drift.
 STATION_MODE = "Client"
 
-# What an unassociated radio's Access Point line reads, verified live on suzu
+# What an unassociated radio's Access Point line reads, verified live on the travel router
 # 2026-08-12 (#153): apcli0, joined to nothing, reports
 # `Access Point: 00:00:00:00:00:00` at the exact same time apclix0 - joined to
-# M2000 - reports its AP's real MAC. This is the cross-check the docstring
+# the upstream AP - reports its AP's real MAC. This is the cross-check the docstring
 # below explains.
 _UNASSOCIATED_AP = "00:00:00:00:00:00"
 
@@ -234,12 +234,12 @@ class StationInfo:
 
 
 def station_info(iface: str) -> StationInfo | None:
-    """`iwinfo <iface> info`, parsed for the traps #153 measured live on suzu.
+    """`iwinfo <iface> info`, parsed for the traps #153 measured live on the travel router.
 
     Two shapes, captured verbatim from a live GL-MT3000 2026-08-12 (see
     tests/test_repeater_self_naming.py for the full blocks):
 
-        apclix0   ESSID: "M2000"
+        apclix0   ESSID: "UpstreamAP"
                   Access Point: 00:00:00:00:00:03
                   Mode: Client  Channel: 161 (5.805 GHz) ...
 

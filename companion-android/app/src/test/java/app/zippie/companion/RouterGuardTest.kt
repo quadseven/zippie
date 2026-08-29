@@ -21,8 +21,8 @@ class RouterGuardTest {
     @Test
     fun `a router on the LAN is accepted and becomes the reply target`() {
         val guard = RouterGuard()
-        assertTrue(guard.accept(addr("10.20.0.1"), 40000, nowMs = 0))
-        assertEquals(addr("10.20.0.1"), guard.peer!!.address)
+        assertTrue(guard.accept(addr("10.99.0.1"), 40000, nowMs = 0))
+        assertEquals(addr("10.99.0.1"), guard.peer!!.address)
         assertEquals(40000, guard.peer!!.port)
         assertEquals(0L, guard.rejected)
     }
@@ -58,20 +58,20 @@ class RouterGuardTest {
     @Test
     fun `a second local source cannot displace a live router`() {
         val guard = RouterGuard(takeoverIdleMs = 5_000)
-        assertTrue(guard.accept(addr("10.20.0.1"), 40000, nowMs = 1_000))
-        assertFalse(guard.accept(addr("10.20.0.55"), 40000, nowMs = 2_000))
-        assertEquals(addr("10.20.0.1"), guard.peer!!.address)
+        assertTrue(guard.accept(addr("10.99.0.1"), 40000, nowMs = 1_000))
+        assertFalse(guard.accept(addr("10.99.0.55"), 40000, nowMs = 2_000))
+        assertEquals(addr("10.99.0.1"), guard.peer!!.address)
         assertEquals(1L, guard.rejected)
     }
 
     @Test
     fun `a router that has gone quiet can be replaced`() {
         val guard = RouterGuard(takeoverIdleMs = 5_000)
-        assertTrue(guard.accept(addr("10.20.0.1"), 40000, nowMs = 1_000))
-        assertFalse(guard.accept(addr("10.20.0.55"), 40000, nowMs = 5_999))
+        assertTrue(guard.accept(addr("10.99.0.1"), 40000, nowMs = 1_000))
+        assertFalse(guard.accept(addr("10.99.0.55"), 40000, nowMs = 5_999))
         assertTrue("past the idle window the relay must recover",
-            guard.accept(addr("10.20.0.55"), 40000, nowMs = 6_001))
-        assertEquals(addr("10.20.0.55"), guard.peer!!.address)
+            guard.accept(addr("10.99.0.55"), 40000, nowMs = 6_001))
+        assertEquals(addr("10.99.0.55"), guard.peer!!.address)
     }
 
     /**
@@ -82,8 +82,8 @@ class RouterGuardTest {
     @Test
     fun `the same router on a new port is followed immediately`() {
         val guard = RouterGuard(takeoverIdleMs = 5_000)
-        assertTrue(guard.accept(addr("10.20.0.1"), 40000, nowMs = 1_000))
-        assertTrue(guard.accept(addr("10.20.0.1"), 41111, nowMs = 1_500))
+        assertTrue(guard.accept(addr("10.99.0.1"), 40000, nowMs = 1_000))
+        assertTrue(guard.accept(addr("10.99.0.1"), 41111, nowMs = 1_500))
         assertEquals(41111, guard.peer!!.port)
         assertEquals(0L, guard.rejected)
     }
@@ -91,10 +91,10 @@ class RouterGuardTest {
     @Test
     fun `continued traffic from the live router keeps the takeover window shut`() {
         val guard = RouterGuard(takeoverIdleMs = 5_000)
-        assertTrue(guard.accept(addr("10.20.0.1"), 40000, nowMs = 0))
-        assertTrue(guard.accept(addr("10.20.0.1"), 40000, nowMs = 4_000))
-        assertTrue(guard.accept(addr("10.20.0.1"), 40000, nowMs = 8_000))
+        assertTrue(guard.accept(addr("10.99.0.1"), 40000, nowMs = 0))
+        assertTrue(guard.accept(addr("10.99.0.1"), 40000, nowMs = 4_000))
+        assertTrue(guard.accept(addr("10.99.0.1"), 40000, nowMs = 8_000))
         assertFalse("the window is measured from the last packet, not from adoption",
-            guard.accept(addr("10.20.0.99"), 40000, nowMs = 9_000))
+            guard.accept(addr("10.99.0.99"), 40000, nowMs = 9_000))
     }
 }

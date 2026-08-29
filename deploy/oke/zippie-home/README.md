@@ -51,7 +51,7 @@ The alternatives, honestly:
   never aggregate two links. You get a home exit with no bonding, which the
   existing exit nodes already give you. It does not replace this.
 - **Put the bond server somewhere with a public IP** (an OCI node). No home
-  port-forward, bonding still works - but the exit is then OCI, not your FiOS,
+  port-forward, bonding still works - but the exit is then the cloud worker, not your own home uplink,
   so you lose the low-latency-to-home property that motivated the design.
 - **Hole-punch ourselves.** Doable, but it means building a rendezvous service
   to exchange observed endpoints - i.e. reimplementing a chunk of Tailscale.

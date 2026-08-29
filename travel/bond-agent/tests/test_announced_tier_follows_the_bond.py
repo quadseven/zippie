@@ -10,7 +10,7 @@ replacing it. That works. But the resolution happens ONCE, in the
 announcement is a renewal that updates `relay_endpoint` and `label` and nothing
 else. So the tier a leg landed on at announce time is the tier it keeps.
 
-Measured on suzu, in this order:
+Measured on the travel router, in this order:
 
     12:06  ethernet tier=2, hotspot tier=2  ->  phone announces, resolves to 2
            all three in_bond=True, phone carrying 555 KB
@@ -77,7 +77,7 @@ def _announce(agent, *, tier=None, name="iphone-8fe5"):
     interface is filtered out by the tier gate before tier is even consulted,
     which would make every assertion below vacuous.
     """
-    agent.dynamic.announce(name=name, host="10.20.0.151", port=51999,
+    agent.dynamic.announce(name=name, host="10.99.0.151", port=51999,
                            label="iPhone", tier=tier)
     agent.reconcile_dynamic_legs()
     leg = next(p for p in agent.paths if p.name == name)
@@ -99,7 +99,7 @@ def _carrying(agent) -> set[str]:
 
 @pytest.fixture()
 def bond(tmp_path):
-    """suzu's exact shape: two physical legs at tier 2, then a phone announces."""
+    """the travel router's exact shape: two physical legs at tier 2, then a phone announces."""
     agent = _agent(tmp_path)
     _physical(agent, "ethernet", 2, "eth0")
     _physical(agent, "hotspot", 2, "apclix0")

@@ -30,7 +30,7 @@ class FakeSock:
 def _emit(monkeypatch, status=STATUS, host="10.0.0.5"):
     sock = FakeSock()
     monkeypatch.setattr(tel.socket, "socket", lambda *a, **k: sock)
-    t = tel.Telemetry(host=host, port=8125, extra_tags=["device:suzu"])
+    t = tel.Telemetry(host=host, port=8125, extra_tags=["device:travel-router"])
     t.emit_status(status)
     return sock.sent[0][0].splitlines() if sock.sent else []
 
@@ -84,7 +84,7 @@ def test_bond_rollups_and_heartbeat(monkeypatch):
 
 def test_extra_tags_are_applied_to_every_metric(monkeypatch):
     lines = _emit(monkeypatch)
-    assert all("device:suzu" in ln for ln in lines)
+    assert all("device:travel-router" in ln for ln in lines)
 
 
 def test_a_dead_collector_never_raises(monkeypatch):
@@ -115,11 +115,11 @@ def test_addr_monitor_liveness_and_restarts_in_the_stream(monkeypatch):
 def test_emit_count_is_a_counter_with_tags(monkeypatch):
     sock = FakeSock()
     monkeypatch.setattr(tel.socket, "socket", lambda *a, **k: sock)
-    t = tel.Telemetry(host="10.0.0.5", extra_tags=["device:suzu"])
+    t = tel.Telemetry(host="10.0.0.5", extra_tags=["device:travel-router"])
     t.emit_count("addr_loss_withdrawn", 1, ["interface:apclix0", "path:hotspot"])
     line = sock.sent[0][0]
     assert line.startswith("custom.zippie.addr_loss_withdrawn:1|c|#")
-    assert "device:suzu" in line and "interface:apclix0" in line and "path:hotspot" in line
+    assert "device:travel-router" in line and "interface:apclix0" in line and "path:hotspot" in line
 
 
 def test_api_emit_count_posts_a_count_series(monkeypatch):
@@ -136,7 +136,7 @@ def test_api_emit_count_posts_a_count_series(monkeypatch):
         return FakeResp()
 
     monkeypatch.setattr(tel.urllib.request, "urlopen", fake_urlopen)
-    t = tel.DatadogApiTelemetry(api_key="k", extra_tags=["device:suzu"])
+    t = tel.DatadogApiTelemetry(api_key="k", extra_tags=["device:travel-router"])
     t.emit_count("addr_loss_withdrawn", 1, ["interface:eth2"])
     # Posting is off the control loop now, so wait for the sender thread.
     assert t.flush(), "telemetry queue did not drain"
@@ -145,7 +145,7 @@ def test_api_emit_count_posts_a_count_series(monkeypatch):
     (series,) = body["series"]
     assert series["metric"] == "custom.zippie.addr_loss_withdrawn"
     assert series["type"] == 1, "must be a count, not a gauge"
-    assert "interface:eth2" in series["tags"] and "device:suzu" in series["tags"]
+    assert "interface:eth2" in series["tags"] and "device:travel-router" in series["tags"]
 
 
 class TestDatadogLogHandler:
@@ -165,7 +165,7 @@ class TestDatadogLogHandler:
             tel.urllib.request, "urlopen",
             lambda req, timeout=0: posted.append(req) or type("R", (), {"close": lambda s: None})(),
         )
-        h = self._handler(extra_tags=["device:suzu"])
+        h = self._handler(extra_tags=["device:travel-router"])
         try:
             h.emit(self._record("wg up failed for hotspot"))
             h.flush_to_datadog()
@@ -177,7 +177,7 @@ class TestDatadogLogHandler:
         assert "wg up failed" in entry["message"]
         assert entry["status"] == "error"
         assert entry["service"] == "zippie"
-        assert entry["ddtags"] == "device:suzu"
+        assert entry["ddtags"] == "device:travel-router"
 
     def test_a_dead_intake_never_raises_and_drops_the_batch(self, monkeypatch):
         def boom(req, timeout=0):
@@ -230,19 +230,19 @@ class TestTelemetryWiringRegressions:
     def test_tags_fall_back_to_the_pre_rename_env_var(self, monkeypatch):
         """The live routers still carry PATHBOND_TAGS in /etc/zippie/env.
         Reading only ZIPPIE_TAGS shipped every metric and log UNTAGGED - present
-        in Datadog but unfindable, with no device:suzu to filter on."""
+        in Datadog but unfindable, with no device:travel-router to filter on."""
         from zippie.agent import BondAgent
         from zippie.config import parse_config
 
         monkeypatch.delenv("ZIPPIE_TAGS", raising=False)
-        monkeypatch.setenv("PATHBOND_TAGS", "device:suzu,router:gl-mt3000")
+        monkeypatch.setenv("PATHBOND_TAGS", "device:travel-router,router:gl-mt3000")
         monkeypatch.setenv("DD_API_KEY", "k")
         cfg = parse_config({
             "home": {"endpoint": "h", "server_public_key": "k"},
             "paths": [{"name": "a", "interface": "eth0"}],
         })
         a = BondAgent(cfg)
-        assert "device:suzu" in a.telemetry.extra_tags
+        assert "device:travel-router" in a.telemetry.extra_tags
         assert "router:gl-mt3000" in a.telemetry.extra_tags
 
     def test_new_tag_name_wins_when_both_are_set(self, monkeypatch):
@@ -470,7 +470,7 @@ class TestTelemetryNeverBlocksTheControlLoop:
     the bond is bootstrapping Datadog is unreachable and every tick blocked for
     the full 15s. The loop fell from 1s to ~15s, keepalives went out every 15s
     against a 6s staleness threshold, and every leg read dead - permanently,
-    caused by nothing but the act of measuring. Live on suzu 2026-08-02:
+    caused by nothing but the act of measuring. Live on the travel router 2026-08-02:
     3 keepalives in 50 seconds, which is 50/15.
     """
 
@@ -537,7 +537,7 @@ class TestDroppedBatchDelta:
     it LATCHES: once the value passes the bar the monitor stays red until the
     agent restarts, however long ago the drops stopped.
 
-    That is not hypothetical. Measured on suzu 2026-08-06: 1591 batches dropped
+    That is not hypothetical. Measured on the travel router 2026-08-06: 1591 batches dropped
     between 16:18Z and 17:48Z, then not one for the following eight hours,
     while `zippie - the agent is dropping telemetry batches` sat in Alert for
     all eight (infra#2282). The delta is what lets a monitor recover.
@@ -634,7 +634,7 @@ class TestBuildFingerprintIsVisibleOffBox:
 
     build.py digests the bytes of every module in the package and /api/status
     has shown it since quadseven/zippie#2, where it caught six of nineteen
-    modules on suzu differing from the repo. But the failure it exists for is a
+    modules on the travel router differing from the repo. But the failure it exists for is a
     stale agent quietly not emitting metrics that shipped monitors already
     query, and that is exactly when nobody thinks to ask the router - Datadog
     looks fine. So the fingerprint has to leave the box on its own.
@@ -643,7 +643,7 @@ class TestBuildFingerprintIsVisibleOffBox:
     def _build(self, **over):
         """A build block shaped exactly like build.build_info() returns."""
         return dict({
-            "fingerprint": "7c51eff1b39365df",   # what suzu was really running
+            "fingerprint": "7c51eff1b39365df",   # what the travel router was really running
             "modules": 19,
             "commit": "35ad62f",
             "deployed_at": "2026-08-06T14:00:00Z",
@@ -666,7 +666,7 @@ class TestBuildFingerprintIsVisibleOffBox:
 
         monkeypatch.setattr(tel.urllib.request, "urlopen",
                             lambda req, timeout=0: posted.append(req) or FakeResp())
-        return tel.DatadogApiTelemetry(api_key="k", extra_tags=["device:suzu"]), posted
+        return tel.DatadogApiTelemetry(api_key="k", extra_tags=["device:travel-router"]), posted
 
     def _series(self, monkeypatch, status):
         """Every series dict the API transport actually posted."""
@@ -691,7 +691,7 @@ class TestBuildFingerprintIsVisibleOffBox:
         assert "fingerprint:7c51eff1b39365df" in s["tags"]
         assert "commit:35ad62f" in s["tags"]
         assert "deployed_at:2026-08-06T14:00:00Z" in s["tags"]
-        assert "device:suzu" in s["tags"], "must still carry the device tag"
+        assert "device:travel-router" in s["tags"], "must still carry the device tag"
 
     def test_module_count_ships_too(self, monkeypatch):
         """20 modules arriving as 40 is the AppleDouble deploy, and the count
@@ -833,7 +833,7 @@ def _idle_metric(lines):
 
 
 def test_a_free_wire_doing_nothing_while_phones_carry_is_reported(monkeypatch):
-    """suzu, 2026-08-20: a cable plugged in, `state=down`, and 3 GB/day on phones."""
+    """the travel router, 2026-08-20: a cable plugged in, `state=down`, and 3 GB/day on phones."""
     status = {
         "mode": "aggregate", "primary": "pixel", "uptime_s": 1.0,
         "paths": [

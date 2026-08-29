@@ -1,6 +1,6 @@
 """The repo is public and describes a private router, so it lies about identity.
 
-On 2026-08-29 one of those lies reached suzu. `server_public_key` arrived as the
+On 2026-08-29 one of those lies reached the travel router. `server_public_key` arrived as the
 literal `<server-public-key>`, `wg setconf` rejected it, the bond never came up,
 and because zippie owns the router's only default route the box left the network.
 Recovery took physical access.
@@ -152,7 +152,7 @@ def test_a_real_lan_endpoints_block_on_the_router_is_preserved(renderer, tmp_pat
     it, or every deploy would silently undo the operator's configuration."""
     real_block = (
         "lan_endpoints = [\n"
-        '    { network = "10.20.30.0/24", address = "10.20.30.11", port = 51931 },\n'
+        '    { network = "10.99.30.0/24", address = "10.99.30.11", port = 51931 },\n'
         "]\n"
     )
     repo = (
@@ -164,7 +164,7 @@ def test_a_real_lan_endpoints_block_on_the_router_is_preserved(renderer, tmp_pat
     )
     code, output, rendered = render(renderer, repo, LIVE + real_block, tmp_path)
     assert code == 0, output
-    assert "10.20.30.11" in rendered
+    assert "10.99.30.11" in rendered
     assert "192.0.2." not in rendered
 
 

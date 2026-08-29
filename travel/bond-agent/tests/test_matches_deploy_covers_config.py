@@ -1,6 +1,6 @@
 """`matches_deploy` must answer for the CONFIG as well as the code.
 
-The case that forced this, read live from suzu on 2026-08-18: the router
+The case that forced this, read live from the travel router on 2026-08-18: the router
 reported `matches_deploy: true` while running a `zippie.toml` six days older
 than main. #161 had split the `apcli*` glob into two explicit station-radio
 paths and merged; `scripts/deploy-openwrt.sh` never shipped the config at all,
@@ -57,7 +57,7 @@ def test_matching_code_and_config_is_a_match(pkg, tmp_path):
 def test_current_code_with_drifted_config_is_not_a_match(pkg, tmp_path):
     """THE regression. Code identical, config replaced under it.
 
-    Before #228 this returned matches_deploy True, which is exactly what suzu
+    Before #228 this returned matches_deploy True, which is exactly what the travel router
     reported while running a config six days stale.
     """
     stamp = _stamp(tmp_path, pkg, config_sha256=CONFIG_SHA)

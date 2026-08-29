@@ -1,6 +1,6 @@
 """A leg that has NEVER been answered must not read as merely 'degraded' (#204).
 
-Found live on suzu 2026-08-17: the ethernet leg had sent 403618 bytes, received
+Found live on the travel router 2026-08-17: the ethernet leg had sent 403618 bytes, received
 0, loss 100%, for nine hours, reporting `degraded` the whole time - the same
 word a leg gets when it worked fine yesterday and is having a bad hour today.
 The cause was a NAT hairpin, which is a configuration mistake, and nothing in
@@ -45,7 +45,7 @@ def _path(name, *, answered=False, state=PathState.DEGRADED):
 
 
 def test_a_leg_that_sent_and_never_received_is_flagged():
-    """The suzu ethernet leg, exactly: bytes out, nothing ever back."""
+    """The travel router ethernet leg, exactly: bytes out, nothing ever back."""
     p = _path("ethernet")
     a = _agent_with({0: (403618, 0)}, [p])
     a._flag_never_handshaked()

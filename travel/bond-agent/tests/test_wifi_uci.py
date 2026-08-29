@@ -182,10 +182,10 @@ IWINFO_MT3000 = """apcli0    ESSID: unknown
 apclix0   ESSID: "_17"
           Mode: Client  Channel: 149 (5.745 GHz)  HT Mode: HE80
           Supports VAPs: no  PHY name: rax0
-ra0       ESSID: "Suzu"
+ra0       ESSID: "TravelRouter"
           Mode: Master  Channel: 3 (2.422 GHz)  HT Mode: HE20
           Supports VAPs: no  PHY name: ra0
-rax0      ESSID: "GL-MT3000-b96"
+rax0      ESSID: "GL-MT3000-000"
           Mode: Master  Channel: 149 (5.745 GHz)  HT Mode: HE80
           Supports VAPs: no  PHY name: rax0
 """

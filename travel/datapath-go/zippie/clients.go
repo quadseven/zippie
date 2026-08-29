@@ -9,7 +9,7 @@ import (
 // Multi-client home: one set of stream state PER CLIENT.
 //
 // The single-client home is correct for exactly one bond. The moment a second
-// peer arrives - a phone in client mode alongside suzu - shared state is not a
+// peer arrives - a phone in client mode alongside the travel router - shared state is not a
 // degradation, it is CORRUPTION: each peer numbers its sequences from its own
 // start, so two streams in one reassembler eat each other's gaps, deliver each
 // other's duplicates, and NACK sequences that were never missing.

@@ -134,7 +134,7 @@ extension ReserveTierTests {
         XCTAssertEqual(p.stateWord, "carrying")
     }
 
-    /// Carrying AND degraded is a real, common state - it is what the M2000
+    /// Carrying AND degraded is a real, common state - it is what the upstream AP
     /// does - and collapsing it to either word alone loses the point.
     func testCarryingButDegradedSaysBoth() throws {
         let p = try decode(["name": "hotspot", "state": "degraded",

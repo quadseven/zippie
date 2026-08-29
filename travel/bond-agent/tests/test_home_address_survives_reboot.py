@@ -12,10 +12,10 @@ send them. A process that starts with an empty cache and no uplink can never
 break that circle, and every earlier success had merely inherited a warm cache
 from a previous run.
 
-Measured on suzu 2026-08-16 with a phone as the only uplink:
+Measured on the travel router 2026-08-16 with a phone as the only uplink:
 
     17:46:35  zippie starts
-    17:48:26  leg announced pixel-6a-a554 endpoint=10.20.0.174:51999
+    17:48:26  leg announced pixel-6a-a554 endpoint=10.99.0.174:51999
     17:48:45  link up: pixel-6a-a554 via br-lan
     17:52:00  watchdog: no leg is carrying          <- 3m15s at weight 0
 

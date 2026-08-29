@@ -467,7 +467,7 @@ class HomeAddressStore:
     which cannot happen until something knows where to send them. A process that
     starts with an empty cache and no uplink can never break that circle.
 
-    That is not theoretical. Measured on suzu 2026-08-16 with a phone as the only
+    That is not theoretical. Measured on the travel router 2026-08-16 with a phone as the only
     uplink: the router booted, the phone announced itself twelve times over four
     minutes, the transport link came up - and `logread | grep "home endpoint"`
     was EMPTY for the whole boot, because that line only prints on a successful

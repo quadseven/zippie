@@ -27,7 +27,7 @@
          from Doze, and on a Pixel with Adaptive Battery it is not: the relay
          keeps announcing on its timer while its UDP socket stops being
          serviced, so the router sees a leg that is present and answers
-         nothing. Observed live on suzu three times (#254).
+         nothing. Observed live on the travel router three times (#254).
 
          DECLARED SO IT CAN BE GRANTED. Without this the app cannot prompt, and
          a Device Owner has no declared permission to allowlist against - so an

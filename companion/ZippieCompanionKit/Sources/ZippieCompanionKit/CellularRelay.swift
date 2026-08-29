@@ -15,7 +15,7 @@ import Network
 /// bytes. That matters for three reasons:
 ///
 ///   1. The home end needs no changes. To it, this leg is indistinguishable
-///      from one of suzu's own tunnels.
+///      from one of the travel router's own tunnels.
 ///   2. The frame format can change without touching the app, which is good
 ///      because shipping an iOS build is slow and TestFlight builds are rate
 ///      limited.
@@ -29,7 +29,7 @@ public actor CellularRelay {
     public struct Config: Sendable {
         /// UDP port the phone listens on, reachable from the router over wifi.
         public let listenPort: UInt16
-        /// The home transport's public endpoint - the same host:port suzu's
+        /// The home transport's public endpoint - the same host:port the travel router's
         /// legs spray to.
         public let homeHost: String
         public let homePort: UInt16

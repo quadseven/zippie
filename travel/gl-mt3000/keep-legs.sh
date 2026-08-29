@@ -22,7 +22,7 @@
 #     observable behaviour as the phone announcing itself.
 #
 # IP ADDRESSES ARE READ FRESH EVERY PASS, never configured. The Pixel moved from
-# 10.20.0.189 to 10.20.0.174 during one afternoon; a hardcoded address would
+# 10.99.0.189 to 10.99.0.174 during one afternoon; a hardcoded address would
 # have pointed the bond at whatever else DHCP handed that number to.
 set -u
 

@@ -4,9 +4,9 @@ MEASURED, not imagined (#252). On 2026-08-19 an iPhone was cabled onto the
 router's LAN with a USB-C ethernet adapter while still joined to the house
 wifi. It announced, and the agent logged:
 
-    leg announced name=iphone-8fe5 endpoint=10.0.0.22:51999 by=10.20.0.241
+    leg announced name=iphone-8fe5 endpoint=10.0.0.22:51999 by=10.99.0.241
 
-The announce ARRIVED from 10.20.0.241 - the ethernet address, on this router's
+The announce ARRIVED from 10.99.0.241 - the ethernet address, on this router's
 own LAN - and CLAIMED 10.0.0.22, which is the house network behind a different
 router. The claim won. The leg was dialled somewhere that could never answer,
 sat at weight 0 and out of the bond, and the status page said nothing about
@@ -77,7 +77,7 @@ def _announce(base, token, **body):
 # preference through HTTP alone would test one row of this and call it done.
 
 CLAIMED_WIFI = "10.0.0.22"        # the house LAN, behind a different router
-OBSERVED_LAN = "10.20.0.241"      # this router's LAN, where the packet came from
+OBSERVED_LAN = "10.99.0.241"      # this router's LAN, where the packet came from
 
 
 def test_the_source_wins_when_it_is_diallable():
@@ -90,7 +90,7 @@ def test_an_honest_announce_is_unchanged():
     assert announce_host(OBSERVED_LAN, OBSERVED_LAN) == OBSERVED_LAN
 
 
-@pytest.mark.parametrize("source", ["127.0.0.1", "100.86.4.19", "203.0.113.7"])
+@pytest.mark.parametrize("source", ["127.0.0.1", "100.64.100.3", "203.0.113.7"])
 def test_a_source_the_router_cannot_dial_falls_back_to_the_claim(source):
     """Loopback, the tailnet, and the public internet.
 
@@ -124,9 +124,9 @@ def test_a_loopback_announce_still_uses_the_claim(served):
     the claim survives, and the leg is created exactly as it was before #252."""
     agent, base = served
     status, body = _announce(base, agent.console_token(),
-                             name="iphone", host="10.20.0.241", port=51999)
+                             name="iphone", host="10.99.0.241", port=51999)
     assert status == 200
-    assert body["endpoint"] == "10.20.0.241:51999"
+    assert body["endpoint"] == "10.99.0.241:51999"
 
 
 def test_the_port_always_comes_from_the_claim(served):
@@ -134,5 +134,5 @@ def test_the_port_always_comes_from_the_claim(served):
     of an HTTP request is an ephemeral one that nothing is listening on."""
     agent, base = served
     _status, body = _announce(base, agent.console_token(),
-                              name="iphone", host="10.20.0.241", port=51999)
+                              name="iphone", host="10.99.0.241", port=51999)
     assert body["endpoint"].endswith(":51999")

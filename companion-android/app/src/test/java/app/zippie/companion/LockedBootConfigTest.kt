@@ -42,7 +42,7 @@ class LockedBootConfigTest {
             listenPort = 51999,
             homeHost = "home.example",
             homePort = 51902,
-            consoleLanHost = "10.20.0.1:8787",
+            consoleLanHost = "10.99.0.1:8787",
             consoleUrl = "https://console.example",
             dailyBudgetBytes = 1_000_000L,
             monthlyBudgetBytes = 50_000_000L,
@@ -85,7 +85,7 @@ class LockedBootConfigTest {
     fun `a mirrored config can still announce`() {
         val c = RelayConfiguration(
             listenPort = 51999,
-            consoleLanHost = "10.20.0.1:8787",
+            consoleLanHost = "10.99.0.1:8787",
             announceToken = "tok",
         )
         assertTrue("no console host - nothing to announce to", c.consoleLanHost.isNotBlank())

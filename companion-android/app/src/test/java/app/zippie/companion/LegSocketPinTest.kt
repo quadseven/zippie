@@ -13,7 +13,7 @@ import org.junit.Test
  * an address on the router's own subnet on wlan0 and still routed to the router
  * through the modem:
  *
- *     ip route get 10.20.0.1  ->  dev v4-rmnet1  src 192.0.0.4
+ *     ip route get 10.99.0.1  ->  dev v4-rmnet1  src 192.0.0.4
  *
  * While the router's uplink is down its wifi fails Android's validation, so that
  * network's routes are not installed in the default table and cellular is the

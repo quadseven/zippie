@@ -30,7 +30,7 @@
 # net at any level: not this script, which needs cron and therefore a running
 # system, and not the hardware timer, which has already been disarmed.
 #
-# That window is not hypothetical. On 2026-08-16 a graceful `reboot` hung suzu
+# That window is not hypothetical. On 2026-08-16 a graceful `reboot` hung the travel router
 # for 76 minutes and ended in a physical power cycle. So remote reboots use
 # sysrq, which skips the shutdown sequence entirely - see docs/runbook.md. If
 # you are reasoning about what can recover this router unattended, a hung
@@ -144,7 +144,7 @@ dd_event() {   # title, text, alert_type(info|warning|error|success)
         . "$WD_PERSIST/env" 2>/dev/null
         [ -n "${DD_API_KEY:-}" ] || exit 0
         _site="${DD_SITE:-datadoghq.com}"
-        _tags="${PATHBOND_TAGS:-device:suzu}"
+        _tags="${PATHBOND_TAGS:-device:travel-router}"
         curl -sS --connect-timeout 5 -m 10 -X POST "https://api.${_site}/api/v1/events" \
             -H "Content-Type: application/json" \
             -H "DD-API-KEY: ${DD_API_KEY}" \
@@ -340,7 +340,7 @@ rm -f "$SOLE_FILE"
 # It used to sit after `fails >= MAX_FAILS`, so the counter kept incrementing
 # all the way through the hold. The moment a leg finally DID carry, the counter
 # was already far past MAX_FAILS and the very next check tore the new bond down.
-# Measured on suzu 2026-08-16, router clock UTC-4:
+# Measured on the travel router 2026-08-16, router clock UTC-4:
 #
 #   17:49:00  no internet (3/3) - NOT tearing down, nothing carrying
 #   17:50:00  (4/3)   17:51:00  (5/3)   17:52:00  (6/3)

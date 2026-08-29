@@ -105,7 +105,12 @@ Device Owner can then do, which is the actual point:
 - wallpaper set programmatically, and locked against change
 - lock-task / kiosk, or fully managed with the stock Pixel launcher
 - app configuration delivered directly, since we own both ends
-- an mTLS control plane of our own design (see #158, #142)
+- a control plane of our own design (see #158, #142). It is NOT mTLS:
+  the device holds a key in its Android Keystore and signs a server-issued,
+  single-use, expiring nonce, and the server verifies that signature against
+  the certificate it issued to that device. The proof therefore survives
+  Cloudflare, tunnels and anything else in the path, because it never
+  depended on the transport
 
 **One thing no Device Owner can do**, and it is on the wish list, so it is worth
 stating plainly: the 80% charge cap cannot be set by policy. Android allowlists
@@ -152,7 +157,8 @@ were closed before this project started caring, and the evidence is above.
 ## References
 
 - #125 - the AMAPI attempt and its live failure on the handset
-- #158 - first-run pairing ceremony, mTLS identity for phones
+- #158 - first-run pairing ceremony, certificate identity for phones
+  (proved at the application layer, not over mTLS)
 - #142 - wayfinder map for device identity with no internet
 - `companion-android/mdm/README.md` - the retired AMAPI integration
 - `docs/headwind-to-fleet-migration.md` - parity work, written before doors 1

@@ -20,8 +20,8 @@ data:
     {
       "routers": [
         {
-          "name": "suzu",
-          "label": "suzu (GL-MT3000)",
+          "name": "travel-router",
+          "label": "the travel router (GL-MT3000)",
           "status_url": "http://192.0.2.30:8787/api/status"
         }
       ]

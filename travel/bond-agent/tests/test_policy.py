@@ -156,7 +156,7 @@ def test_sticky_primary_keeps_current():
 
 # ---------------------------------------------------------------- zippie#258
 #
-# THE TRAP THIS SET EXISTS TO KEEP SHUT. A wire was plugged into suzu for
+# THE TRAP THIS SET EXISTS TO KEEP SHUT. A wire was plugged into the travel router for
 # 12h45m on 2026-08-20 while the bond ran entirely on phone plans - roughly
 # 3 GB/day of household traffic on metered cellular - because the ethernet leg
 # was present but dead:

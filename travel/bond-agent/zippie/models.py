@@ -176,7 +176,7 @@ class PolicyConfig:
     # carries everything whatever number it is holding. The only cost is a
     # suboptimal split for at most one window.
     #
-    # Measured on suzu 2026-08-09 (#81): replaying the episode's RTT profile at
+    # Measured on the travel router 2026-08-09 (#81): replaying the episode's RTT profile at
     # probe cadence moves the weight 40 times in 60 s, with up to 8 rises inside
     # one 40-pass window. 2 rises per 20 s brings that to 11 changes, and costs a
     # leg that then recovers nothing worth having - it spends at most 6 passes,
@@ -247,7 +247,7 @@ class PolicyConfig:
     # (2026-07-30: a flapping hotspot leg made the bond unusable).
     join_streak_min: float = 8.0
     # THE ROUTER'S OWN RESOLVER, restarted whenever the default route MOVES
-    # (#21). On 2026-08-02 installing `default dev pbz0` on suzu killed the
+    # (#21). On 2026-08-02 installing `default dev pbz0` on the travel router killed the
     # router's DNS outright while the tunnel underneath it was perfectly
     # healthy - nextdns's DoH upstreams were still bound to the old egress
     # address. net.ResolverKicker carries the full incident.
@@ -323,7 +323,7 @@ class PolicyConfig:
     duplicate_fanout: int = 2
 
     # BOND STANDDOWN (#124). "A bond with one dying leg beats an idle
-    # healthy WAN, and takes the LAN with it" - suzu 2026-08-11, the
+    # healthy WAN, and takes the LAN with it" - the travel router 2026-08-11, the
     # ethernet leg dropped, the bond carried on alone on the hotspot at
     # 661ms, and kept the metric-1 default while a healthy physical WAN sat
     # unused underneath it at metric 20. `on_all_paths_down` did not fire -
@@ -346,13 +346,13 @@ class PolicyConfig:
     # exactly the number #81 already proved hides a bufferbloated leg
     # (test_the_mean_hides_the_tail: a leg averaging 162ms with a 1297ms tail
     # classifies comfortably below `failover_rtt_ms`), which is the likely
-    # reason suzu's sole leg never reached PathState.DOWN despite 661ms. The
+    # reason the travel router's sole leg never reached PathState.DOWN despite 661ms. The
     # tail is a peak-hold that rises instantly and decays slowly
     # (`rtt_tail_decay`), so it is the one number that cannot hide a leg this
     # bad - the same reason #81's shedding is keyed on it.
     #
     # #107's phantom-RTT defect (a dropped keepalive reads as a ~500ms
-    # spike that decays over a handful of passes) is NOT deployed to suzu,
+    # spike that decays over a handful of passes) is NOT deployed to the travel router,
     # so a single probe pass cannot be trusted on its own either -
     # `standdown_enter_after_s` below is what tells a genuine, sustained
     # problem apart from one isolated spike.
@@ -471,7 +471,7 @@ class PathRuntime:
     #
     # rtt_ewma_ms exists to suppress variance, and that is right for weighting -
     # but bufferbloat IS variance, so the smoothed value is exactly the number
-    # that cannot see it. Measured on suzu 2026-08-09: an ethernet leg spiking to
+    # that cannot see it. Measured on the travel router 2026-08-09: an ethernet leg spiking to
     # 524 ms held a 159 ms EWMA and classified UP, beside a 55 ms leg, and kept
     # carrying while retransmits tripled (#81).
     #
@@ -500,7 +500,7 @@ class PathRuntime:
     # and no keepalive has ever been answered.
     #
     # Derived rather than measured, and held here so `status_dict` can stay a
-    # pure reporter instead of recomputing it per poll. Found live on suzu
+    # pure reporter instead of recomputing it per poll. Found live on the travel router
     # 2026-08-17: an ethernet leg sat at 403618 bytes out, 0 in, loss 100%, for
     # nine hours reading `degraded` - the same word used for a leg that works
     # and got worse. It had never worked at all.
@@ -558,7 +558,7 @@ class PathRuntime:
     #
     # `interface = "apcli*"` matches BOTH station radios on this platform.
     # _match_by_interface takes cands[0] and drops the rest on the floor, so a
-    # phone hotspot on 2.4 GHz beside the M2000 on 5 GHz produced one leg and
+    # phone hotspot on 2.4 GHz beside the upstream AP on 5 GHz produced one leg and
     # one uplink that was working, usable, and absent from every surface - not
     # down, not degraded, just gone. A link that is working and invisible is
     # the worst shape a bond can be in, because nothing prompts anyone to look.
@@ -568,7 +568,7 @@ class PathRuntime:
     shadowed_interfaces: list[str] = field(default_factory=list)
     ssid: str | None = None
     # THE LIVE, COMPUTED DISPLAY NAME for a repeater leg - "Wi-Fi Repeater -
-    # M2000" - owned entirely by agent.apply_auto_labels and re-derived every
+    # the upstream AP" - owned entirely by agent.apply_auto_labels and re-derived every
     # tick from whatever `ssid` iwinfo reports right now (#153).
     #
     # Deliberately NOT written into config.label. That field already has an

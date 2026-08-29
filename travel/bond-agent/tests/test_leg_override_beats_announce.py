@@ -1,6 +1,6 @@
 """An operator's label must not fight the label a phone announces.
 
-MEASURED ON SUZU 2026-08-09 (#80). `logread` was this message and almost
+MEASURED ON THE TRAVEL ROUTER 2026-08-09 (#80). `logread` was this message and almost
 nothing else - 25 of the last 25 entries, roughly every 1.3 seconds, for as
 long as the agent had been running:
 
@@ -60,12 +60,12 @@ def _agent(tmp_path):
 def announced(tmp_path):
     """An agent with one announced leg whose label the operator has overridden.
 
-    Exactly suzu's shape: the phone announces "iPhone", legs.json says
+    Exactly the travel router's shape: the phone announces "iPhone", legs.json says
     "Operator - iPhone 17 Pro Max".
     """
     agent = _agent(tmp_path)
     agent.dynamic.announce(
-        name="iphone-8fe5", host="10.20.0.151", port=51999, label="iPhone",
+        name="iphone-8fe5", host="10.99.0.151", port=51999, label="iPhone",
     )
     agent._leg_store.update(
         "iphone-8fe5", {"label": "Operator - iPhone 17 Pro Max"}
@@ -138,7 +138,7 @@ def test_an_announced_label_still_applies_when_there_is_no_override(
     named should still show what the phone calls itself."""
     agent = _agent(tmp_path)
     agent.dynamic.announce(
-        name="pixel-1234", host="10.20.0.152", port=51999, label="Pixel 6a",
+        name="pixel-1234", host="10.99.0.152", port=51999, label="Pixel 6a",
     )
     _pass(agent)
     leg = next(p for p in agent.paths if p.name == "pixel-1234")
@@ -151,11 +151,11 @@ def test_a_changed_announce_still_applies_when_there_is_no_override(
     """And it must keep tracking changes, not latch the first value seen."""
     agent = _agent(tmp_path)
     agent.dynamic.announce(
-        name="pixel-1234", host="10.20.0.152", port=51999, label="Pixel 6a",
+        name="pixel-1234", host="10.99.0.152", port=51999, label="Pixel 6a",
     )
     _pass(agent)
     agent.dynamic.announce(
-        name="pixel-1234", host="10.20.0.152", port=51999,
+        name="pixel-1234", host="10.99.0.152", port=51999,
         label="Pixel 6a (T-Mobile)",
     )
     _pass(agent)

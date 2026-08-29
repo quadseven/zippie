@@ -69,7 +69,7 @@ def announce_host(claimed: str, observed: str) -> str:
     THE PACKET BEATS THE CLAIM. A phone cannot know which of its addresses this
     router can route to, and one on two networks at once will guess wrong.
     Measured 2026-08-19: an iPhone cabled onto the LAN by USB-C ethernet while
-    still on the house wifi announced `endpoint=10.0.0.22 by=10.20.0.241` - it
+    still on the house wifi announced `endpoint=10.0.0.22 by=10.99.0.241` - it
     offered its wifi address, which is behind a different router, and the leg
     was dialled somewhere that could never answer. It sat in the bond at weight
     0 with nothing saying why. The announce ARRIVED on a socket, so its source

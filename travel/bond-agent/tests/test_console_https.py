@@ -98,7 +98,7 @@ def _announce(url: str, *, token: str | None, context: ssl.SSLContext | None = N
         with _open_http(
             url,
             context=context,
-            data=json.dumps({"name": "phone", "host": "10.20.0.2", "port": 51999}).encode(),
+            data=json.dumps({"name": "phone", "host": "10.99.0.2", "port": 51999}).encode(),
             headers=headers,
             method="POST",
         ) as response:

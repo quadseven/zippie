@@ -68,7 +68,7 @@ def test_a_401_announce_is_logged_at_warning(served, caplog):
     _agent_, base = served
     with caplog.at_level(logging.INFO, logger="zippie.agent"):
         code, _ = _post(base, "/api/legs/announce",
-                        {"name": "iphone", "host": "10.20.0.151", "port": 51999},
+                        {"name": "iphone", "host": "10.99.0.151", "port": 51999},
                         token="stale-token-from-a-previous-pairing")
 
     assert code == 401
@@ -112,7 +112,7 @@ def test_a_successful_announce_is_visible_too(served, caplog):
     agent, base = served
     with caplog.at_level(logging.INFO, logger="zippie.agent"):
         code, _ = _post(base, "/api/legs/announce",
-                        {"name": "iphone", "host": "10.20.0.151", "port": 51999},
+                        {"name": "iphone", "host": "10.99.0.151", "port": 51999},
                         token=agent.console_token())
 
     assert code == 200

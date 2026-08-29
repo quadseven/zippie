@@ -1,5 +1,20 @@
 #!/usr/bin/env bash
-# Operator-specific hosts must not spread further into the shipped apps (#156).
+# Operator-specific hosts must not spread further into the shipped apps (#156),
+# and the repo as a whole must not name this estate's networks.
+#
+# TWO PROPERTIES, ONE SCRIPT, DELIBERATELY. They are different questions -
+# "what can someone who receives the APP extract from it" and "what can someone
+# who reads the PUBLIC REPO extract from it" - but they are the same leak
+# family, and a second script would have meant a second place to look, a second
+# copy of the did-this-scan-see-anything control, and a second thing to forget.
+#
+#   PART 1  the shipped-app ratchet. Pinned occurrences, with counts. Unchanged.
+#   PART 2  the tree-wide address allowlist. Added after a publication audit
+#           found that the previous scrub had caught the credentials and missed
+#           the topology: the household /24 was still in ~50 files, the travel
+#           router's hostname in ~100, and three measured CGNAT addresses sat in
+#           test fixtures. All of that is scrubbed now, and PART 2 is what stops
+#           the next pull request from putting it back.
 #
 # Both apps once shipped the operator's own infrastructure as compiled-in
 # defaults. Android's were emptied (#157) - homeHost, consoleLanHost, consoleUrl
@@ -40,6 +55,127 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# ---------------------------------------------------------------------------
+# PART 2: the tree-wide address allowlist.
+#
+# AN ALLOWLIST OF PERMITTED RANGES, NOT A DENYLIST OF REAL ONES, and that is
+# forced rather than stylistic: a guard that said "fail on the household /24"
+# would have to WRITE the household /24, which publishes in the guard exactly
+# what the guard exists to keep out. So this names only the ranges that are
+# allowed to appear, and the real one is absent rather than listed.
+#
+# It cannot tell a real address from an example by looking - 10.99.0.5 and a
+# real 10.x host are the same shape. What it can do is notice a range nobody
+# has justified, which is what a reintroduced household address looks like.
+#
+# WHY EACH RANGE IS HERE:
+#   10.0     generic examples and test fixtures
+#   10.3/4/9/50/66/77   WireGuard overlay and tunnel ranges the design uses
+#   10.99    the documentation LAN this repo's examples and fixtures use
+#   100.64   the synthetic CGNAT block; the tailnet range's own boundary
+#            values and Tailscale's well-known resolver are named individually
+# 192.168/16 and 172.16/12 are NOT restricted: they are consumer defaults that
+# name nobody, and pinning them would be noise that gets this switched off.
+PERMITTED_TEN='^10\.(0|3|4|9|50|66|77|99)\.'
+PERMITTED_CGNAT='^100\.64\.'
+CGNAT_CONSTANTS='^(100\.100\.100\.100|100\.127\.255\.25[45])$'
+
+part_two() {
+    echo
+    echo "  tree-wide: private addresses outside the permitted ranges"
+
+    # The PART 1 files are the shipped-app exception, pinned above with their
+    # counts and their reasons. This script names them too, in ALLOW. Neither
+    # is re-judged here.
+    local pinned
+    pinned=$(echo "$ALLOW" | awk -F'\t' 'NF {print $1}' | sort -u)
+
+    local scanned=0 offenders=""
+    while IFS= read -r -d '' file; do
+        case "$file" in
+            scripts/check-no-operator-hosts.sh) continue ;;
+        esac
+        if echo "$pinned" | grep -qxF "$file"; then continue; fi
+        case "$file" in
+            *.png|*.jpg|*.jpeg|*.gif|*.ico|*.pdf|*.jar|*.keystore|*.jks) continue ;;
+        esac
+        scanned=$((scanned + 1))
+
+        local hits
+        hits=$(grep -oE '(^|[^0-9.])(10|100)\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}([^0-9.]|$)' "$file" 2>/dev/null \
+               | grep -oE '(10|100)\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' || true)
+        [ -n "$hits" ] || continue
+
+        local addr
+        while IFS= read -r addr; do
+            [ -n "$addr" ] || continue
+            case "$addr" in
+                10.*) echo "$addr" | grep -qE "$PERMITTED_TEN" && continue ;;
+                100.*)
+                    # Only 100.64.0.0/10 is CGNAT; 100.1.x etc is ordinary public
+                    # space and not this guard's business.
+                    echo "$addr" | grep -qE '^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.' || continue
+                    echo "$addr" | grep -qE "$PERMITTED_CGNAT" && continue
+                    echo "$addr" | grep -qE "$CGNAT_CONSTANTS" && continue
+                    ;;
+            esac
+            offenders="${offenders}    ${file}: ${addr}"$'\n'
+        done <<< "$hits"
+    done < <(git ls-files -z)
+
+    # SAME RULE AS PART 1. An absence found by reading nothing is not evidence.
+    echo "  scanned $scanned tracked files"
+    if [ "$scanned" -lt 100 ]; then
+        echo "::error::only $scanned files in scope - this scan did not see the tree."
+        echo "Refusing to report 'clean' from a scan that looked at nothing."
+        exit 1
+    fi
+
+    if [ -z "$offenders" ]; then
+        echo "  clean - every private address is in a permitted range"
+        return 0
+    fi
+
+    echo "::error::addresses outside the ranges this repo permits:"
+    printf '%s' "$offenders"
+    echo
+    echo "This usually means a real address from someone's own network was"
+    echo "pasted in. Use a range this repo already documents with - see"
+    echo "PERMITTED_TEN above - or, if the range is genuinely new and generic,"
+    echo "add it there in a commit a reviewer will read."
+    exit 1
+}
+
+# THE DETECTOR PROVES ITSELF BEFORE IT IS BELIEVED. `--self-test` seeds a
+# synthetic violation into a throwaway tree and fails if the scan does not
+# catch it. Without this, a broken pattern here reports a clean repo, which is
+# the failure mode this whole file exists to refuse.
+if [ "${1:-}" = "--self-test" ]; then
+    ok=0
+    for probe in 10.13.0.7 100.93.210.210; do
+        if echo "$probe" | grep -qE '^10\.' && echo "$probe" | grep -qE "$PERMITTED_TEN"; then
+            echo "SELF-TEST FAILED: $probe was treated as permitted 10/8 space"; exit 1
+        fi
+        if echo "$probe" | grep -qE '^100\.' \
+           && echo "$probe" | grep -qE '^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.' \
+           && { echo "$probe" | grep -qE "$PERMITTED_CGNAT" || echo "$probe" | grep -qE "$CGNAT_CONSTANTS"; }; then
+            echo "SELF-TEST FAILED: $probe was treated as permitted CGNAT space"; exit 1
+        fi
+        ok=$((ok + 1))
+    done
+    for permitted in 10.99.0.151 10.66.0.10 100.64.100.1 100.100.100.100; do
+        case "$permitted" in
+            10.*) echo "$permitted" | grep -qE "$PERMITTED_TEN" || { echo "SELF-TEST FAILED: $permitted should be permitted"; exit 1; } ;;
+            100.*) { echo "$permitted" | grep -qE "$PERMITTED_CGNAT" || echo "$permitted" | grep -qE "$CGNAT_CONSTANTS"; } \
+                     || { echo "SELF-TEST FAILED: $permitted should be permitted"; exit 1; } ;;
+        esac
+        ok=$((ok + 1))
+    done
+    echo "self-test passed ($ok controls: 2 must-catch, 4 must-permit)"
+    exit 0
+fi
+
+
 SCOPE=(companion-android/app/src/main companion)
 
 # file<TAB>pattern<TAB>count   -- the pinned truth, smallest set that passes today
@@ -61,6 +197,7 @@ shipped() {
         -not -path '*/Tests/*' \
         -not -path '*/test/*' \
         -not -path '*/build/*' \
+        -not -path '*/.build/*' \
         -print0
 }
 
@@ -77,6 +214,21 @@ echo "  scanning $count shipped files (tests excluded)"
 if [ "$count" -lt 50 ]; then
     echo "::error::only $count files in scope - this scan did not see the tree."
     echo "Refusing to report 'clean' from a scan that looked at nothing."
+    exit 1
+fi
+# AND A CEILING, which this script learned the hard way. `swift test` writes
+# build output to companion/ZippieCompanionKit/.build, the exclusions above
+# missed the leading dot, and the scan went from 155 files to 2914 and reported
+# four "new" occurrences inside compiled object files. Too MANY files is the
+# same class of bug as too few - the scan is no longer looking at what it
+# claims to - and it fails a developer's local run for something they did not
+# do. `.build` is excluded above; this is the backstop if another tool invents
+# a new output directory.
+if [ "$count" -gt 500 ]; then
+    echo "::error::$count files in scope, which is far more than this repo ships."
+    echo "Something is generating output inside ${SCOPE[*]} - a local build"
+    echo "directory, most likely. Clean it, or add it to the exclusions in"
+    echo "shipped(). Refusing to report on a tree that is not the source tree."
     exit 1
 fi
 
@@ -100,6 +252,7 @@ expected=$(echo "$ALLOW" | awk -F'\t' 'NF' | sort)
 
 if [ "$actual" = "$expected" ]; then
     echo "  matches the pinned allowlist ($(echo "$expected" | wc -l | tr -d ' ') entries)"
+    part_two
     exit 0
 fi
 

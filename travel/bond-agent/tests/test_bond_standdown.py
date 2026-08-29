@@ -1,7 +1,7 @@
 """A bond with one dying leg beats an idle healthy WAN - until it takes the
 LAN with it (#124).
 
-MEASURED LIVE ON SUZU 2026-08-11. The ethernet leg dropped; the bond shed it
+MEASURED LIVE ON THE TRAVEL ROUTER 2026-08-11. The ethernet leg dropped; the bond shed it
 and carried on the hotspot alone at 661ms. The routing table read:
 
     default dev pbz0 scope link metric 1            <- the bond
@@ -27,7 +27,7 @@ only ever 0.0 or 100.0 today (#115) - a threshold on it can never be crossed by
 a real reading, so building this rule on it would build on a number that
 cannot mean what it needs to. #107's phantom-RTT defect (a dropped keepalive
 reads as a ~500ms spike, decaying over a handful of passes) is also not
-deployed to suzu, which is why entering standdown requires the badness to be
+deployed to the travel router, which is why entering standdown requires the badness to be
 SUSTAINED for `standdown_enter_after_s`, not present on a single probe pass -
 see test_a_single_bad_spike_does_not_stand_the_bond_down.
 
@@ -37,7 +37,7 @@ net.ZIPPIE_ROUTE_METRIC's own docstring: netifd's physical-WAN defaults already
 sit in the kernel's routing table UNDERNEATH zippie's metric-1 route, so
 withdrawing ours is the entire mechanism; the kernel does the rest with no
 action required from us. That answer is correct even when the alternate route
-rides the exact same physical interface as the surviving bond leg - suzu's own
+rides the exact same physical interface as the surviving bond leg - the travel router's own
 incident: apclix0 carried both the tunnelled hotspot leg AND netifd's own
 untunnelled default. So this file never asserts about WHICH interface ends up
 carrying traffic, only that our own route is (or is not) installed - see
@@ -57,7 +57,7 @@ from zippie.models import PathState, PolicyConfig
 
 
 def _agent(tmp_path, **policy):
-    """A route-mode, two-leg bond: ethernet + hotspot, same shape suzu ran.
+    """A route-mode, two-leg bond: ethernet + hotspot, same shape the travel router ran.
 
     Route mode, deliberately - _install_default_route's standdown check reads
     only self.paths, so it is identical under both datapaths, and route mode's
@@ -163,7 +163,7 @@ def test_a_sole_leg_running_hot_stands_the_bond_down(tmp_path, spy):
 
 def test_a_single_bad_spike_does_not_stand_the_bond_down(tmp_path, spy):
     """A LONE bad reading must not flip the default route. #107's phantom-RTT
-    defect (unfixed on suzu) turns one dropped keepalive into a ~500ms spike -
+    defect (unfixed on the travel router) turns one dropped keepalive into a ~500ms spike -
     if that alone could trigger this, standdown would fire on ordinary loss,
     not on a genuinely dying leg."""
     agent = _agent(tmp_path)
@@ -228,7 +228,7 @@ def test_standdown_never_substitutes_a_specific_interface(tmp_path, spy):
     """Standing down means withdrawing OUR route, never installing a
     different one. The kernel's own netifd defaults sit underneath ours at a
     higher metric (net.ZIPPIE_ROUTE_METRIC) and take over unassisted - even
-    when, as on suzu, that route rides the SAME physical interface as the
+    when, as on the travel router, that route rides the SAME physical interface as the
     dying bond leg. There is deliberately no code path that picks a WAN."""
     agent = _agent(tmp_path)
     now = _clocked(agent)

@@ -66,9 +66,9 @@ def _companion(name: str, relay: str) -> PathRuntime:
 def test_companion_leg_publishes_its_relay_endpoint(tmp_path, monkeypatch):
     """The address:port the router dials must reach the console."""
     a = _agent(tmp_path)
-    d = _status(a, _companion("companion-iphone", "10.20.0.151:51999"), monkeypatch)
+    d = _status(a, _companion("companion-iphone", "10.99.0.151:51999"), monkeypatch)
 
-    assert d["relay_endpoint"] == "10.20.0.151:51999", (
+    assert d["relay_endpoint"] == "10.99.0.151:51999", (
         "the console did not publish relay_endpoint, so a phone reading it "
         "cannot tell which companion leg is itself"
     )
@@ -77,8 +77,8 @@ def test_companion_leg_publishes_its_relay_endpoint(tmp_path, monkeypatch):
 def test_two_companion_legs_are_distinguishable(tmp_path, monkeypatch):
     """The whole point: the two phones must not look identical."""
     a = _agent(tmp_path)
-    mine = _status(a, _companion("companion-iphone", "10.20.0.151:51999"), monkeypatch)
-    theirs = _status(a, _companion("companion-co-operator", "10.20.0.100:51999"), monkeypatch)
+    mine = _status(a, _companion("companion-iphone", "10.99.0.151:51999"), monkeypatch)
+    theirs = _status(a, _companion("companion-co-operator", "10.99.0.100:51999"), monkeypatch)
 
     assert mine["relay_endpoint"] != theirs["relay_endpoint"], (
         "both companion legs published the same endpoint; the app would have "

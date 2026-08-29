@@ -1,6 +1,6 @@
 """Nothing in this repo may reboot the router gracefully.
 
-On 2026-08-16 `ssh root@suzu reboot` took the router down and it never came
+On 2026-08-16 `ssh root@the travel router reboot` took the router down and it never came
 back: 76 minutes, ended by a physical power cycle, with `/proc/uptime` reading
 137 seconds afterwards - so it hung in the shutdown sequence rather than
 completing. An earlier graceful reboot the same day returned in under a minute,

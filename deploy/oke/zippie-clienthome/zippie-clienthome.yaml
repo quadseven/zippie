@@ -38,7 +38,7 @@
 # Deliberately a second Deployment on its own port with its own TUN, not a
 # change to the running one. zippie-home is carrying the household's traffic
 # through the travel router right now; it does not get to be the test subject
-# for a new code path. If this pod crashloops, suzu's bond is unaffected.
+# for a new code path. If this pod crashloops, the travel router's bond is unaffected.
 apiVersion: v1
 kind: Namespace
 metadata:

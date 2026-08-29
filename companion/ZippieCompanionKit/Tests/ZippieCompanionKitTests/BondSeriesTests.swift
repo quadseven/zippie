@@ -293,8 +293,8 @@ final class BondSeriesTests: XCTestCase {
 
     func testSeriesAddressIsDerivedFromTheConsoleTheOperatorAlreadyTyped() throws {
         XCTAssertEqual(
-            BondSeriesClient.seriesURL(forStatusURL: URL(string: "http://10.20.0.1:8787/api/status")!),
-            URL(string: "http://10.20.0.1:8787/api/series"))
+            BondSeriesClient.seriesURL(forStatusURL: URL(string: "http://10.99.0.1:8787/api/status")!),
+            URL(string: "http://10.99.0.1:8787/api/series"))
         XCTAssertEqual(
             BondSeriesClient.seriesURL(forStatusURL: URL(string: "https://zippie.ts.example-home.invalid/api/status")!),
             URL(string: "https://zippie.ts.example-home.invalid/api/series"))
@@ -308,12 +308,12 @@ final class BondSeriesTests: XCTestCase {
     }
 
     func testSinceIsSentInTheUnitTheAgentParses() {
-        let base = URL(string: "http://10.20.0.1:8787/api/series")!
+        let base = URL(string: "http://10.99.0.1:8787/api/series")!
         XCTAssertEqual(BondSeriesClient.requestURL(base: base, since: nil), base,
                        "no `since` means the whole window, which is what the first "
                      + "fetch wants")
         XCTAssertEqual(BondSeriesClient.requestURL(base: base, since: 1_785_972_773_580).absoluteString,
-                       "http://10.20.0.1:8787/api/series?since=1785972773580")
+                       "http://10.99.0.1:8787/api/series?since=1785972773580")
     }
 
     func testASecondFetchReplacesTheOldSinceRatherThanAppendingOne() {

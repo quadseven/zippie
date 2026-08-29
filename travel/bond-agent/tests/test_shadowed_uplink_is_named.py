@@ -2,7 +2,7 @@
 
 `interface = "apcli*"` matches BOTH station radios on this platform.
 _match_by_interface returns cands[0] and drops the rest, so a phone hotspot on
-2.4 GHz beside the M2000 on 5 GHz yields one leg and one uplink that is working,
+2.4 GHz beside the upstream AP on 5 GHz yields one leg and one uplink that is working,
 usable, and absent from every surface. Nothing prompts anyone to look for it,
 which is why it can persist for weeks.
 
@@ -44,7 +44,7 @@ def _leg(name, pattern, *, iface=None):
 
 
 def test_the_uplink_the_glob_did_not_take_is_named():
-    """The suzu case exactly: apcli* matches both radios, one is invisible."""
+    """The travel router case exactly: apcli* matches both radios, one is invisible."""
     p = _leg("hotspot", "apcli*", iface="apclix0")
     _agent([p])._flag_shadowed_uplinks([_Link("apclix0"), _Link("apcli0")], {"apclix0"})
     assert p.shadowed_interfaces == ["apcli0"]

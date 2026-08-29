@@ -53,7 +53,7 @@
       "tx_bytes": 0,
       "rx_bytes": 0,
       "last_error": "healthy, held out of bond until proven (2/8)",
-      "relay_endpoint": "10.20.0.151:51999"
+      "relay_endpoint": "10.99.0.151:51999"
     },
     {
       "name": "companion-co-operator",
@@ -66,7 +66,7 @@
       "tx_bytes": 0,
       "rx_bytes": 0,
       "last_error": "healthy, held out of bond until proven (2/8)",
-      "relay_endpoint": "10.20.0.100:51999"
+      "relay_endpoint": "10.99.0.100:51999"
     }
   ]
 }

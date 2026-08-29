@@ -265,7 +265,7 @@ to a Pi 5 and use the MT3000 as AP only.
 
 ## Surveyed on the real device (2026-07-27)
 
-Read-only survey of the live unit ("Suzu", GL-MT3000, firmware 4.8.1, OpenWrt
+Read-only survey of the live unit ("TravelRouter", GL-MT3000, firmware 4.8.1, OpenWrt
 21.02-SNAPSHOT, target mediatek/mt7981, kernel 5.4.211), reached over GoodCloud
 remote SSH. These supersede the assumptions this file previously carried.
 
@@ -282,9 +282,9 @@ Live interface map (`iwinfo`), showing AP and Client concurrent on BOTH radios:
 ```
 apcli0    ESSID: unknown          Mode: Client  ch 3    PHY ra0     <- idle, free slot
 apclix0   ESSID: "_17"            Mode: Client  ch 149  PHY rax0    <- phone hotspot
-ra0       ESSID: "Suzu"           Mode: Master  ch 3    PHY ra0
-ra1       ESSID: "_IOT"           Mode: Master  ch 3    PHY ra0
-rax0      ESSID: "GL-MT3000-b96"  Mode: Master  ch 149  PHY rax0
+ra0       ESSID: "TravelRouter"           Mode: Master  ch 3    PHY ra0
+ra1       ESSID: "TravelRouter-iot"           Mode: Master  ch 3    PHY ra0
+rax0      ESSID: "GL-MT3000-000"  Mode: Master  ch 149  PHY rax0
 rax1      ESSID: "HT_AP3"         Mode: Master  ch 149  PHY rax0
 ```
 

@@ -114,7 +114,7 @@ class BondStatusTest {
     @Test
     fun `companion legs are identified by the endpoint the router dials`() {
         assertTrue(path("companion-co-operator").isCompanion)
-        assertEquals("10.20.0.100:51999", path("companion-co-operator").relayEndpoint)
+        assertEquals("10.99.0.100:51999", path("companion-co-operator").relayEndpoint)
         assertFalse("a physical leg has an empty relay endpoint", path("ethernet").isCompanion)
         assertTrue(path("ethernet").isPresent)
         assertFalse("configured but absent is not present", path("dongle4g").isPresent)

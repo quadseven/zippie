@@ -6,7 +6,7 @@ budget is count-WITHIN-window: `rearm_budget()` in watchdog.sh resets the count
 once REARM_WINDOW has passed. The agent read only the first field until
 2026-08-07.
 
-Measured on suzu 2026-08-06, which is what this costs: the file held
+Measured on the travel router 2026-08-06, which is what this costs: the file held
 `2 1785715991`, the window had opened 3.6 days earlier against a 24h window,
 and the true in-window count was 0 - while `/api/status` and
 `custom.zippie.watchdog.rearms_used` both reported 2 of a maximum of 2, i.e.

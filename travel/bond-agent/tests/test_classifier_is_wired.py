@@ -7,7 +7,7 @@ permanently True, and no key in any zippie.toml could change it (#50).
 
 That mattered because #22 lists "turn duplication off and measure" as a cheap
 experiment for isolating the throughput ceiling. It was not cheap: it required
-editing a file on a live travel router. Measured on suzu 2026-08-08, the bond
+editing a file on a live travel router. Measured on the travel router 2026-08-08, the bond
 delivered 6.5 Mbit/s while its best single leg alone delivered 17.6, and the
 leading suspect was duplicate fan-out - the one hypothesis that could not be
 tested.

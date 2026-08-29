@@ -1,14 +1,14 @@
 """Repeater legs label themselves from the live SSID (#153).
 
-The `hotspot` leg on suzu's real zippie.toml is labelled "Phone hotspot" -
+The `hotspot` leg on the travel router's real zippie.toml is labelled "Phone hotspot" -
 true once, when the leg really was a phone, and wrong for as long as the leg
-has actually been suzu's 5 GHz station radio associated to an access point
-called M2000. The SSID is readable straight off the interface; this is about
+has actually been the travel router's 5 GHz station radio associated to an access point
+called the upstream AP. The SSID is readable straight off the interface; this is about
 making the agent say so, and re-say so whenever the association changes,
 without needing a restart.
 
 FIXTURE PROVENANCE. The `IWINFO_*` blocks below are real `iwinfo <iface>
-info` output, captured read-only over the tailnet from suzu
+info` output, captured read-only over the tailnet from the travel router
 (root@<router-tailnet-ip>) on 2026-08-12 while triaging this issue - not
 reconstructed from the issue's condensed one-line examples. Confirmed live at
 the same time: `which iw` exits 1 (not installed), `iwinfo eth0 info` prints
@@ -17,7 +17,7 @@ code 1, and Python is 3.9.15 with no `cryptography` and no `sqlite3`. None of
 that reaches the router again from here - every test below is offline,
 against these captured strings and small stand-ins for net.list_links().
 
-Two fixtures are marked CONSTRUCTED rather than captured: suzu's real M2000
+Two fixtures are marked CONSTRUCTED rather than captured: the travel router's real upstream AP
 association has never been named literally "unknown", and has never carried
 an embedded quote or non-ASCII character, so the traps the issue calls out
 for those cases are exercised with fixtures built to match iwinfo's known,
@@ -35,8 +35,8 @@ from zippie.models import PathConfig, PathMatch, PathRuntime
 
 # --------------------------------------------------------------- fixtures
 
-# apclix0, associated to M2000 - suzu's real 5 GHz uplink, captured live.
-IWINFO_APCLIX0_ASSOCIATED = """apclix0   ESSID: "M2000"
+# apclix0, associated to the upstream AP - the travel router's real 5 GHz uplink, captured live.
+IWINFO_APCLIX0_ASSOCIATED = """apclix0   ESSID: "UpstreamAP"
           Access Point: 00:00:00:00:00:03
           Mode: Client  Channel: 161 (5.805 GHz) HT Mode: HE80
           Tx-Power: 20 dBm  Link Quality: 100/100
@@ -47,7 +47,7 @@ IWINFO_APCLIX0_ASSOCIATED = """apclix0   ESSID: "M2000"
           Supports VAPs: no  PHY name: rax0
 """
 
-# apcli0, not associated to anything - suzu's real 2.4 GHz station, captured
+# apcli0, not associated to anything - the travel router's real 2.4 GHz station, captured
 # live at the same moment. UNQUOTED "unknown" and an all-zero Access Point:
 # the two traps #153 measured.
 IWINFO_APCLI0_UNASSOCIATED = """apcli0    ESSID: unknown
@@ -61,10 +61,10 @@ IWINFO_APCLI0_UNASSOCIATED = """apcli0    ESSID: unknown
           Supports VAPs: no  PHY name: ra0
 """
 
-# ra0, suzu's own AP radio broadcasting "Suzu" - captured live. A real,
+# ra0, the travel router's own AP radio broadcasting "TravelRouter" - captured live. A real,
 # quoted ESSID and a real Access Point MAC, exactly like an associated
 # station; Mode is the only field that tells the two apart.
-IWINFO_RA0_AP_MODE = """ra0       ESSID: "Suzu"
+IWINFO_RA0_AP_MODE = """ra0       ESSID: "TravelRouter"
           Access Point: 00:00:00:00:00:01
           Mode: Master  Channel: 4 (2.427 GHz) HT Mode: HE40
           Supports VAPs: no  PHY name: ra0
@@ -124,7 +124,7 @@ def _stub_iwinfo(monkeypatch, outputs: dict[str, str]):
 def test_associated_ssid_is_quoted_and_returned(monkeypatch):
     _stub_iwinfo(monkeypatch, {"apclix0": IWINFO_APCLIX0_ASSOCIATED})
     info = wifi_uci.station_info("apclix0")
-    assert info.ssid == "M2000"
+    assert info.ssid == "UpstreamAP"
     assert info.mode == "Client"
     assert info.is_station is True
     assert info.access_point == "00:00:00:00:00:03"
@@ -151,10 +151,10 @@ def test_genuine_ssid_named_unknown_survives_the_access_point_crosscheck(monkeyp
 
 def test_ap_mode_radio_is_not_a_station(monkeypatch):
     """ra0 has a real, quoted ESSID and a real Access Point MAC too - only
-    Mode distinguishes suzu's own broadcast radio from a station (#153)."""
+    Mode distinguishes the travel router's own broadcast radio from a station (#153)."""
     _stub_iwinfo(monkeypatch, {"ra0": IWINFO_RA0_AP_MODE})
     info = wifi_uci.station_info("ra0")
-    assert info.ssid == "Suzu"
+    assert info.ssid == "TravelRouter"
     assert info.is_station is False
 
 
@@ -209,10 +209,10 @@ def _station(ssid, ap="00:00:00:00:00:03", mode="Client"):
 def test_associated_station_radio_gets_the_repeater_label(monkeypatch):
     path = PathRuntime(name="hotspot", config=_cfg(), interface="apclix0")
     a = _agent_with([path])
-    monkeypatch.setattr(agent_mod.wifi_uci, "station_info", lambda i: _station("M2000"))
+    monkeypatch.setattr(agent_mod.wifi_uci, "station_info", lambda i: _station("UpstreamAP"))
 
     agent_mod.BondAgent.apply_auto_labels(a)
-    assert path.auto_label == "Wi-Fi Repeater - M2000"
+    assert path.auto_label == "Wi-Fi Repeater - UpstreamAP"
 
 
 def test_ethernet_leg_is_never_auto_labelled(monkeypatch):
@@ -242,7 +242,7 @@ def test_ap_mode_interface_is_never_auto_labelled(monkeypatch):
     )
     a = _agent_with([path])
     monkeypatch.setattr(agent_mod.wifi_uci, "station_info",
-                         lambda i: _station("Suzu", ap="00:00:00:00:00:01", mode="Master"))
+                         lambda i: _station("TravelRouter", ap="00:00:00:00:00:01", mode="Master"))
 
     agent_mod.BondAgent.apply_auto_labels(a)
     assert path.auto_label is None
@@ -280,12 +280,12 @@ def test_unassociated_station_gets_no_label(monkeypatch):
 
 def test_a_stale_auto_label_is_cleared_on_dropped_association(monkeypatch):
     """THE ONE THAT MATTERS for "must not display a stale SSID" (#153). A leg
-    that WAS showing M2000 must not keep showing it once the radio reports no
+    that WAS showing the upstream AP must not keep showing it once the radio reports no
     association - auto_label is recomputed to None every pass, never left
     holding its previous value."""
     path = PathRuntime(
         name="hotspot", config=_cfg(), interface="apclix0",
-        auto_label="Wi-Fi Repeater - M2000",
+        auto_label="Wi-Fi Repeater - UpstreamAP",
     )
     a = _agent_with([path])
     monkeypatch.setattr(
@@ -301,12 +301,12 @@ def test_a_stale_auto_label_is_cleared_on_dropped_association(monkeypatch):
 def test_relabel_follows_a_changed_association_without_a_restart(monkeypatch):
     path = PathRuntime(name="hotspot", config=_cfg(), interface="apclix0")
     a = _agent_with([path])
-    current = {"ssid": "M2000"}
+    current = {"ssid": "UpstreamAP"}
     monkeypatch.setattr(agent_mod.wifi_uci, "station_info",
                          lambda i: _station(current["ssid"]))
 
     agent_mod.BondAgent.apply_auto_labels(a)
-    assert path.auto_label == "Wi-Fi Repeater - M2000"
+    assert path.auto_label == "Wi-Fi Repeater - UpstreamAP"
 
     current["ssid"] = "Hotel Lobby WiFi"
     agent_mod.BondAgent.apply_auto_labels(a)
@@ -322,7 +322,7 @@ def test_operator_override_suppresses_the_automatic_label_entirely(monkeypatch):
     silently overriding a deliberate human choice."""
     path = PathRuntime(name="hotspot", config=_cfg(), interface="apclix0")
     a = _agent_with([path], overrides={"hotspot": {"label": "Co-operator's phone"}})
-    monkeypatch.setattr(agent_mod.wifi_uci, "station_info", lambda i: _station("M2000"))
+    monkeypatch.setattr(agent_mod.wifi_uci, "station_info", lambda i: _station("UpstreamAP"))
 
     agent_mod.BondAgent.apply_auto_labels(a)
     assert path.auto_label is None, (
@@ -339,8 +339,8 @@ def test_to_dict_label_precedence():
     rt = PathRuntime(name="hotspot", config=cfg)
     assert rt.to_dict()["label"] == "Phone hotspot", "no auto label yet -> configured default"
 
-    rt.auto_label = "Wi-Fi Repeater - M2000"
-    assert rt.to_dict()["label"] == "Wi-Fi Repeater - M2000"
+    rt.auto_label = "Wi-Fi Repeater - UpstreamAP"
+    assert rt.to_dict()["label"] == "Wi-Fi Repeater - UpstreamAP"
 
     # What the real control loop produces once an operator overrides: config
     # label carries the override (apply_leg_overrides), auto_label is
@@ -405,11 +405,11 @@ def test_name_and_wireguard_identity_survive_a_label_change(tmp_path, monkeypatc
 
     monkeypatch.setattr(agent_mod.net, "list_links", lambda: [_Link("apclix0")])
     monkeypatch.setattr(agent_mod.net, "wan_gateways", lambda: {"apclix0": "10.3.0.1"})
-    monkeypatch.setattr(agent_mod.wifi_uci, "station_info", lambda i: _station("M2000"))
+    monkeypatch.setattr(agent_mod.wifi_uci, "station_info", lambda i: _station("UpstreamAP"))
 
     agent.match_interfaces()
     agent.apply_auto_labels()
-    assert leg.to_dict()["label"] == "Wi-Fi Repeater - M2000"
+    assert leg.to_dict()["label"] == "Wi-Fi Repeater - UpstreamAP"
 
     assert leg.name == "hotspot"
     assert leg.config.name == "hotspot"
@@ -445,11 +445,11 @@ def test_console_set_label_beats_the_automatic_one_immediately(tmp_path, monkeyp
     leg = agent.paths[0]
     monkeypatch.setattr(agent_mod.net, "list_links", lambda: [_Link("apclix0")])
     monkeypatch.setattr(agent_mod.net, "wan_gateways", lambda: {"apclix0": "10.3.0.1"})
-    monkeypatch.setattr(agent_mod.wifi_uci, "station_info", lambda i: _station("M2000"))
+    monkeypatch.setattr(agent_mod.wifi_uci, "station_info", lambda i: _station("UpstreamAP"))
 
     agent.match_interfaces()
     agent.apply_auto_labels()
-    assert leg.to_dict()["label"] == "Wi-Fi Repeater - M2000"
+    assert leg.to_dict()["label"] == "Wi-Fi Repeater - UpstreamAP"
 
     agent.set_leg_fields("hotspot", {"label": "Co-operator's phone"})
     assert leg.to_dict()["label"] == "Co-operator's phone", (
@@ -458,7 +458,7 @@ def test_console_set_label_beats_the_automatic_one_immediately(tmp_path, monkeyp
 
     # Clearing the override hands the automatic label straight back, same call.
     agent.set_leg_fields("hotspot", {"label": None})
-    assert leg.to_dict()["label"] == "Wi-Fi Repeater - M2000"
+    assert leg.to_dict()["label"] == "Wi-Fi Repeater - UpstreamAP"
 
 
 def test_unassociated_leg_never_shows_unknown_or_a_stale_ssid_end_to_end(tmp_path, monkeypatch):
@@ -469,13 +469,13 @@ def test_unassociated_leg_never_shows_unknown_or_a_stale_ssid_end_to_end(tmp_pat
     leg = agent.paths[0]
     monkeypatch.setattr(agent_mod.net, "list_links", lambda: [_Link("apcli0")])
     monkeypatch.setattr(agent_mod.net, "wan_gateways", lambda: {"apcli0": "10.3.0.1"})
-    monkeypatch.setattr(agent_mod.wifi_uci, "station_info", lambda i: _station("M2000"))
+    monkeypatch.setattr(agent_mod.wifi_uci, "station_info", lambda i: _station("UpstreamAP"))
 
     agent.match_interfaces()
     agent.apply_auto_labels()
-    assert leg.to_dict()["label"] == "Wi-Fi Repeater - M2000"
+    assert leg.to_dict()["label"] == "Wi-Fi Repeater - UpstreamAP"
 
-    # The radio drops association - same shape apcli0 reports live on suzu.
+    # The radio drops association - same shape apcli0 reports live on the travel router.
     monkeypatch.setattr(
         agent_mod.wifi_uci, "station_info",
         lambda i: wifi_uci.StationInfo(mode="Client", ssid=None,
@@ -486,5 +486,5 @@ def test_unassociated_leg_never_shows_unknown_or_a_stale_ssid_end_to_end(tmp_pat
 
     label = leg.to_dict()["label"]
     assert label != "unknown"
-    assert label != "Wi-Fi Repeater - M2000", "a stale SSID from the old association leaked through"
+    assert label != "Wi-Fi Repeater - UpstreamAP", "a stale SSID from the old association leaked through"
     assert label == "Phone hotspot", "falls back to the configured default, not a made-up value"

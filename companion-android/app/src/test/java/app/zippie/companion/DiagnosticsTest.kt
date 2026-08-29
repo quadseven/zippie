@@ -46,9 +46,9 @@ class DiagnosticsTest {
     /** The distinction the whole type exists for. */
     @Test
     fun `via router is not green and says it will not survive leaving`() {
-        val d = Diagnostics(tailnet = TailnetPath.ViaRouter("suzu"))
+        val d = Diagnostics(tailnet = TailnetPath.ViaRouter("travel-router"))
         val row = d.rows().first { it.label == "Tailnet" }
-        assertEquals("via suzu", row.value)
+        assertEquals("via travel-router", row.value)
         assertNotEquals(
             "reachable-only-here must not look identical to reachable-anywhere",
             Tone.GOOD, row.tone,
@@ -132,10 +132,10 @@ class DiagnosticsTest {
 
     @Test
     fun `a present resolver is named`() {
-        val d = Diagnostics(ssid = "Suzu", dhcpResolver = ResolverFact.Address("10.20.0.1"))
+        val d = Diagnostics(ssid = "TravelRouter", dhcpResolver = ResolverFact.Address("10.99.0.1"))
         val row = d.rows().first { it.label == "Network" }
-        assertEquals("Suzu", row.value)
-        assertEquals("DNS from DHCP: 10.20.0.1", row.hint)
+        assertEquals("TravelRouter", row.value)
+        assertEquals("DNS from DHCP: 10.99.0.1", row.hint)
     }
 
     // ----- failure kinds are named, not "failed"
@@ -208,7 +208,7 @@ class DiagnosticsTest {
 
     @Test
     fun `reachable only here is its own headline`() {
-        val d = Diagnostics(mdm = DiagnosticState.Ok(), tailnet = TailnetPath.ViaRouter("suzu"))
+        val d = Diagnostics(mdm = DiagnosticState.Ok(), tailnet = TailnetPath.ViaRouter("travel-router"))
         assertEquals("Reachable, but only on this network", d.headline)
     }
 
@@ -245,7 +245,7 @@ class TailnetRangeTest {
     fun `the cgnat range is recognised`() {
         assertTrue(DiagnosticsMeasurer.isTailnetV4("100.64.0.1"))
         assertTrue(DiagnosticsMeasurer.isTailnetV4("100.127.255.254"))
-        assertTrue(DiagnosticsMeasurer.isTailnetV4("100.80.232.120"))
+        assertTrue(DiagnosticsMeasurer.isTailnetV4("100.64.100.2"))
     }
 
     @Test
@@ -259,7 +259,7 @@ class TailnetRangeTest {
 
     @Test
     fun `unrelated and malformed addresses are rejected`() {
-        listOf("192.168.1.1", "10.20.0.1", "192.0.2.2", "", "100", "not.an.ip.x", "100.64.0.300")
+        listOf("192.168.1.1", "10.99.0.1", "192.0.2.2", "", "100", "not.an.ip.x", "100.64.0.300")
             .forEach { assertFalse("$it is not a tailnet address", DiagnosticsMeasurer.isTailnetV4(it)) }
     }
 

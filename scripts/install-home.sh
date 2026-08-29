@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install Zippie home exit server on Debian/Ubuntu (FiOS LAN host).
+# Install Zippie home exit server on Debian/Ubuntu (home LAN host).
 set -euo pipefail
 
 if [[ "${EUID}" -ne 0 ]]; then
@@ -20,7 +20,7 @@ systemctl daemon-reload
 
 echo
 echo "Installed zippie-home."
-echo "Initialize with your public DNS/IP (Dynamic DNS to FiOS):"
+echo "Initialize with your public DNS/IP (Dynamic DNS to the home public IP):"
 echo "  sudo zippie-home init --public-endpoint YOUR.DDNS.OR.IP"
 echo "  sudo zippie-home up"
 echo "  sudo systemctl enable --now zippie-home"
