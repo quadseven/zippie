@@ -262,3 +262,56 @@ def test_an_interface_with_no_address_is_not_adopted():
 def test_private_address_detection(addr, private):
     from zippie import net
     assert net.is_private_v4(addr) is private, addr
+
+
+# ---------------------------------------------------------------------------
+# The header-MAC rung has to REACH the transport (#2172).
+# ---------------------------------------------------------------------------
+#
+# Same class of defect as the two at the top of this file, and worse in kind. A
+# classifier knob that stops at PolicyConfig is a knob nobody can turn (#50); an
+# AUTH knob that stops there is a config file claiming the bond is
+# authenticated while the wire says otherwise. So the path from zippie.toml to
+# the running Transport is asserted at every joint.
+
+
+def test_auth_rung_parses_from_config():
+    cfg = parse_config(
+        {
+            "home": {"endpoint": "h.example", "server_public_key": "k"},
+            "policy": {"datapath": "packet", "auth_level": "require",
+                       "auth_key_file": "/etc/zippie/bond.key",
+                       "auth_peer_id": 9},
+            "paths": [{"name": "eth", "interface": "eth0"}],
+        }
+    )
+    assert cfg.policy.auth_level == "require"
+    assert cfg.policy.auth_key_file == "/etc/zippie/bond.key"
+    assert cfg.policy.auth_peer_id == 9
+
+
+def test_auth_defaults_to_off():
+    """The default has to be off in the CONFIG too, not just in Transport: a
+    router that says nothing about auth must keep the wire it has."""
+    cfg = parse_config(
+        {
+            "home": {"endpoint": "h.example", "server_public_key": "k"},
+            "policy": {"datapath": "packet"},
+            "paths": [{"name": "eth", "interface": "eth0"}],
+        }
+    )
+    assert cfg.policy.auth_level == "off"
+    assert cfg.policy.auth_key_file == ""
+
+
+def test_a_misspelled_rung_fails_loud():
+    """A typo that silently meant "off" would look exactly like a working
+    rollout, so it must stop the agent at config load."""
+    with pytest.raises(ValueError):
+        parse_config(
+            {
+                "home": {"endpoint": "h.example", "server_public_key": "k"},
+                "policy": {"datapath": "packet", "auth_level": "requrie"},
+                "paths": [{"name": "eth", "interface": "eth0"}],
+            }
+        )

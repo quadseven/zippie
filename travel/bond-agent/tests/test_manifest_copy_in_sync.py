@@ -49,6 +49,7 @@ PKG_CONFIGMAP = "zippie-transport-pkg"
 PKG_FILE_PREFIX = "zippie-pkg/"
 PKG_MODULES = [
     "__init__.py",
+    "auth.py",
     "classify.py",
     "datapath.py",
     "home_transport.py",

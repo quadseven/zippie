@@ -38,6 +38,7 @@ import logging
 import threading
 from dataclasses import dataclass
 
+from zippie.auth import AuthLevel, build_identity, parse_auth_level
 from zippie.transport import LinkEndpoint, Transport
 
 log = logging.getLogger("zippie.home_transport")
@@ -62,6 +63,21 @@ class HomeTransportConfig:
     # SO_BINDTODEVICE target for the listening link (the WAN). None = any.
     wan_device: str | None = None
     reorder_deadline_ms: int = 250
+    # WHICH RUNG OF THE HEADER-MAC LADDER THIS END STANDS ON (auth.py).
+    #
+    # OFF IS THE DEFAULT, so a pod that is given no auth configuration behaves
+    # exactly as it does today - the same bytes on the wire, the same frames
+    # accepted. HOME MOVES FIRST at every step of the rollout, because home is
+    # reachable from a keyboard and the travel router may be in a moving car.
+    auth_level: AuthLevel = AuthLevel.OFF
+    # Path to the shared secret, mode 0600. A FILE and not an environment
+    # variable: an env var lands in /proc/<pid>/environ and in any crash dump,
+    # and in k8s it is also readable from the pod spec by anyone with `get pod`.
+    auth_key_file: str = ""
+    # The bond id both ends put on the wire. Must match the travel router's
+    # auth_peer_id or every frame fails to verify, with the same single error
+    # as a bad MAC.
+    auth_peer_id: int = 1
 
 
 def build_home_transport(
@@ -79,6 +95,14 @@ def build_home_transport(
         "reorder_deadline_ms": cfg.reorder_deadline_ms,
         "roam": True,
         "wg_peer": cfg.wg_server,
+        # Raises rather than falling back to unauthenticated if the level and
+        # the key file disagree, or the key file is group/world readable. A
+        # home end that silently dropped to `off` because its key was
+        # unreadable would look exactly like a working rollout while the
+        # travel router happily signed frames nobody was checking.
+        "auth_level": cfg.auth_level,
+        "identity": build_identity(
+            cfg.auth_level, cfg.auth_key_file, cfg.auth_peer_id),
     }
     if socket_factory is not None:
         kwargs["socket_factory"] = socket_factory
@@ -160,6 +184,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--wan-device", default=None,
                     help="SO_BINDTODEVICE target for the listening link")
     ap.add_argument("--reorder-deadline-ms", type=int, default=250)
+    ap.add_argument("--auth-level", default="off",
+                    help="header MAC rung: off, observe, sign or require. "
+                         "Move ONE rung at a time and home before the router; "
+                         "see zippie/auth.py")
+    ap.add_argument("--auth-key-file", default="",
+                    help="file holding the shared bond secret, mode 0600. "
+                         "Required above --auth-level=off")
+    ap.add_argument("--auth-peer-id", type=int, default=1,
+                    help="bond id on the wire; must match the travel router")
     ap.add_argument("--log-level", default="INFO")
     args = ap.parse_args(argv)
 
@@ -173,6 +206,12 @@ def main(argv: list[str] | None = None) -> int:
         wg_server=("127.0.0.1", args.wg_server_port),
         wan_device=args.wan_device,
         reorder_deadline_ms=args.reorder_deadline_ms,
+        # parse_auth_level refuses an unrecognised value rather than
+        # defaulting, because a typo that silently meant "off" would look
+        # exactly like a working rollout.
+        auth_level=parse_auth_level(args.auth_level),
+        auth_key_file=args.auth_key_file,
+        auth_peer_id=args.auth_peer_id,
     )
     log.info(
         "home transport starting: bind %s (redirect target), wg server %s",

@@ -294,6 +294,23 @@ class PolicyConfig:
     # routing churn. Travel side keeps fixed remotes (it dials out), so this is
     # off there and on at home. Harmless in route mode.
     transport_roam: bool = False
+    # HEADER MAC (auth.py, #2172). Which rung of the rollout ladder this end
+    # stands on, the file holding the shared secret, and the bond id both ends
+    # put on the wire.
+    #
+    # "off" IS THE DEFAULT AND CHANGES NOTHING. A router that does not set
+    # these emits and accepts exactly the bytes it always has, which is what
+    # makes deploying this build safe while the home end is still on its own
+    # old rung.
+    #
+    # WIRED END TO END ON PURPOSE. Transport has accepted a classifier
+    # argument since it was written and nothing passed one, so no zippie.toml
+    # key could reach it (#50). A security control that stops at PolicyConfig
+    # is a control nobody can turn on, so these three are read by config.py and
+    # passed by agent.start_transport, and a test asserts that they are.
+    auth_level: str = "off"
+    auth_key_file: str = ""
+    auth_peer_id: int = 1
     # Classifier knobs. Held as scalars rather than a ClassifierConfig so that
     # models.py stays free of a classify -> datapath import chain; agent.py
     # assembles the real ClassifierConfig from these.

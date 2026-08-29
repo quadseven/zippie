@@ -169,3 +169,67 @@ def test_disabling_duplication_changes_the_chosen_send_mode():
     off = Classifier(ClassifierConfig(duplicate_enabled=False))
     assert on.mode_for(small, paths_available=3) is SendMode.DUPLICATE
     assert off.mode_for(small, paths_available=3) is SendMode.SPRAY
+
+
+# ---------------------------------------------------------------------------
+# The same guard, for the header-MAC rung (#2172).
+# ---------------------------------------------------------------------------
+#
+# This module exists because a knob that stops at PolicyConfig is a knob nobody
+# can turn. For an AUTH knob that is worse than an inert experiment: the config
+# file would say the bond was authenticated while the wire stayed
+# unauthenticated, and the operator would believe the rollout had finished.
+# Deleting `auth_level=` or `identity=` from agent.py must turn these red.
+
+
+def test_start_transport_passes_the_auth_rung(captured):
+    """THE REGRESSION GUARD. Asserting on the VALUE, not just presence: passing
+    AuthLevel.OFF unconditionally would satisfy a bare `in kwargs` check while
+    leaving every frame unsigned."""
+    from zippie.auth import AuthLevel
+
+    seen = captured(_config())
+    assert "auth_level" in seen["kwargs"], (
+        "start_transport did not pass an auth level - the configured rung "
+        "would never reach the wire"
+    )
+    assert seen["kwargs"]["auth_level"] is AuthLevel.OFF
+    assert seen["kwargs"]["identity"] is None
+
+
+def test_the_configured_rung_and_key_reach_the_transport(captured, tmp_path):
+    """A router set to `sign` must actually sign. The identity is compared by
+    key id, so a transport built with different key material than the key file
+    holds fails here rather than as "the MAC never verifies" on a motorway."""
+    from zippie.auth import AuthLevel, new_bond_identity
+
+    secret = b"a-shared-bond-secret-of-ample-length"
+    key = tmp_path / "bond.key"
+    key.write_bytes(secret + b"\n")
+    key.chmod(0o600)
+
+    seen = captured(_config(auth_level="sign", auth_key_file=str(key),
+                            auth_peer_id=7))
+    assert seen["kwargs"]["auth_level"] is AuthLevel.SIGN
+    assert seen["kwargs"]["identity"].key_id() == new_bond_identity(
+        7, secret).key_id()
+    assert seen["kwargs"]["identity"].client_id == 7
+
+
+def test_a_rung_with_an_unreadable_key_stops_the_agent(captured, tmp_path):
+    """It must NOT fall back to unauthenticated. Falling back is precisely the
+    state the operator was trying to leave, and it would be silent."""
+    key = tmp_path / "bond.key"
+    key.write_bytes(b"a-shared-bond-secret-of-ample-length")
+    key.chmod(0o644)
+    with pytest.raises(PermissionError):
+        captured(_config(auth_level="require", auth_key_file=str(key)))
+
+
+def test_policy_default_matches_the_transport_default(captured):
+    """Two sets of defaults in two files drift. A disagreement here means a
+    router with no auth keys behaves differently depending on which layer
+    supplied the default - the subtle version of this module's bug."""
+    from zippie.auth import AuthLevel
+
+    assert _config().policy.auth_level == str(AuthLevel.OFF)

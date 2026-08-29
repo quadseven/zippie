@@ -146,6 +146,25 @@ spec:
               # staged rollout the transport owns only a spare port, so killing
               # the pod over it would take down route mode - which is carrying
               # real traffic - to protect something that is not yet.
+              # HEADER MAC ARGUMENTS, built once. A `case` and not
+              # ${VAR:+...}: an explicit auth_level of "off" is non-empty, so
+              # the `:+` form would have passed --auth-key-file alongside
+              # --auth-level=off, which auth.py refuses as a contradiction -
+              # and the transport would crashloop on the one setting an
+              # operator reaches for to turn the feature OFF.
+              AUTH_ARGS=""
+              case "${ZIPPIE_AUTH_LEVEL:-off}" in
+                ""|off) ;;
+                *) AUTH_ARGS="--auth-level ${ZIPPIE_AUTH_LEVEL}"
+                   AUTH_ARGS="${AUTH_ARGS} --auth-peer-id ${ZIPPIE_AUTH_PEER_ID:-1}"
+                   AUTH_ARGS="${AUTH_ARGS} --auth-key-file /etc/zippie-auth/bond.key"
+                   if [ ! -r /etc/zippie-auth/bond.key ]; then
+                     echo "[transport] auth_level=${ZIPPIE_AUTH_LEVEL} but no readable key at" \
+                          "/etc/zippie-auth/bond.key - create the zippie-bond-auth secret" \
+                          "or set auth_level=off. Refusing to run unauthenticated."
+                   fi ;;
+              esac
+
               if [ -n "${ZIPPIE_TRANSPORT_PORT:-}" ]; then
                 (
                   while :; do
@@ -153,6 +172,7 @@ spec:
                     PYTHONPATH=/pkg python3 -m zippie.home_transport \
                       --listen-port "$ZIPPIE_TRANSPORT_PORT" \
                       --wg-server-port "${ZIPPIE_HOME_PORTS%%,*}" \
+                      $AUTH_ARGS \
                       || echo "[transport] exited rc=$? - restarting in 5s"
                     sleep 5
                   done
@@ -194,11 +214,35 @@ spec:
             - name: ZIPPIE_TRANSPORT_PUBLIC_PORTS
               valueFrom:
                 configMapKeyRef: {name: zippie-home-config, key: transport_public_ports}
+            # HEADER MAC (#2172). Empty/absent = off, which is byte-for-byte
+            # the wire this pod speaks today - so applying this manifest does
+            # not begin the rollout, it only makes the rollout possible.
+            #
+            # HOME MOVES FIRST at every rung, because home is reachable from a
+            # keyboard and the travel router may be in a moving car. See
+            # zippie/auth.py for the ladder and the exact order.
+            - name: ZIPPIE_AUTH_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: zippie-home-config
+                  key: auth_level
+                  optional: true
+            - name: ZIPPIE_AUTH_PEER_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: zippie-home-config
+                  key: auth_peer_id
+                  optional: true
           volumeMounts:
             - {name: scripts, mountPath: /scripts, readOnly: true}
             # PYTHONPATH=/pkg, so this must land at /pkg/zippie for
             # `import zippie.home_transport` to resolve.
             - {name: transport-pkg, mountPath: /pkg/zippie, readOnly: true}
+            # The shared bond secret, as a FILE and never an env var: an env
+            # var lands in /proc/<pid>/environ, in any crash dump, and in the
+            # pod spec for anyone with `get pod`. 0400 because auth.py REFUSES
+            # to read a key that is group- or world-readable.
+            - {name: auth-key, mountPath: /etc/zippie-auth, readOnly: true}
             - {name: state, mountPath: /var/lib/zippie}
             # wg-quick writes/reads the interface config here. Kept on the same
             # PVC so a restart reuses the existing keys rather than regenerating.
@@ -227,5 +271,18 @@ spec:
           configMap: {name: zippie-home-script, defaultMode: 0555}
         - name: transport-pkg
           configMap: {name: zippie-transport-pkg, defaultMode: 0555}
+        # optional: true is what keeps this manifest applyable BEFORE the
+        # secret exists. A missing Secret must not stop the pod: this pod
+        # carries the household's traffic, and the auth rung defaults to off,
+        # so "no key yet" is the normal state until the rollout starts.
+        #
+        # Created out of band, never from git:
+        #   wg genpsk | kubectl -n zippie create secret generic zippie-bond-auth \
+        #       --from-file=bond.key=/dev/stdin
+        - name: auth-key
+          secret:
+            secretName: zippie-bond-auth
+            optional: true
+            defaultMode: 0400
         - name: state
           persistentVolumeClaim: {claimName: zippie-home-state}

@@ -63,6 +63,36 @@ idle_persistent_keepalive = 25
 failover_rtt_ms = 1500
 degraded_rtt_ms = 250
 
+# HEADER MAC (#2172). Authenticates every frame of the bond with a shared
+# symmetric key, closing the tunnel hijack, the ~80x NACK reflector and the
+# stream-reset DoS that a public UDP port with no authentication allows.
+#
+# COMMENTED OUT, AND THAT IS THE CORRECT STATE UNTIL THE HOME END HAS MOVED.
+# Absent means auth_level = "off", which is byte-for-byte the wire this router
+# speaks today. THE TWO ENDS MAY NEVER BE MORE THAN ONE RUNG APART, and home
+# moves first at every step - see travel/bond-agent/zippie/auth.py for the
+# ladder (off -> observe -> sign -> require) and the exact order.
+#
+# NO SECRET LIVES IN THIS FILE, deliberately, and no placeholder either. The
+# key is a PATH to a 0600 file the router already holds, so there is nothing
+# for scripts/deploy-openwrt.sh to substitute and nothing to leak when this
+# repo goes public - a strictly better shape than the server_public_key
+# placeholder above, which had to grow a render step after it shipped
+# literally and took the router off the network.
+#
+# Create the file on the router, once, with the SAME bytes as the home end's
+# zippie-bond-auth secret:
+#     wg genpsk > /etc/zippie/bond.key && chmod 600 /etc/zippie/bond.key
+# The agent refuses to start if that file is readable by anyone else.
+#
+# BEFORE MOVING THIS ROUTER TO "sign": drop the tunnel MTU by 12 bytes. A
+# signed frame carries a 29-byte header instead of 17, and a tunnel left at
+# the old size drops full-length packets ONLY, which presents as a routing
+# fault rather than as an MTU problem.
+# auth_level = "observe"
+# auth_key_file = "/etc/zippie/bond.key"
+# auth_peer_id = 1
+
 # GbE WAN - whatever the WAN port is plugged into (hotel ethernet, another
 # router). eth0 is this platform WAN port name.
 [[paths]]
