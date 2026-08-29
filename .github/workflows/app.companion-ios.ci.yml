@@ -49,7 +49,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Same gate the Android workflows already carry, and for the same reason:
+  # this workflow triggers on `pull_request` and its jobs run on the
+  # self-hosted macOS runner, which sits inside the home network. Without
+  # this, going public means a fork PR executes arbitrary code there. The
+  # gate itself runs on the k8s ARC pool, NOT the Mac mini, so an untrusted
+  # PR never reaches that machine at all.
+  guard:
+    name: trust gate (collaborator-only on self-hosted)
+    runs-on: arc-zippie
+    timeout-minutes: 2
+    steps:
+      - name: "Block untrusted (non-collaborator) PRs on self-hosted runner"
+        if: ${{ github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) }}
+        run: |
+          echo "::error::PR validation restricted to repo collaborators."
+          exit 1
+
   kit:
+    needs: guard
     name: kit tests
     runs-on: [self-hosted, macOS, ARM64, mac-mini]
     timeout-minutes: 10
@@ -86,6 +104,7 @@ jobs:
             || { echo "::error::no tests actually executed"; exit 1; }
 
   app:
+    needs: guard
     name: app builds
     # RUNS ON EVERY PR now that it builds what it links (#94). Until then this
     # job was dispatch-only because the tunnel target links

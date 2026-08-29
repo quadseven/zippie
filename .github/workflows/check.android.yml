@@ -78,7 +78,11 @@ jobs:
           # VALIDATE the ambient value, never overwrite it. The runner's own
           # .env exports a neutral ANDROID_HOME; re-deriving one here would
           # clobber it and publish whatever path we computed.
-          : "${ANDROID_HOME:?ANDROID_HOME is not set - the self-hosted runner's .env should export it}"
+          # NOTE: no apostrophe in this message. Bash parses the `word` in
+          # ${VAR:?word} for quoting even inside double quotes, so a lone
+          # apostrophe is an unterminated single quote and the whole script
+          # dies with "unexpected EOF" before it ever runs.
+          : "${ANDROID_HOME:?ANDROID_HOME is not set - the self-hosted runner .env must export it}"
           test -d "$ANDROID_HOME" \
             || { echo "::error::Android SDK not found at the configured ANDROID_HOME"; exit 1; }
           echo "Android SDK present."
