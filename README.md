@@ -19,6 +19,16 @@ lives in [muster](https://github.com/quadseven/muster).
                       ("be at home" SSID)
 ```
 
+## Start here
+
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - what the system is, why the problem
+  is hard, and how a packet moves from a client on the travel LAN to the home
+  exit and back.
+- **[DECISIONS.md](DECISIONS.md)** - the decisions that shaped it, each with the
+  incident that caused it.
+- **[CONTEXT.md](CONTEXT.md)** - the vocabulary. `leg`, `bond`, `carrying` and
+  `announce` mean exactly one thing each, in the code and in the logs.
+
 ## Current state
 
 Zippie runs a phone-inclusive multipath bond on a GL-MT3000 travel router
