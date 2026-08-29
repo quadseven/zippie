@@ -487,3 +487,50 @@ def test_the_module_is_not_imported_by_the_agent():
         if source.name != "musterwrt.py" and "musterwrt" in source.read_text()
     ]
     assert importers == [], f"{importers} import musterwrt; it must stay unarmed"
+
+
+# --------------------------------------------------------------------------
+# Where this device is willing to send its identity.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///etc/shadow",
+        "file:///etc/zippie/keys.json",
+        "ftp://example.invalid/x",
+        "gopher://example.invalid/x",
+        "//example.invalid/x",
+        "/etc/passwd",
+    ],
+)
+def test_only_https_may_carry_this_device_s_identity(url):
+    """`urlopen` opens `file:` as happily as it opens https (ruff S310).
+
+    The URL comes from configuration, and this request carries the device's
+    certificate and a signed nonce. A `file:` base_url would turn this module
+    into a local file reader; a plain `http:` one would put the proof on the
+    wire in clear for anybody on the path.
+    """
+    with pytest.raises(musterwrt.Refused, match="https"):
+        musterwrt._checked_url(url)
+
+
+def test_plain_http_to_a_remote_host_is_refused():
+    """The one that would look like it works."""
+    with pytest.raises(musterwrt.Refused, match="https"):
+        musterwrt._checked_url("http://enroll.muster.casa/v1/auth/challenge")
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "[::1]"])
+def test_loopback_over_http_is_allowed_and_only_loopback(host):
+    """The exception exists so the User-Agent behaviour can be proven against a
+    real HTTP server without a certificate, and it cannot help anybody: a
+    request to loopback is not observable by someone who is not already on the
+    box."""
+    assert musterwrt._checked_url(f"http://{host}:8787/x")
+
+
+def test_https_is_always_allowed():
+    assert musterwrt._checked_url("https://enroll.muster.casa/v1/device/config")

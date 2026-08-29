@@ -102,6 +102,7 @@ import re
 import subprocess
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -395,16 +396,49 @@ def sign_nonce(nonce: str, key_path: Path) -> str:
     return base64.b64encode(der).decode("ascii")
 
 
+# Where a device may be told to send its identity. HTTPS, or loopback.
+#
+# `urlopen` HAPPILY OPENS `file:` (ruff S310), and the URL it is given here comes
+# from configuration - so a base_url of `file:///etc/shadow` would make this
+# module a local file reader, and a plain `http://` one would put the device's
+# certificate and a signed nonce on the wire in clear. Neither is a scheme this
+# client should be able to reach by accident.
+#
+# LOOPBACK OVER http IS ALLOWED, AND ONLY LOOPBACK. It is what lets the
+# User-Agent behaviour be tested against a real HTTP server without a
+# certificate, and a request to 127.0.0.1 cannot be observed by anybody who is
+# not already on the box.
+_ALLOWED_LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+def _checked_url(url: str) -> str:
+    """The URL, or Refused. Never anything `urlopen` would treat as a file."""
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme == "https":
+        return url
+    if parsed.scheme == "http" and parsed.hostname in _ALLOWED_LOOPBACK:
+        return url
+    raise Refused(
+        f"muster must be reached over https; refusing to open {parsed.scheme or 'a schemeless'} "
+        f"URL. This request carries this device's certificate and a signed nonce."
+    )
+
+
 def _post(url: str, payload: dict, timeout: float = 20.0) -> dict:
     """A JSON POST that Cloudflare will let through. See USER_AGENT."""
-    request = urllib.request.Request(
-        url,
+    # S310 is suppressed on this call and on the urlopen below. `_checked_url`
+    # has already refused every scheme but https - and http on loopback - which
+    # is the property the rule asks about; it cannot see through a function call.
+    # (A comment must not START with the word noqa here: ruff reads that as a
+    # blanket directive on the line, which RUF100 then reports as unused.)
+    request = urllib.request.Request(  # noqa: S310
+        _checked_url(url),
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
             return json.load(response)
     except urllib.error.HTTPError as status:
         detail = status.read()[:400].decode("utf-8", "replace")
