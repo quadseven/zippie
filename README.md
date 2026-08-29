@@ -28,6 +28,9 @@ lives in [muster](https://github.com/quadseven/muster).
   incident that caused it.
 - **[CONTEXT.md](CONTEXT.md)** - the vocabulary. `leg`, `bond`, `carrying` and
   `announce` mean exactly one thing each, in the code and in the logs.
+- **[AGENTS.md](AGENTS.md)** - read this before changing anything. The router's
+  only uplink is the bond this code implements, so a broken change removes the
+  way to fix it; that file is the short list of what has already gone wrong.
 
 ## Current state
 

@@ -251,7 +251,7 @@ REMOVED on 2026-08-08 - the stick is not coming back, and a configured leg
 whose interface never appears is a permanent phantom of exactly the kind #34
 existed to delete. The ethernet peer is `10.66.0.10/32`, provisioned by
 hand at the home end (wg set + `pb-home0.conf` + `server.json` in the
-`zippie-home-state` PVC on the srv-unraid worker) because `zippie_home.py`
+`zippie-home-state` PVC on the LAN worker node) because `zippie_home.py`
 has no add-path command - worth adding one before the next path.
 
 The router's GL LAN was renumbered 2026-07-30: LAN `10.9.0.1/24`, guest
