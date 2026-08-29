@@ -376,3 +376,40 @@ def test_the_deploy_workflow_leaves_time_for_the_pretest():
         f"deploy.suzu.yml allows {budget.group(1)} minutes; the pre-test alone "
         f"can wait {default_wait + 2}"
     )
+
+
+def test_the_crontab_count_is_read_without_a_local_fallback(deploy):
+    """`grep -c` EXITS 1 WHEN IT COUNTS ZERO, and that is the bug this pins.
+
+    It prints `0` and exits non-zero; ssh hands that exit status back; a
+    `|| echo 0` on the local side then appends a second `0`. The variable holds
+    "0\\n0", every `== "0"` comparison is false, and a correctly disarmed
+    rollback reads as one that is still armed.
+
+    That defect shipped in the original final-disarm check - it printed
+    "WARNING: a rollback line is still armed" after every successful deploy that
+    had correctly disarmed one - and it was found on the live router on
+    2026-08-29 by the pre-test, before a single byte had been copied.
+
+    The fallback belongs INSIDE the remote command, so ssh exits 0 and the only
+    thing on stdout is the count.
+    """
+    code = _code(deploy)
+    assert 'grep -c deploy-rollback" || echo 0' not in code, (
+        "a local `|| echo 0` after a remote `grep -c` appends a second count"
+    )
+    counter = re.search(
+        r"^rollback_cron_lines\(\) \{(.*?)^\}", code, re.MULTILINE | re.DOTALL
+    )
+    assert counter, "the crontab count is not a single shared function"
+    body = counter.group(1)
+    assert "grep -c deploy-rollback || true" in body, (
+        "the zero-match fallback must run on the ROUTER, not after ssh returns"
+    )
+    assert "tr -d" in body, (
+        "the count is compared as a string, so its whitespace has to go"
+    )
+    # And nobody else may count it by hand again.
+    assert code.count("grep -c deploy-rollback") == 1, (
+        "a second hand-rolled count is a second chance to make the same mistake"
+    )

@@ -404,13 +404,33 @@ arm_rollback() {
   ARMED_LINE="${armed}"
 }
 
+# How many rollback lines are in the router's crontab right now.
+#
+# `|| true` IS INSIDE THE REMOTE COMMAND, AND THAT IS THE WHOLE POINT. `grep -c`
+# prints `0` and exits 1 when it matches nothing, ssh hands that exit status
+# back, and a `|| echo 0` on THIS side then appends a second `0` to the `0` grep
+# already printed. The variable holds "0\n0", every `== "0"` test is false, and
+# a correctly disarmed rollback reads as one that is still armed.
+#
+# Found 2026-08-29 by the pre-test, on the live router, before a single byte of
+# the deploy had been copied - which is precisely the job the pre-test exists to
+# do. The same defect was in the final disarm check before this refactor, where
+# it printed "WARNING: a rollback line is still armed" after every successful
+# deploy that had correctly disarmed one.
+#
+# `tr -d` because `wc`/`grep` output carries whitespace that a string comparison
+# does not forgive. An ssh that fails outright yields "", which compares unequal
+# to "0" and is therefore read as STILL ARMED - the safe direction.
+rollback_cron_lines() {
+  ssh_run "crontab -l 2>/dev/null | grep -c deploy-rollback || true" 2>/dev/null \
+    | tr -d '[:space:]'
+}
+
 # Take the one-shot back out. Returns non-zero if a line survived, because a
 # rollback still armed after a successful deploy will revert it.
 disarm_rollback() {
-  local still
   ssh_run "crontab -l 2>/dev/null | grep -v deploy-rollback | crontab -; /etc/init.d/cron reload" || true
-  still="$(ssh_run "crontab -l 2>/dev/null | grep -c deploy-rollback" || echo 0)"
-  [[ "${still}" == "0" ]]
+  [[ "$(rollback_cron_lines)" == "0" ]]
 }
 
 say "arming the rollback"
@@ -499,7 +519,7 @@ if [[ "${PRETEST}" -eq 1 ]]; then
   NOTHING has been changed."
   echo "  logread: $(ssh_run "logread 2>/dev/null | grep zippie-rollback | tail -1")"
 
-  still_armed="$(ssh_run "crontab -l 2>/dev/null | grep -c deploy-rollback" || echo 0)"
+  still_armed="$(rollback_cron_lines)"
   [[ "${still_armed}" == "0" ]] \
     || die "the rollback fired but did not disarm itself (${still_armed} lines left), so
   the next cron tick would start a second restore over the first. NOTHING has
