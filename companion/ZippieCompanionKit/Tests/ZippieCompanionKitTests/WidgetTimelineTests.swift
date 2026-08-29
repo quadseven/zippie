@@ -176,8 +176,8 @@ final class WidgetTimelineTests: XCTestCase {
     // MARK: - router naming parity with the rest of the app (#44 follow-up)
 
     func testRouterNameThreadsIntoTheDetailSentence() {
-        let content = WidgetTimeline.build(report: report { _ in }, now: now, router: "suzu")
-        XCTAssertTrue(content.detail.hasPrefix("suzu "), content.detail)
+        let content = WidgetTimeline.build(report: report { _ in }, now: now, router: "travel-router")
+        XCTAssertTrue(content.detail.hasPrefix("travel-router "), content.detail)
     }
 
     func testNoRouterNameFallsBackToTheGenericPhrase() {

@@ -20,7 +20,9 @@
 # whether or not anything here is still alive.
 set -uo pipefail
 ROUTER=192.0.2.30
-PHONE_IP=10.20.0.174
+# No default: a stale address here silently traces a phone that is not
+# there, and every reading comes back empty and believable.
+PHONE_IP="${ZIPPIE_PHONE_IP:?set ZIPPIE_PHONE_IP to the LAN address of the phone under test}"
 AWAY_S="${AWAY_S:-120}"
 WT="$(cd "$(dirname "$0")/.." && pwd)"
 export PATH="$PATH:/opt/homebrew/bin"

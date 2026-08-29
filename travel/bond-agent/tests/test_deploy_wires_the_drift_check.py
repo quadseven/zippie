@@ -119,10 +119,10 @@ def test_the_fetch_carries_a_token(drift):
 
 
 def test_the_deploy_checks_the_router_actually_holds_the_token(deploy):
-    """THE FOURTH SILENCER, found 2026-08-19 by reading suzu's env.
+    """THE FOURTH SILENCER, found 2026-08-19 by reading the travel router's env.
 
     #232 shipped the script, scheduled it, and fixed its paths - and it still
-    could not answer, because `/etc/zippie/env` on suzu holds only DD_API_KEY,
+    could not answer, because `/etc/zippie/env` on the travel router holds only DD_API_KEY,
     DD_SITE and PATHBOND_TAGS. No ZIPPIE_GH_TOKEN, against a private repo, so
     every 04:17 run 404s into the credential branch and exits 3 having produced
     no drift result at all.
@@ -143,7 +143,7 @@ def test_the_missing_token_warning_does_not_fail_the_deploy(deploy):
 
     This is an observability credential, not the datapath. Failing the deploy of
     a working bond over it would teach the operator to reach for --skip flags,
-    and a deploy people avoid running is exactly how main and suzu drifted apart
+    and a deploy people avoid running is exactly how main and the travel router drifted apart
     in the first place - the thing this whole check exists to catch.
     """
     block = deploy.split('if [[ "${drift_token_present}" -eq 0 ]]; then', 1)

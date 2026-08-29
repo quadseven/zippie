@@ -203,7 +203,7 @@ class _L:
 
 def test_any_match_never_adopts_the_lan_bridge():
     """THE SAFETY RAIL. "Has an address and is UP" also describes br-lan, which
-    on suzu carries 10.20.0.1. Adopting it bonds the router through its own
+    on the travel router carries 10.99.0.1. Adopting it bonds the router through its own
     LAN - a loop whose traffic exits via the very uplinks being balanced."""
     from zippie.agent import BondAgent
     links = [_L("br-lan"), _L("apclix0", ssid="_HOTEL")]
@@ -246,7 +246,7 @@ def test_an_interface_with_no_address_is_not_adopted():
 
 @pytest.mark.parametrize("addr,private", [
     ("192.168.3.95", True),    # the actual hijacked answer, 2026-08-02
-    ("10.20.0.1", True),
+    ("10.99.0.1", True),
     ("172.16.4.4", True),
     ("172.32.4.4", False),     # just OUTSIDE 172.16/12 - the classic off-by-one
     ("100.100.100.100", True),  # CGNAT / tailscale

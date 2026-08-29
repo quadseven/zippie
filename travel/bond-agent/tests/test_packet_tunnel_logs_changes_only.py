@@ -1,6 +1,6 @@
 """The packet-mode tunnel logs transitions, not the fact that it exists.
 
-MEASURED ON SUZU 2026-08-09 (#87), minutes after deploying the #81 shedding fix
+MEASURED ON THE TRAVEL ROUTER 2026-08-09 (#87), minutes after deploying the #81 shedding fix
 and being unable to find the events it had just produced.
 
 `logread` was two messages and almost nothing else - 154 of 158 zippie lines,
@@ -159,7 +159,7 @@ def test_going_quiet_then_changing_still_logs(tmp_path, monkeypatch, caplog):
 # THE SAME DISEASE ONE MODULE OVER, found by deploying the fix above and
 # reading what was left.
 #
-# With the two packet-mode lines silenced, suzu's log went from 161 lines in
+# With the two packet-mode lines silenced, the travel router's log went from 161 lines in
 # 1m53s to 6 lines in 5m20s - and FOUR of the remaining five were this:
 #
 #     20:44:51 INFO zippie.net: firewall: tunnels pbz0 masqueraded, forwarded

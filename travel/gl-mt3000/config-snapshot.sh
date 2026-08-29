@@ -1,5 +1,5 @@
 #!/bin/sh
-# Save suzu's config as known-good, or put it back.
+# Save the travel router's config as known-good, or put it back.
 #
 #   config-snapshot.sh save [reason]   - snapshot the CURRENT config
 #   config-snapshot.sh revert          - restore the last known-good snapshot

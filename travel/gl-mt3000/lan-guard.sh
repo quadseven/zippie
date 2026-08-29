@@ -1,5 +1,5 @@
 #!/bin/sh
-# Auto-revert suzu to the last known-good config when the LAN stops being
+# Auto-revert the travel router to the last known-good config when the LAN stops being
 # usable by clients. Runs from cron.
 #
 # CONSERVATIVE ON PURPOSE. watchdog.sh's own comments record what happens when
@@ -64,9 +64,9 @@ log "check $n/$FAILS_NEEDED failed: $out"
 #
 # On a cold boot with a phone uplink, "the resolver answers nothing and the
 # captive check gets no response" is the NORMAL starting state, not a broken
-# config. Measured on suzu 2026-08-16, router clock UTC-4:
+# config. Measured on the travel router 2026-08-16, router clock UTC-4:
 #
-#   17:48:15  check 1/3 failed: resolver-10.20.0.1-answers-nothing
+#   17:48:15  check 1/3 failed: resolver-10.99.0.1-answers-nothing
 #   17:48:45  link up: pixel-6a-a554        <- the leg the phone had just formed
 #   17:52:15  check 3/3 failed -> reverting to known-good config
 #   17:52:22  zippie-stop: removed tunnel(s): pbz0   <- leg thrown away

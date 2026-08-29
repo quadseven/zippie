@@ -105,7 +105,7 @@ class _FakeRouter(ThreadingHTTPServer):
 
     @property
     def config(self) -> dict:
-        return {"name": "suzu", "label": "suzu (fake)",
+        return {"name": "travel-router", "label": "the travel router (fake)",
                 "status_url": f"http://127.0.0.1:{self.server_address[1]}/api/status"}
 
 
@@ -182,7 +182,7 @@ def test_status_is_answered_without_touching_the_router(router, hub_at):
     """
     router.delay_s = SLOW_S
     hostport, reg = hub_at([router.config])
-    reg.note_router("suzu", ROUTER_STATUS)  # what poll_routers stores
+    reg.note_router("travel-router", ROUTER_STATUS)  # what poll_routers stores
 
     t0 = time.monotonic()
     status, headers, body = _get(hostport, "/api/status")
@@ -211,7 +211,7 @@ def test_the_poller_is_what_fills_the_cache(router, hub_at):
     poller.start()
     try:
         deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and reg.router_sample("suzu")[0] is None:
+        while time.monotonic() < deadline and reg.router_sample("travel-router")[0] is None:
             time.sleep(0.01)
     finally:
         stop.set()
@@ -231,7 +231,7 @@ def test_the_poller_is_what_fills_the_cache(router, hub_at):
 def test_the_answer_says_how_old_it_is(router, hub_at):
     """Cached is fine; cached-and-silent-about-it is not."""
     hostport, reg = hub_at([router.config])
-    reg.note_router("suzu", ROUTER_STATUS)
+    reg.note_router("travel-router", ROUTER_STATUS)
 
     status, headers, body = _get(hostport, "/api/status")
     assert status == 200
@@ -257,8 +257,8 @@ def test_a_router_that_stopped_answering_is_reported_unreachable(router, hub_at)
     the failure mode the module docstring exists to forbid.
     """
     hostport, reg = hub_at([router.config])
-    reg.note_router("suzu", ROUTER_STATUS)
-    reg.note_router("suzu", None)  # the next poll failed
+    reg.note_router("travel-router", ROUTER_STATUS)
+    reg.note_router("travel-router", None)  # the next poll failed
 
     status, headers, body = _get(hostport, "/api/status")
 
@@ -280,7 +280,7 @@ def test_a_sample_the_poller_stopped_refreshing_expires(router, hub_at, monkeypa
     """
     monkeypatch.setattr(hub, "status_max_age_s", lambda count: 0.05)
     hostport, reg = hub_at([router.config])
-    reg.note_router("suzu", ROUTER_STATUS)
+    reg.note_router("travel-router", ROUTER_STATUS)
     time.sleep(0.12)
 
     status, headers, body = _get(hostport, "/api/status")
@@ -317,7 +317,7 @@ def test_a_status_that_is_not_an_object_is_a_failed_poll(router, hub_at, monkeyp
             return ["not", "a", "status"]
 
     hostport, reg = hub_at([router.config])
-    reg.note_router("suzu", ROUTER_STATUS)
+    reg.note_router("travel-router", ROUTER_STATUS)
     monkeypatch.setattr(hub.json, "load", _NotAnObject.load)
     stop = threading.Event()
     poller = threading.Thread(target=hub.poll_routers,
@@ -325,13 +325,13 @@ def test_a_status_that_is_not_an_object_is_a_failed_poll(router, hub_at, monkeyp
     poller.start()
     try:
         deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and reg.router_sample("suzu")[0] is not None:
+        while time.monotonic() < deadline and reg.router_sample("travel-router")[0] is not None:
             time.sleep(0.01)
     finally:
         stop.set()
         poller.join(timeout=5)
 
-    assert reg.router_sample("suzu")[0] is None
+    assert reg.router_sample("travel-router")[0] is None
     status, _headers, _body = _get(hostport, "/api/status")
     assert status == 502
 
@@ -356,7 +356,7 @@ def test_live_is_opt_in_and_reaches_the_router(router, hub_at):
     handler that serves the same document either way.
     """
     hostport, reg = hub_at([router.config])
-    reg.note_router("suzu", ROUTER_STATUS)
+    reg.note_router("travel-router", ROUTER_STATUS)
 
     status, headers, body = _get(hostport, "/api/status?live=1")
     assert status == 200
@@ -373,7 +373,7 @@ def test_live_is_opt_in_and_reaches_the_router(router, hub_at):
 def test_anything_but_an_explicit_live_uses_the_cache(router, hub_at, query):
     """A typo must not silently put a client back on the 5.4 s path."""
     hostport, reg = hub_at([router.config])
-    reg.note_router("suzu", ROUTER_STATUS)
+    reg.note_router("travel-router", ROUTER_STATUS)
 
     status, headers, body = _get(hostport, "/api/status" + query)
 
@@ -390,7 +390,7 @@ def test_anything_but_an_explicit_live_uses_the_cache(router, hub_at, query):
 def test_series_is_still_fetched_because_nothing_caches_it(router, hub_at):
     """The poller does not collect series, so there is nothing to serve from."""
     hostport, reg = hub_at([router.config])
-    reg.note_router("suzu", ROUTER_STATUS)
+    reg.note_router("travel-router", ROUTER_STATUS)
 
     status, headers, body = _get(hostport, "/api/series")
 
@@ -407,7 +407,7 @@ def test_series_keeps_the_since_cursor(router, hub_at):
     silently refetching the whole hour is invisible until somebody measures it.
     """
     hostport, reg = hub_at([router.config])
-    reg.note_router("suzu", ROUTER_STATUS)
+    reg.note_router("travel-router", ROUTER_STATUS)
 
     status, headers, body = _get(hostport, "/api/series?since=1754600000000")
 
@@ -426,7 +426,7 @@ def test_the_routers_gzip_is_asked_for_and_passed_through(router, hub_at):
     reaches the router AND that what comes back is handed on intact.
     """
     hostport, reg = hub_at([router.config])
-    reg.note_router("suzu", ROUTER_STATUS)
+    reg.note_router("travel-router", ROUTER_STATUS)
 
     status, headers, body = _get(hostport, "/api/series",
                                  headers={"Accept-Encoding": "gzip, deflate"})
@@ -450,7 +450,7 @@ def test_a_client_that_cannot_gzip_gets_plain_json(router, hub_at):
     gzip stream because the hop upstream could have used one.
     """
     hostport, reg = hub_at([router.config])
-    reg.note_router("suzu", ROUTER_STATUS)
+    reg.note_router("travel-router", ROUTER_STATUS)
 
     status, headers, body = _get(hostport, "/api/series")
 

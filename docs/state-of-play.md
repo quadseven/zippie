@@ -2,7 +2,7 @@
 
 Where this actually stands after the first night of running it against real
 links, as opposed to what the design intends. Everything below was measured on
-the GL-MT3000 ("Suzu"). NOTE, 2026-08-08: the Google Fi USB dongle referenced
+the GL-MT3000 ("TravelRouter"). NOTE, 2026-08-08: the Google Fi USB dongle referenced
 throughout this document is gone and its leg was removed from the config. Read
 any dongle measurement below as history.
 
@@ -176,7 +176,7 @@ payload 1263 bytes, two legs, range over three runs each:
 | upstream | 66,759 - 73,611 pkt/s | 82,179 - 83,667 pkt/s |
 | poll syscalls per datagram | 1.00 | 0.03 |
 
-The skewed rows are the ones that matter: suzu's legs measured 33 ms, 73 ms
+The skewed rows are the ones that matter: the travel router's legs measured 33 ms, 73 ms
 and 334 ms on 2026-08-07, so a sprayed stream there is never in order and the
 reorder buffer is never empty. Legs "in step" is a condition that does not
 occur on a real bond, and note how WIDE its before-range is - it collapses
@@ -185,7 +185,7 @@ That bimodality is the bug: nothing is wrong until a backlog forms, and then
 everything is.
 
 **This is a loopback result on a laptop, not a field result.** Nothing has been
-deployed to suzu and #22 stays open until an on-device iperf says otherwise.
+deployed to the travel router and #22 stays open until an on-device iperf says otherwise.
 What the harness can prove is the shape of the cost, not the router's absolute
 number - run it on the device to get that.
 
@@ -239,7 +239,7 @@ Recorded in code comments and in memory; repeated here so they are findable.
 matches both station radios (apcli0 2.4GHz, apclix0 5GHz), so it is only ever
 correct while just one of them is associated. The fix - one explicit path per
 interface - is tracked at `travel/gl-mt3000/zippie.toml`, but deploying it
-means restarting the agent on suzu while it is someone's only internet, so
+means restarting the agent on the travel router while it is someone's only internet, so
 that is a deliberate operator step, not something this commit does. Until
 that deploy happens, the router is still running exactly what this paragraph
 describes.

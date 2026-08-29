@@ -157,7 +157,7 @@ work.
 
 **One thing managed configuration cannot reach**, and it is worth knowing before
 somebody loses an afternoon to it: `res/xml/network_security_config.xml` pins
-`10.20.0.1` as a cleartext exemption, and it is a compiled resource. Push a
+`10.99.0.1` as a cleartext exemption, and it is a compiled resource. Push a
 console at any other private address and the app stores it, displays it, and
 then cannot talk to it - failing with "Cleartext HTTP traffic not permitted",
 which reads like a console bug and is not. That is #156, and the clean fix is

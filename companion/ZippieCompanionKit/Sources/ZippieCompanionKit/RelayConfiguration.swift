@@ -56,7 +56,7 @@ public struct RelayConfiguration: Sendable, Equatable, Codable {
         public static let routerSSID = "routerSSID"
     }
 
-    /// The home transport's public endpoint - the same host:port suzu's own
+    /// The home transport's public endpoint - the same host:port the travel router's own
     /// legs spray to.
     public var homeHost: String
     public var homePort: UInt16

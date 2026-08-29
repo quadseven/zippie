@@ -2,7 +2,7 @@
 
 ## Day 0 — home (30–60 min)
 
-1. Pick always-on host on FiOS LAN (call it `bond-home`).
+1. Pick always-on host on the home LAN (call it `bond-home`).
 2. Install:
 
 ```bash
@@ -70,7 +70,7 @@ Full status, measurements and known-broken list:
 ssh root@<router> 'sync; sync; (sleep 1; echo b > /proc/sysrq-trigger) >/dev/null 2>&1 &'
 ```
 
-On 2026-08-16 a graceful `reboot` took suzu down and it **never came back** -
+On 2026-08-16 a graceful `reboot` took the travel router down and it **never came back** -
 76 minutes, ended by a physical power cycle. `/proc/uptime` read 137 seconds
 immediately after recovery, so it had not completed the reboot at all; it hung
 in the shutdown sequence. An earlier graceful reboot the same day came back in
@@ -94,7 +94,7 @@ protects a running system, and the shutting-down window is exactly what failed.
 What hangs is still unattributed (zippie#175). Reproducing it costs a power
 cycle per attempt, so sysrq is the mitigation rather than the fix.
 
-Verified on suzu 2026-08-19: `kernel.sysrq = 1`, `/proc/sysrq-trigger` present.
+Verified on the travel router 2026-08-19: `kernel.sysrq = 1`, `/proc/sysrq-trigger` present.
 
 ## Trip checklist
 

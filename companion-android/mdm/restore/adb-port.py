@@ -96,7 +96,7 @@ def records(buf):
 
 
 def main():
-    lan = sys.argv[1] if len(sys.argv) > 1 else "10.20.0.1"
+    lan = sys.argv[1] if len(sys.argv) > 1 else "10.99.0.1"
     seconds = int(sys.argv[2]) if len(sys.argv) > 2 else 8
 
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

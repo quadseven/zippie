@@ -104,8 +104,9 @@ otherwise look exactly like one that took it.
 
 The SSM parameters created for this attempt
 (`/infra/android/mdm/gcp_project_id`, `/infra/android/mdm/enterprise_name`,
-`/infra/android/mdm/service_account`, plus `suzu_wifi_ssid` and
-`suzu_wifi_passphrase`) were not deleted here. They are orphaned by this
+`/infra/android/mdm/service_account`, plus the two `*_wifi_ssid` /
+`*_wifi_passphrase` parameters holding the router's own wifi credentials)
+were not deleted here. They are orphaned by this
 retirement; whether to remove or reuse them is a separate decision.
 
 Refs #120

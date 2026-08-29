@@ -214,9 +214,9 @@ def test_it_does_not_revert_when_nothing_is_carrying(rig):
     restoring the snapshot cannot fix anything - and it costs the leg that was
     still forming.
 
-    Measured on suzu 2026-08-16, router clock UTC-4:
+    Measured on the travel router 2026-08-16, router clock UTC-4:
 
-        17:48:15  check 1/3 failed: resolver-10.20.0.1-answers-nothing
+        17:48:15  check 1/3 failed: resolver-10.99.0.1-answers-nothing
         17:48:45  link up: pixel-6a-a554
         17:52:15  check 3/3 failed -> reverting to known-good config
         17:52:22  zippie-stop: removed tunnel(s): pbz0

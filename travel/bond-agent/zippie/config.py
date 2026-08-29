@@ -190,7 +190,7 @@ def parse_config(data: dict[str, Any], *, private_key: str = "", public_key: str
         sticky_rtt_slack_ms=float(policy_raw.get("sticky_rtt_slack_ms", 40.0)),
         on_all_paths_down=str(policy_raw.get("on_all_paths_down", "degrade")),
         join_streak_min=float(policy_raw.get("join_streak_min", 8.0)),
-        # Router DNS must survive a route flip (#21, suzu 2026-08-02). The
+        # Router DNS must survive a route flip (#21, the travel router 2026-08-02). The
         # OpenWrt path is only the DEFAULT - an empty string disables the kick,
         # and any other init script can be named instead, because this agent
         # also runs on boxes that are not that router. Neither value is

@@ -261,12 +261,12 @@ attached to a profile that is now the opposite mode.
 **#24, multi-client home.** Not a caveat, a blocker for validation. Home's Go
 client support exists and is not deployed (see the table). Until it runs with a
 real client Secret there is nothing at the far end, so #27's "egress IP is the
-home Fios address" and "a k8s LAN service is reachable" cannot be attempted.
+home residential address" and "a k8s LAN service is reachable" cannot be attempted.
 #31 (pairing) is the other half: nothing can mint the client id and key that
 `ClientConfig` requires, which is why `TunnelPlan` always resolves to
 contribute today.
 
-**#22, the ~5 Mbit/s ceiling.** Measured on suzu 2026-08-03: legs raw at 18.2
+**#22, the ~5 Mbit/s ceiling.** Measured on the travel router 2026-08-03: legs raw at 18.2
 and 25.1 Mbit/s, 4.9 Mbit/s through the bond with one stream and 4.1 with
 eight. Client mode runs the same datapath design, so **nothing here should be
 read as promising that bonding two links makes the phone faster.** What client

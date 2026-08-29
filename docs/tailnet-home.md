@@ -6,7 +6,7 @@ Zippie's **data plane** and your **tailnet** solve different problems. Use both.
 
 | Plane | Mechanism | Why |
 |---|---|---|
-| Travel multipath data | WireGuard UDP → home public IP (FiOS) or OCI public worker | Must work when you are *off* the tailnet (airplane Starlink, hotel Wi-Fi, phone hotspots) |
+| Travel multipath data | WireGuard UDP → home public IP or a cloud public worker | Must work when you are *off* the tailnet (airplane Starlink, hotel Wi-Fi, phone hotspots) |
 | Ops / SSH / dashboard | Tailscale | Manage the home exit and travel kit without opening SSH to the world |
 | Cluster services | `*.ts.example-home.invalid` via Caddy on k8s-oke workers | Unrelated to bonding; already how you expose apps |
 
@@ -14,15 +14,15 @@ Tailscale alone is **not** a substitute for Zippie while traveling: MagicDNS and
 
 ## Recommended home exit hosts (from your tailnet)
 
-Good `zippie-home` candidates (always-on, FiOS LAN or public):
+Good `zippie-home` candidates (always-on, home LAN or public):
 
 | Host | Why |
 |---|---|
-| `srv-unraid` / `k8s-oke-lan-srv-unraid-worker-01` | Home LAN, fat NIC, always on — **best default** for FiOS exit |
-| `srv-rpi4-01` | Light always-on; fine if CPU/NAT load is modest |
-| `k8s-oke-oci-*-worker-*` | Public OCI path — optional **cloud failover exit** when home power dies (different public IP, not FiOS) |
+| A LAN worker node | Home LAN, fat NIC, always on - **best default** for the residential exit |
+| A small always-on box (Raspberry Pi or similar) | Light always-on; fine if CPU/NAT load is modest |
+| A cloud Kubernetes worker | Public path - optional **cloud failover exit** when home power dies (different public IP, not the residential one) |
 
-Port-forward on the UniFi / FiOS gateway:
+Port-forward on the home gateway:
 
 ```
 UDP 51820-51823 → <zippie-home LAN IP>
@@ -36,7 +36,7 @@ Once home is up:
 
 ```bash
 # from your MBP on the tailnet
-ssh you@srv-unraid   # or whatever
+ssh you@your-home-host
 sudo zippie-home show
 sudo wg show pb-home0
 
@@ -61,7 +61,7 @@ Avoid running the full-tunnel **travel agent** on a k8s-oke worker: changing def
 ## Failover story (future slice)
 
 ```
-primary exit:   home FiOS (zippie-home on unraid)
+primary exit:   the home uplink (zippie-home on the LAN worker)
 backup exit:    OCI worker public IP (second zippie-home)
 client config:  two endpoint candidates; agent fails over if home probes die
 ```

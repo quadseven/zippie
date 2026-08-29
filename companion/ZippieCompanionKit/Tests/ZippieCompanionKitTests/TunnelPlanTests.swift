@@ -8,7 +8,7 @@ import XCTest
 /// bond.
 final class TunnelPlanTests: XCTestCase {
 
-    private func relay(_ host: String = "10.20.0.1") -> RelayConfiguration {
+    private func relay(_ host: String = "10.99.0.1") -> RelayConfiguration {
         RelayConfiguration(homeHost: host, homePort: 51902, listenPort: 51999,
                            routerSSID: "zippie")
     }
@@ -164,7 +164,7 @@ final class TunnelPlanTests: XCTestCase {
 
     func testTheDisplayAddressFollowsTheMode() {
         XCTAssertEqual(TunnelPlan.decide(decision(.local), relay: relay(), client: nil)
-                        .serverAddress, "10.20.0.1")
+                        .serverAddress, "10.99.0.1")
         XCTAssertEqual(TunnelPlan.decide(decision(.remote), relay: relay(), client: client())
                         .serverAddress, "203.0.113.9")
         XCTAssertNil(TunnelPlan.decide(decision(.local), relay: nil, client: nil).serverAddress)

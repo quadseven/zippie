@@ -40,7 +40,7 @@ final class LegEditTests: XCTestCase {
         }
     }
 
-    private let console = URL(string: "http://10.20.0.1:8787/api/status")!
+    private let console = URL(string: "http://10.99.0.1:8787/api/status")!
 
     /// Captured from the live console. Trimmed to one leg; every key and value
     /// is as the router emitted it.
@@ -56,7 +56,7 @@ final class LegEditTests: XCTestCase {
        "usage_gb": 0.0, "over_soft_limit": false, "ssid": null,
        "last_error": null, "peer_endpoint": null,
        "peer_endpoint_private": false, "has_gateway": false,
-       "relay_endpoint": "10.20.0.151:51999", "in_bond": false,
+       "relay_endpoint": "10.99.0.151:51999", "in_bond": false,
        "link_id": 3, "link_tx_bytes": 0, "link_rx_bytes": 0}
     ]}
     """
@@ -89,7 +89,7 @@ final class LegEditTests: XCTestCase {
     func testTheWriteURLIsDerivedFromTheStatusURL() {
         let url = LegEditClient.writeURL(console: console, leg: "companion-iphone")
         XCTAssertEqual(url?.absoluteString,
-                       "http://10.20.0.1:8787/api/legs/companion-iphone")
+                       "http://10.99.0.1:8787/api/legs/companion-iphone")
     }
 
     /// A slash in a leg name must not become a path separator - that would
@@ -97,7 +97,7 @@ final class LegEditTests: XCTestCase {
     func testALegNameIsEscapedIntoASinglePathSegment() {
         let url = LegEditClient.writeURL(console: console, leg: "co-operator phone/2")
         XCTAssertEqual(url?.absoluteString,
-                       "http://10.20.0.1:8787/api/legs/co-operator%20phone%2F2")
+                       "http://10.99.0.1:8787/api/legs/co-operator%20phone%2F2")
     }
 
     func testAConsoleAddressWithNoHostIsRefusedRatherThanGuessedAt() async {

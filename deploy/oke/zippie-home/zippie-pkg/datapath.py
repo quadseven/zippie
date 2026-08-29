@@ -186,7 +186,7 @@ def frame_seq(wire: bytes) -> int:
 #
 # Until 2026-08-09 this was "all of them", and that made leg count a multiplier
 # on the scarcest thing the datapath has. #49 established that the ceiling here
-# is per-PACKET cost, not bandwidth; measured on suzu 2026-08-08 the classifier
+# is per-PACKET cost, not bandwidth; measured on the travel router 2026-08-08 the classifier
 # was calling 49% of packets DUPLICATE, and because each of those became one
 # sendto per healthy leg, roughly 78% of the frames actually on the wire were
 # copies. Adding a leg is supposed to buy capacity, and instead it made every
@@ -557,7 +557,7 @@ class Reassembler:
         So the cost of handling one packet grew with how many packets were
         already waiting, and on this bond something is ALWAYS waiting: the legs
         differ by hundreds of milliseconds (33 ms / 73 ms / 334 ms measured on
-        suzu 2026-08-07), so a sprayed stream is permanently out of order and
+        the travel router 2026-08-07), so a sprayed stream is permanently out of order and
         the buffer permanently deep. Measured on an M-series laptop, tick()
         alone:
 

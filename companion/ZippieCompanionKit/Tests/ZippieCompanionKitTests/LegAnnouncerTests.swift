@@ -5,7 +5,7 @@ import XCTest
 /// that can silently not happen.
 final class LegAnnouncerTests: XCTestCase {
 
-    private func config(host: String = "10.20.0.1:8787",
+    private func config(host: String = "10.99.0.1:8787",
                         token: String = "tok",
                         port: UInt16 = 51999) -> LegAnnouncer.Config {
         .init(consoleHost: host, token: token, name: "operator-iphone",
@@ -36,10 +36,10 @@ final class LegAnnouncerTests: XCTestCase {
                let o = try? JSONSerialization.jsonObject(with: b) as? [String: Any] { seen = o }
             return (200, Data(#"{"lease_s":45}"#.utf8))
         }
-        _ = await a.announce(config(), address: "10.20.0.151")
+        _ = await a.announce(config(), address: "10.99.0.151")
 
         XCTAssertEqual(seen["name"] as? String, "operator-iphone")
-        XCTAssertEqual(seen["host"] as? String, "10.20.0.151")
+        XCTAssertEqual(seen["host"] as? String, "10.99.0.151")
         XCTAssertEqual(seen["port"] as? Int, 51999)
         XCTAssertEqual(seen["label"] as? String, "iPhone (Verizon)")
         XCTAssertNotNil(seen["lease_s"], "no lease requested, so the router would use its default")
@@ -51,7 +51,7 @@ final class LegAnnouncerTests: XCTestCase {
             auth = req.value(forHTTPHeaderField: "Authorization")
             return (200, Data("{}".utf8))
         }
-        _ = await a.announce(config(token: "s3cret"), address: "10.20.0.151")
+        _ = await a.announce(config(token: "s3cret"), address: "10.99.0.151")
         XCTAssertEqual(auth, "Bearer s3cret")
     }
 
@@ -68,7 +68,7 @@ final class LegAnnouncerTests: XCTestCase {
 
     func testABadTokenIsReportedAsRefusedNotUnreachable() async {
         let a = announcer { _ in (401, Data(#"{"error":"bad or missing bearer token"}"#.utf8)) }
-        let outcome = await a.announce(config(), address: "10.20.0.151")
+        let outcome = await a.announce(config(), address: "10.99.0.151")
         guard case let .refused(msg) = outcome else { return XCTFail("expected refused") }
         XCTAssertTrue(msg.contains("token"))
     }
@@ -77,7 +77,7 @@ final class LegAnnouncerTests: XCTestCase {
     /// and conflating them sends someone to check the wrong thing.
     func testAnUnreachableRouterIsDistinctFromARefusal() async {
         let a = announcer { _ in (0, Data()) }
-        let outcome = await a.announce(config(), address: "10.20.0.151")
+        let outcome = await a.announce(config(), address: "10.99.0.151")
         if case .unreachable = outcome {} else { XCTFail("expected unreachable, got \(outcome)") }
     }
 
@@ -105,7 +105,7 @@ final class LegAnnouncerTests: XCTestCase {
     func testAnUnconfiguredAnnouncerRefusesRatherThanCrashing() async {
         let a = announcer { _ in (200, Data("{}".utf8)) }
         for c in [config(host: ""), config(token: ""), config(port: 0)] {
-            let outcome = await a.announce(c, address: "10.20.0.151")
+            let outcome = await a.announce(c, address: "10.99.0.151")
             if case .refused = outcome {} else { XCTFail("expected refused for \(c)") }
         }
     }

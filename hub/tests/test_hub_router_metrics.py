@@ -302,7 +302,7 @@ def test_a_gone_router_reports_the_down_value_rather_than_going_absent(
     deploy and a correctly parked router all produce, and the outage would be
     invisible again.
     """
-    run_poller([router("suzu", gone_router)], metrics, expect_lines=3, dsd=dsd)
+    run_poller([router("travel-router", gone_router)], metrics, expect_lines=3, dsd=dsd)
 
     reachable = dsd.latest(hub.METRIC_REACHABLE)
     answering = dsd.latest(hub.METRIC_ANSWERING)
@@ -318,7 +318,7 @@ def test_a_gone_router_reports_the_down_value_rather_than_going_absent(
     # Explicit down values, tagged with which router they are about, so a
     # monitor can be scoped per device rather than to the whole fleet.
     for sample in (reachable, answering, carrying):
-        assert "router:suzu" in sample["tags"]
+        assert "router:travel-router" in sample["tags"]
         assert sample["type"] == "g"
 
 
@@ -331,7 +331,7 @@ def test_a_parked_router_is_not_a_gone_router(dsd, metrics, run_poller,
     refused - and that one bit is what lets a monitor page on the outage
     without paging on every correct stop.
     """
-    run_poller([router("suzu", parked_router)], metrics, expect_lines=3, dsd=dsd)
+    run_poller([router("travel-router", parked_router)], metrics, expect_lines=3, dsd=dsd)
 
     assert dsd.latest(hub.METRIC_REACHABLE)["value"] == 1.0
     assert dsd.latest(hub.METRIC_ANSWERING)["value"] == 0.0
@@ -349,7 +349,7 @@ def test_answering_with_zero_legs_is_told_apart_from_not_answering(
     """
     url, srv = answering_router
     srv.status = NO_LEGS_STATUS
-    run_poller([router("suzu", url)], metrics, expect_lines=3, dsd=dsd)
+    run_poller([router("travel-router", url)], metrics, expect_lines=3, dsd=dsd)
 
     assert dsd.latest(hub.METRIC_REACHABLE)["value"] == 1.0
     assert dsd.latest(hub.METRIC_ANSWERING)["value"] == 1.0
@@ -366,7 +366,7 @@ def test_a_carrying_router_reports_the_legs_that_are_carrying(
     for - the hub's number has to mean what theirs means.
     """
     url, _ = answering_router
-    run_poller([router("suzu", url)], metrics, expect_lines=3, dsd=dsd)
+    run_poller([router("travel-router", url)], metrics, expect_lines=3, dsd=dsd)
 
     assert dsd.latest(hub.METRIC_REACHABLE)["value"] == 1.0
     assert dsd.latest(hub.METRIC_ANSWERING)["value"] == 1.0
@@ -382,7 +382,7 @@ def test_the_signal_recovers_and_does_not_latch(dsd, metrics, run_poller,
     resolves on its own rather than sitting red until somebody clears it.
     """
     url, srv = answering_router
-    reg = run_poller([router("suzu", url)], metrics, expect_lines=3, dsd=dsd)
+    reg = run_poller([router("travel-router", url)], metrics, expect_lines=3, dsd=dsd)
     assert dsd.latest(hub.METRIC_CARRYING_LEGS)["value"] == 2.0
 
     # Take the router away for real, mid-flight, with the poller still running.
@@ -415,7 +415,7 @@ def test_the_signal_recovers_and_does_not_latch(dsd, metrics, run_poller,
             time.sleep(0.02)
         assert dsd.latest(hub.METRIC_CARRYING_LEGS)["value"] == 2.0
         assert dsd.latest(hub.METRIC_ANSWERING)["value"] == 1.0
-        assert reg.router_sample("suzu")[0] is not None
+        assert reg.router_sample("travel-router")[0] is not None
     finally:
         revived.shutdown()
         revived.server_close()
@@ -429,10 +429,10 @@ def test_every_router_is_observed_on_every_cycle(dsd, metrics, run_poller,
     looking smaller rather than sicker.
     """
     url, _ = answering_router
-    run_poller([router("suzu", url), router("kuro", gone_router)],
+    run_poller([router("travel-router", url), router("kuro", gone_router)],
                metrics, expect_lines=12, dsd=dsd)
 
-    for name in ("suzu", "kuro"):
+    for name in ("travel-router", "kuro"):
         for metric in (hub.METRIC_REACHABLE, hub.METRIC_ANSWERING,
                        hub.METRIC_CARRYING_LEGS):
             got = [s for s in dsd.samples(metric) if f"router:{name}" in s["tags"]]
@@ -448,9 +448,9 @@ def test_the_page_and_the_alarm_count_the_same_legs(dsd, metrics, run_poller,
     believes and the page the thing nobody checks.
     """
     url, _ = answering_router
-    reg = run_poller([router("suzu", url)], metrics, expect_lines=3, dsd=dsd)
+    reg = run_poller([router("travel-router", url)], metrics, expect_lines=3, dsd=dsd)
 
-    node = next(n for n in reg.snapshot() if n["name"] == "suzu")
+    node = next(n for n in reg.snapshot() if n["name"] == "travel-router")
     assert node["carrying"] == dsd.latest(hub.METRIC_CARRYING_LEGS)["value"]
 
 
@@ -460,14 +460,14 @@ def test_the_page_and_the_alarm_count_the_same_legs(dsd, metrics, run_poller,
 
 
 def test_a_refusal_is_evidence_the_box_is_there(parked_router):
-    status, reachable = hub.fetch_router_status("suzu", parked_router)
+    status, reachable = hub.fetch_router_status("travel-router", parked_router)
     assert status is None
     assert reachable is True
 
 
 def test_a_timeout_is_not_evidence_of_anything(gone_router, monkeypatch):
     monkeypatch.setattr(hub, "ROUTER_POLL_TIMEOUT_S", 0.4)
-    status, reachable = hub.fetch_router_status("suzu", gone_router)
+    status, reachable = hub.fetch_router_status("travel-router", gone_router)
     assert status is None
     assert reachable is False
 
@@ -511,7 +511,7 @@ def test_a_body_that_is_not_a_status_document_still_proves_the_box_is_there(
     """
     url, srv = answering_router
     srv.status = ["not", "an", "object"]
-    status, reachable = hub.fetch_router_status("suzu", url)
+    status, reachable = hub.fetch_router_status("travel-router", url)
     assert status is None
     assert reachable is True
 
@@ -526,7 +526,7 @@ def test_a_malformed_paths_key_cannot_kill_the_poll_loop(
     """
     url, srv = answering_router
     srv.status = {"mode": "packet", "paths": "wlan0, wlan1"}
-    run_poller([router("suzu", url)], metrics, expect_lines=6, dsd=dsd)
+    run_poller([router("travel-router", url)], metrics, expect_lines=6, dsd=dsd)
 
     assert dsd.latest(hub.METRIC_ANSWERING)["value"] == 1.0
     assert dsd.latest(hub.METRIC_CARRYING_LEGS)["value"] == 0.0
@@ -574,7 +574,7 @@ def test_the_metric_names_are_pinned():
 
 def test_every_sample_is_a_gauge():
     """A count would sum the five-second samples into a meaningless number."""
-    for metric, value, tags in hub.router_samples("suzu", ROUTER_STATUS, True):
+    for metric, value, tags in hub.router_samples("travel-router", ROUTER_STATUS, True):
         assert parse_statsd(hub.statsd_line(metric, value, tags))["type"] == "g"
 
 
@@ -586,7 +586,7 @@ def test_a_leg_count_is_not_formatted_as_a_float():
 def test_a_router_name_cannot_inject_a_second_metric():
     """The line protocol is newline-delimited, so an unscrubbed name is an
     injection: the hub would report a series nobody wrote."""
-    hostile = "suzu\ncustom.zippie.hub.router.carrying_legs:99|g|#router:fake"
+    hostile = "the travel router\ncustom.zippie.hub.router.carrying_legs:99|g|#router:fake"
     line = hub.statsd_line(hub.METRIC_REACHABLE, 1, [hub.statsd_tag("router", hostile)])
     assert "\n" not in line
     assert len(parse_statsd(line)["tags"]) == 1
@@ -640,9 +640,9 @@ def test_a_send_failure_is_counted_and_never_reaches_the_poll_loop(
     metrics = hub.Metrics(_Broken())
     try:
         url, _ = answering_router
-        reg = run_poller([router("suzu", url)], metrics, expect_lines=0,
+        reg = run_poller([router("travel-router", url)], metrics, expect_lines=0,
                          timeout=0.6)
-        assert reg.router_sample("suzu")[0] is not None, "the poller stopped"
+        assert reg.router_sample("travel-router")[0] is not None, "the poller stopped"
         assert metrics.failed >= 1
         assert metrics.sent == 0
     finally:
@@ -663,7 +663,7 @@ def test_a_full_queue_drops_whole_cycles_not_halves_of_them():
     metrics = hub.Metrics(sender, queue_max=1)
     try:
         for _ in range(20):
-            metrics.observe_router("suzu", None, False)
+            metrics.observe_router("travel-router", None, False)
         assert metrics.dropped > 0, "the queue never filled; test proves nothing"
         assert metrics.submitted % 3 == 0
     finally:
@@ -685,7 +685,7 @@ def test_no_configuration_means_disabled_and_starts_no_thread(monkeypatch):
     assert metrics.enabled is False
     assert threading.active_count() == before
     # A disabled emitter is still safe to call: no branch at the call site.
-    metrics.observe_router("suzu", None, False)
+    metrics.observe_router("travel-router", None, False)
     metrics.close()
 
 
@@ -707,7 +707,7 @@ def test_the_socket_url_is_taken_over_the_host(monkeypatch, dsd):
     monkeypatch.setenv("DD_ENV", "prod")
     metrics = hub.metrics_from_env()
     try:
-        metrics.observe_router("suzu", ROUTER_STATUS, True)
+        metrics.observe_router("travel-router", ROUTER_STATUS, True)
         metrics.flush()
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline and len(dsd.lines) < 3:
@@ -743,5 +743,5 @@ def test_the_poller_still_works_with_no_emitter_at_all(run_poller,
                                                        answering_router):
     """Every caller that predates this change passes three arguments."""
     url, _ = answering_router
-    reg = run_poller([router("suzu", url)], None, expect_lines=0, timeout=0.6)
-    assert reg.router_sample("suzu")[0] is not None
+    reg = run_poller([router("travel-router", url)], None, expect_lines=0, timeout=0.6)
+    assert reg.router_sample("travel-router")[0] is not None

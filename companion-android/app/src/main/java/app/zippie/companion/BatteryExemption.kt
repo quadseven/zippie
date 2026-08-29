@@ -11,7 +11,7 @@ package app.zippie.companion
  * announcing on its timer while its UDP socket stops being serviced, so the
  * ROUTER sees a leg that is present, in the bond, and answering nothing.
  *
- * Observed live on suzu, twice, and again on 2026-08-22 after a cold boot:
+ * Observed live on the travel router, twice, and again on 2026-08-22 after a cold boot:
  *
  *     <phone>  port OPEN, not serviced   announcing every 15s
  *     router:  <leg>  degraded  "no reply yet - nothing is answering at

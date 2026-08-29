@@ -72,7 +72,7 @@ public struct ModeDecision: Sendable, Equatable {
     /// kind of claim than naming an unreached device. "The router is not
     /// answering" sitting next to a working wifi router the phone IS joined
     /// to reads as a claim about that router (#44 operator follow-up,
-    /// 2026-08-08: "'suzu is not answering' tells the reader which box to go
+    /// 2026-08-08: "'the travel router is not answering' tells the reader which box to go
     /// and look at, where 'the router is not answering' while sitting next to
     /// a working wifi router is actively confusing"). Same reasoning and the
     /// same `routerSubject` helper as `RelayVerdict.detail(router:)`.

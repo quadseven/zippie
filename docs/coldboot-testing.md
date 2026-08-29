@@ -152,7 +152,7 @@ NOT ARMED BY A DEPLOY, like the test harness. Add cron deliberately:
 
 ## "Ethernet is plugged in" is not a second leg
 
-At home suzu's WAN sits on the house LAN, while its ethernet leg dials home by
+At home the travel router's WAN sits on the house LAN, while its ethernet leg dials home by
 the house's own public address - which is reachable from the internet and not
 from inside the house. Measured 2026-08-17 after nine hours of uptime:
 

@@ -409,7 +409,7 @@ itself, so the phone and the filename agree about which commit and which key:
 Then, on the phone: grant the notification permission when asked (the relay runs
 without it, but its notification - the only visible sign it is spending cellular,
 and the only way to stop it from the shade - is hidden), and confirm the router
-console address if it is not `10.20.0.1:8787`.
+console address if it is not `10.99.0.1:8787`.
 
 ## Not verified
 

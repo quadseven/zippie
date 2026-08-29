@@ -27,7 +27,7 @@ Internet WANs (Starlink / T-Mo / VZ)
 
 ### A) Full-tunnel only (simplest)
 
-Zippie `AllowedIPs = 0.0.0.0/0` → all internet appears to come from home FiOS.  
+Zippie `AllowedIPs = 0.0.0.0/0` → all internet appears to come from the home uplink.  
 LAN resources at home (10.0.0.0/8 etc.) work if the home bond server routes/NATs them — by default NAT exit only hits the public internet. For home LAN access, add:
 
 - On home bond server: routes to home LAN + no NAT for those destinations, **or**
@@ -39,7 +39,7 @@ LAN resources at home (10.0.0.0/8 etc.) work if the home bond server routes/NATs
 2. On UTR: configure client to home, allowed IPs = home LAN CIDRs only
 3. Keep Zippie as default internet exit
 
-Result: internet via bonded FiOS exit, LAN like you're on the couch.
+Result: internet via the bonded home exit, LAN like you're on the couch.
 
 ## Checklist
 

@@ -1,6 +1,6 @@
 """The router's OWN DNS has to survive a default-route flip (#21).
 
-Measured live on suzu 2026-08-02, during the first carrying packet-mode
+Measured live on the travel router 2026-08-02, during the first carrying packet-mode
 session: the moment `default dev pbz0` was installed the ROUTER's own DNS died
 - curl exit 6 on the box - while `nslookup <name> 1.1.1.1` THROUGH the tunnel
 answered fine. Forwarding, NAT and the tunnel itself were healthy the whole

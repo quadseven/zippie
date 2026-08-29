@@ -91,7 +91,7 @@ the endpoint the leg dials. Legs therefore carry `never_handshaked` beside
 `state`, set when bytes have gone out, none have come back, and no keepalive has
 ever been answered. Watch that flag, not the word.
 
-**At home, the ethernet leg is EXPECTED to be dead.** suzu is a travel router.
+**At home, the ethernet leg is EXPECTED to be dead.** the travel router is a travel router.
 Plugged in at home its WAN sits on the house LAN, while the leg dials home by the
 house's own public address - and that address is reachable from the internet but
 not from inside the house. Both legs dial 203.0.113.33:51902: the phone's path,

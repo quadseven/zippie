@@ -71,10 +71,10 @@ final class RelayConfigurationTests: XCTestCase {
 
         let c = RelayConfiguration(homeHost: "elsewhere.example", homePort: 40000,
                                    listenPort: 40001,
-                                   routerSSIDs: ["Suzu", "GL-MT3000-b96"])
+                                   routerSSIDs: ["TravelRouter", "GL-MT3000-000"])
         c.write(to: d)
         XCTAssertEqual(RelayConfiguration.read(from: d), c)
-        XCTAssertEqual(d.string(forKey: RelayConfiguration.Key.routerSSID), "Suzu",
+        XCTAssertEqual(d.string(forKey: RelayConfiguration.Key.routerSSID), "TravelRouter",
                        "an older build would lose every configured router network")
 
         // A single corrupt field must not discard the other two.
@@ -83,16 +83,16 @@ final class RelayConfigurationTests: XCTestCase {
         XCTAssertEqual(mixed.homeHost, "elsewhere.example")
         XCTAssertEqual(mixed.homePort, RelayConfiguration.fallback.homePort)
         XCTAssertEqual(mixed.listenPort, 40001)
-        XCTAssertEqual(mixed.routerSSIDs, ["Suzu", "GL-MT3000-b96"])
+        XCTAssertEqual(mixed.routerSSIDs, ["TravelRouter", "GL-MT3000-000"])
     }
 
     func testLegacySingleSSIDDefaultsMigrateToTheCanonicalList() {
         let suite = "zippie.tests.\(UUID().uuidString)"
         let d = UserDefaults(suiteName: suite)!
         defer { d.removePersistentDomain(forName: suite) }
-        d.set("  Suzu  ", forKey: RelayConfiguration.Key.routerSSID)
+        d.set("  TravelRouter  ", forKey: RelayConfiguration.Key.routerSSID)
 
-        XCTAssertEqual(RelayConfiguration.read(from: d).routerSSIDs, ["Suzu"])
+        XCTAssertEqual(RelayConfiguration.read(from: d).routerSSIDs, ["TravelRouter"])
     }
 
     func testStoredRefusesAnUnconfiguredSuite() {

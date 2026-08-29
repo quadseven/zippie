@@ -18,7 +18,7 @@
     <base-config cleartextTrafficPermitted="false" />
 
     <domain-config cleartextTrafficPermitted="true">
-        <!-- suzu's LAN address. NO LONGER a default anywhere: #157 emptied
+        <!-- the travel router's LAN address. NO LONGER a default anywhere: #157 emptied
              RelayConfiguration.consoleLanHost to "", so this literal is now the
              ONLY place the address is pinned - and it is a compiled resource no
              managed-configuration key can reach. Push a console at any other

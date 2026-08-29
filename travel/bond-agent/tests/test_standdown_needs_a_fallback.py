@@ -9,7 +9,7 @@ When a phone relay is the only uplink that route does not exist. The relay is
 reached over the LAN, so netifd has no default via it, and withdrawing removes
 the household's last path - because a WORKING leg was slow, not broken.
 
-Measured on suzu 2026-08-17: 27 standdowns in one boot, roughly every five
+Measured on the travel router 2026-08-17: 27 standdowns in one boot, roughly every five
 minutes, the phone running 730-850ms against a 500ms floor. Ethernet was plugged
 in so every one fell back harmlessly and nobody noticed. On the phone alone each
 would have been a ~45-second total outage. 700-850ms is ordinary LTE in a moving

@@ -53,8 +53,8 @@ final class RelayVerdictTests: XCTestCase {
     /// smuggle back the exact fabricated sentence either.
     func testNoVerdictEverClaimsAConnectionToTheRouterEvenWhenNamed() {
         for v in RelayVerdict.allCasesForCopyReview {
-            XCTAssertFalse(v.detail(router: "suzu").lowercased().contains("connected to the router"),
-                           "\(v) says: \(v.detail(router: "suzu"))")
+            XCTAssertFalse(v.detail(router: "travel-router").lowercased().contains("connected to the router"),
+                           "\(v) says: \(v.detail(router: "travel-router"))")
         }
     }
 
@@ -91,7 +91,7 @@ final class RelayVerdictTests: XCTestCase {
 
         XCTAssertEqual(v, .routerQuiet(silentFor: 40))
         XCTAssertEqual(v.detail(), "Your zippie router stopped sending. Last packet 40s ago.")
-        XCTAssertEqual(v.detail(router: "suzu"), "suzu stopped sending. Last packet 40s ago.")
+        XCTAssertEqual(v.detail(router: "travel-router"), "travel-router stopped sending. Last packet 40s ago.")
     }
 
     /// Minutes rather than a three-digit second count, which nobody reads as a
@@ -299,10 +299,10 @@ final class RelayVerdictTests: XCTestCase {
     }
 
     /// Given a name, use it - the operator's own suggested copy was
-    /// "Connected to suzu", using the router's label.
+    /// "Connected to the travel router", using the router's label.
     func testNamedRouterStatesUseTheGivenName() {
         for v: RelayVerdict in [.listening, .notForwarding(detail: nil), .routerQuiet(silentFor: 40)] {
-            XCTAssertTrue(v.detail(router: "suzu").hasPrefix("suzu "), v.detail(router: "suzu"))
+            XCTAssertTrue(v.detail(router: "travel-router").hasPrefix("travel-router "), v.detail(router: "travel-router"))
         }
     }
 
@@ -319,6 +319,6 @@ final class RelayVerdictTests: XCTestCase {
     /// three sentences that actually mention a router.
     func testNamingDoesNotLeakIntoStatesThatAreNotAboutTheRouter() {
         let v = RelayVerdict.carrying
-        XCTAssertEqual(v.detail(router: "suzu"), v.detail())
+        XCTAssertEqual(v.detail(router: "travel-router"), v.detail())
     }
 }

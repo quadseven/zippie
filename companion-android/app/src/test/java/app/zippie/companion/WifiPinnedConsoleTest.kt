@@ -17,7 +17,7 @@ import java.net.URL
  * Observed live 2026-08-14. The router and the Pixel powered on together, the
  * Pixel joined the router's wifi, and the app reported:
  *
- *     failed to connect to /10.20.0.1 (port 8787) from /192.0.0.4 (port 51358)
+ *     failed to connect to /10.99.0.1 (port 8787) from /192.0.0.4 (port 51358)
  *
  * `192.0.0.4` is the RFC 7335 address Android's clatd puts on the 464XLAT
  * interface for an IPv6-only carrier. The phone dialled the router's LAN address
@@ -70,14 +70,14 @@ class WifiPinnedConsoleTest {
     fun `the LAN console is dialled over wifi, not the default network`() = runBlocking {
         val wifi = FakeWifi()
         val (result, proximity) = BondStatusClient.probe(
-            listOf(local("http://10.20.0.1:8787/api/status")),
+            listOf(local("http://10.99.0.1:8787/api/status")),
             wifi = wifi,
         )
 
         assertEquals(
             "the LAN console was not dialled over wifi, so on a cold boot it " +
                 "would leave via clat and never arrive",
-            listOf("http://10.20.0.1:8787/api/status"),
+            listOf("http://10.99.0.1:8787/api/status"),
             wifi.opened,
         )
         assertTrue("the console should have answered", result is ConsoleResult.Ok)
@@ -88,7 +88,7 @@ class WifiPinnedConsoleTest {
     fun `the tailnet console is NOT forced over wifi`() = runBlocking {
         val wifi = FakeWifi()
         BondStatusClient.probe(
-            listOf(remote("https://suzu.example.ts.net/api/status")),
+            listOf(remote("https://travel-router.example.ts.net/api/status")),
             wifi = wifi,
         )
 
@@ -104,14 +104,14 @@ class WifiPinnedConsoleTest {
         val wifi = FakeWifi()
         BondStatusClient.probe(
             listOf(
-                local("http://10.20.0.1:8787/api/status"),
-                remote("https://suzu.example.ts.net/api/status"),
+                local("http://10.99.0.1:8787/api/status"),
+                remote("https://travel-router.example.ts.net/api/status"),
             ),
             wifi = wifi,
         )
 
         assertEquals(
-            listOf("http://10.20.0.1:8787/api/status"),
+            listOf("http://10.99.0.1:8787/api/status"),
             wifi.opened,
         )
     }
@@ -120,7 +120,7 @@ class WifiPinnedConsoleTest {
     fun `no wifi network is reported, not quietly sent over cellular`() = runBlocking {
         val wifi = FakeWifi(present = false)
         val (result, proximity) = BondStatusClient.probe(
-            listOf(local("http://10.20.0.1:8787/api/status")),
+            listOf(local("http://10.99.0.1:8787/api/status")),
             wifi = wifi,
         )
 
@@ -141,13 +141,13 @@ class WifiPinnedConsoleTest {
         val wifi = FakeWifi(body = """{"lease_s":45}""")
         val outcome = LegAnnouncer(HttpConsolePost(wifi)).announce(
             LegAnnouncer.Config(
-                consoleHost = "10.20.0.1:8787",
+                consoleHost = "10.99.0.1:8787",
                 token = "tok",
                 name = "pixel-6a-17d0",
                 label = "Pixel 6a (Google Fi)",
                 listenPort = 51999,
             ),
-            "10.20.0.174",
+            "10.99.0.174",
         )
 
         assertEquals(
@@ -158,7 +158,7 @@ class WifiPinnedConsoleTest {
         )
         assertTrue(
             "announced to the wrong place: ${wifi.opened.first()}",
-            wifi.opened.first().startsWith("http://10.20.0.1:8787"),
+            wifi.opened.first().startsWith("http://10.99.0.1:8787"),
         )
         assertTrue("expected the announce to be accepted, got $outcome",
             outcome is LegAnnouncer.Outcome.Announced)
@@ -169,13 +169,13 @@ class WifiPinnedConsoleTest {
         val wifi = FakeWifi(present = false)
         val outcome = LegAnnouncer(HttpConsolePost(wifi)).announce(
             LegAnnouncer.Config(
-                consoleHost = "10.20.0.1:8787",
+                consoleHost = "10.99.0.1:8787",
                 token = "tok",
                 name = "pixel-6a-17d0",
                 label = "Pixel 6a (Google Fi)",
                 listenPort = 51999,
             ),
-            "10.20.0.174",
+            "10.99.0.174",
         )
 
         val unreachable = outcome as? LegAnnouncer.Outcome.Unreachable
@@ -191,7 +191,7 @@ class WifiPinnedConsoleTest {
         // Guards the test doubles themselves: if HttpConsolePost ignored its
         // WifiRoute entirely, every assertion above would pass vacuously.
         val wifi = FakeWifi()
-        HttpConsolePost(wifi).post("http://10.20.0.1:8787/api/legs", "tok", "{}", 500)
+        HttpConsolePost(wifi).post("http://10.99.0.1:8787/api/legs", "tok", "{}", 500)
         assertFalse("the route was never consulted", wifi.opened.isEmpty())
     }
 }

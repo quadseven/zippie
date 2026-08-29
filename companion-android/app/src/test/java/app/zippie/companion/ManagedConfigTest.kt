@@ -22,7 +22,7 @@ class ManagedConfigTest {
         listenPort = 51999,
         homeHost = "home.example",
         homePort = 51902,
-        consoleLanHost = "10.20.0.1:8787",
+        consoleLanHost = "10.99.0.1:8787",
         announceToken = "locally-typed-token",
     )
 
@@ -37,9 +37,9 @@ class ManagedConfigTest {
     @Test
     fun `a pushed console host replaces the local one`() {
         val out = ManagedConfig.merge(
-            stored, mapOf(ManagedConfig.KEY_CONSOLE_LAN_HOST to "10.20.0.1:8787 "),
+            stored, mapOf(ManagedConfig.KEY_CONSOLE_LAN_HOST to "10.99.0.1:8787 "),
         )
-        assertEquals("trailing whitespace must not survive into a URL", "10.20.0.1:8787", out.consoleLanHost)
+        assertEquals("trailing whitespace must not survive into a URL", "10.99.0.1:8787", out.consoleLanHost)
     }
 
     // ----- the dangerous direction
@@ -71,7 +71,7 @@ class ManagedConfigTest {
             "blank must read as 'not set', or a half-filled MDM form silently unconfigures a phone",
             "locally-typed-token", out.announceToken,
         )
-        assertEquals("10.20.0.1:8787", out.consoleLanHost)
+        assertEquals("10.99.0.1:8787", out.consoleLanHost)
     }
 
     @Test
@@ -216,7 +216,7 @@ class ManagedConfigTest {
     @Test
     fun `private console addresses are accepted across every RFC1918 range`() {
         for (good in listOf(
-            "10.20.0.1:8787", "172.16.0.1:8787", "172.31.255.254:8787",
+            "10.99.0.1:8787", "172.16.0.1:8787", "172.31.255.254:8787",
             "192.168.8.1:8787", "127.0.0.1:8787", "localhost:8787",
         )) {
             val out = ManagedConfig.merge(stored, mapOf(ManagedConfig.KEY_CONSOLE_LAN_HOST to good))
@@ -226,7 +226,7 @@ class ManagedConfigTest {
 
     @Test
     fun `a malformed console address is refused rather than half-parsed`() {
-        for (bad in listOf("10.20.0.1", "10.20.0.1:", ":8787", "10.20.0.1:0", "10.20.0.1:99999")) {
+        for (bad in listOf("10.99.0.1", "10.99.0.1:", ":8787", "10.99.0.1:0", "10.99.0.1:99999")) {
             val out = ManagedConfig.merge(stored, mapOf(ManagedConfig.KEY_CONSOLE_LAN_HOST to bad))
             assertEquals(stored.consoleLanHost, out.consoleLanHost)
         }

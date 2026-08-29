@@ -41,7 +41,7 @@ dd_event() {   # title, text, alert_type
         . "$PERSIST/env" 2>/dev/null
         [ -n "${DD_API_KEY:-}" ] || exit 0
         _site="${DD_SITE:-datadoghq.com}"
-        _tags="${PATHBOND_TAGS:-device:suzu}"
+        _tags="${PATHBOND_TAGS:-device:travel-router}"
         curl -sS --connect-timeout 5 -m 10 -X POST "https://api.${_site}/api/v1/events" \
             -H "Content-Type: application/json" -H "DD-API-KEY: ${DD_API_KEY}" \
             -d "{\"title\":\"$1\",\"text\":\"$2\",\"alert_type\":\"$3\",\"aggregation_key\":\"zippie-drift\",\"tags\":[\"service:zippie\",\"source:drift-check\",\"${_tags}\"]}" \
@@ -162,7 +162,7 @@ fi
 if [ "$code_drifted" -eq 1 ]; then
     log "DRIFT: router is running $local_fp but $REF is $remote_fp$config_note"
     dd_event "Zippie router has drifted from $REF" \
-        "The agent on suzu fingerprints $local_fp; $REF fingerprints $remote_fp.$config_note Either a change was merged and never deployed, or the running copy was edited by hand. Deploy with scripts/deploy-openwrt.sh, or find out who wrote to the box." \
+        "The agent on the travel router fingerprints $local_fp; $REF fingerprints $remote_fp.$config_note Either a change was merged and never deployed, or the running copy was edited by hand. Deploy with scripts/deploy-openwrt.sh, or find out who wrote to the box." \
         "warning"
 else
     # Code identical, config not. This is the #228 case exactly, and it is worth
@@ -170,7 +170,7 @@ else
     # agent is already correct and only the config is stale.
     log "DRIFT: code matches $local_fp but the config does not.$config_note"
     dd_event "Zippie router config has drifted from $REF" \
-        "The agent on suzu matches $REF ($local_fp), but /etc/zippie/zippie.toml does not.$config_note A config change was merged and never deployed, or the file was edited on the box. Deploying changes the shape of the bond - which legs exist and what they are capped at - so run scripts/deploy-openwrt.sh with someone watching." \
+        "The agent on the travel router matches $REF ($local_fp), but /etc/zippie/zippie.toml does not.$config_note A config change was merged and never deployed, or the file was edited on the box. Deploying changes the shape of the bond - which legs exist and what they are capped at - so run scripts/deploy-openwrt.sh with someone watching." \
         "warning"
 fi
 exit 2

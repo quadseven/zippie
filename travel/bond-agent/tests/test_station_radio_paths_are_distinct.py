@@ -58,7 +58,7 @@ def test_two_associated_station_radios_produce_two_legs(monkeypatch):
     """The exact scenario in #154: a phone joins 2.4GHz while an AP holds
     5GHz. With one explicit path per interface, BOTH must show up as
     distinct, independently-bound legs - not one leg and one silent absence."""
-    hotspot = _leg("hotspot", "apclix0")          # 5GHz, e.g. the M2000
+    hotspot = _leg("hotspot", "apclix0")          # 5GHz, e.g. the upstream AP
     hotspot_24 = _leg("hotspot-2ghz", "apcli0")    # 2.4GHz, e.g. a phone
     a = _agent([hotspot, hotspot_24])
 
@@ -95,7 +95,7 @@ def test_unassociated_radio_reports_absent_with_a_reason(monkeypatch):
     """Acceptance criterion: a path whose interface is unassociated reports
     absent-WITH-A-REASON, the way `ethernet` already does, rather than
     vanishing. Shaped after the live router on 2026-08-12: apclix0 associated
-    (M2000), apcli0 present at L2 but with no IPv4 (idle station slot)."""
+    (the upstream AP), apcli0 present at L2 but with no IPv4 (idle station slot)."""
     hotspot = _leg("hotspot", "apclix0")
     hotspot_24 = _leg("hotspot-2ghz", "apcli0")
     a = _agent([hotspot, hotspot_24])
@@ -132,7 +132,7 @@ def test_the_old_single_glob_path_could_only_ever_bind_one_radio(monkeypatch):
     associated, and `_best_candidate` tie-breaks by interface name - so it
     silently prefers apcli0 over apclix0. On the live router that means the
     2.4GHz phone would win and the 5GHz leg CURRENTLY CARRYING TRAFFIC (the
-    M2000) would vanish, with nothing anywhere saying why: this is the exact
+    the upstream AP) would vanish, with nothing anywhere saying why: this is the exact
     failure the issue describes, not a hypothetical.
 
     This test pins the OLD, single-path shape to prove the bug was real; it

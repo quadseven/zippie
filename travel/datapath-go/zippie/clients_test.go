@@ -6,7 +6,7 @@ import (
 )
 
 // Home must keep one set of stream state PER CLIENT. Sharing it is not a
-// degradation, it is corruption: two phones and suzu all bonding home would
+// degradation, it is corruption: two phones and the travel router all bonding home would
 // interleave sequence numbers into one reassembler, and every peer's stream
 // would eat the others' gaps.
 

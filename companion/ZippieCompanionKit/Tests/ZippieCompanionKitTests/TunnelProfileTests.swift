@@ -29,12 +29,12 @@ import XCTest
 final class TunnelProfileTests: XCTestCase {
 
     private func relay(_ ssid: String = "zippie") -> RelayConfiguration {
-        RelayConfiguration(homeHost: "10.20.0.1", homePort: 51902, listenPort: 51999,
+        RelayConfiguration(homeHost: "10.99.0.1", homePort: 51902, listenPort: 51999,
                            routerSSID: ssid)
     }
 
     private func relay(_ ssids: [String]) -> RelayConfiguration {
-        RelayConfiguration(homeHost: "10.20.0.1", homePort: 51902, listenPort: 51999,
+        RelayConfiguration(homeHost: "10.99.0.1", homePort: 51902, listenPort: 51999,
                            routerSSIDs: ssids)
     }
 
@@ -189,11 +189,11 @@ final class TunnelProfileTests: XCTestCase {
     func testOnDemandIsInstalledForTheContributorAndNeverForTheClient() throws {
         let contributing = try XCTUnwrap(installed(TunnelPlan.decide(
             ModeDecision(proximity: .local),
-            relay: relay(["Suzu", "GL-MT3000-b96"]), client: nil)))
+            relay: relay(["TravelRouter", "GL-MT3000-000"]), client: nil)))
         XCTAssertTrue(contributing.isOnDemandEnabled)
         XCTAssertEqual(contributing.onDemandRules?.count, 2)
         let connect = try XCTUnwrap(contributing.onDemandRules?.first as? NEOnDemandRuleConnect)
-        XCTAssertEqual(connect.ssidMatch, ["Suzu", "GL-MT3000-b96"])
+        XCTAssertEqual(connect.ssidMatch, ["TravelRouter", "GL-MT3000-000"])
 
         let bonding = try XCTUnwrap(installed(TunnelPlan.decide(
             ModeDecision(proximity: .remote), relay: relay(), client: client())))

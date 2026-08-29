@@ -311,7 +311,7 @@ def test_a_trip_records_its_marker_and_announces_itself(hz):
 def test_no_teardown_when_nothing_is_carrying(tmp_path):
     """THE COLD-BOOT DEADLOCK, pinned.
 
-    2026-08-16, M2000 off so the Pixel was the only possible uplink. The router
+    2026-08-16, the upstream AP off so the Pixel was the only possible uplink. The router
     was rebooted, came up with no WAN - correct, the phone had not announced yet
     - and this watchdog counted three failures and tore zippie down. With the
     agent down there is no console on :8787, so the phone could never announce,
@@ -378,7 +378,7 @@ def test_a_hold_does_not_bank_failures_against_the_next_bond(tmp_path):
     a leg finally DID carry, the counter was already far past MAX_FAILS and the
     very next check tore the new bond down.
 
-    Measured on suzu 2026-08-16, router clock UTC-4:
+    Measured on the travel router 2026-08-16, router clock UTC-4:
 
         17:49:00  no internet (3/3) - NOT tearing down, nothing carrying
         17:50:00  (4/3)   17:51:00  (5/3)   17:52:00  (6/3)

@@ -4,7 +4,7 @@
 # A deploy restarts the agent. On this router the agent owns the default route
 # at metric 1 and serves the bond, so restarting it can take away the very path
 # the deploy is travelling over - and it did, on 2026-08-24: a CI runner reached
-# suzu over the tailnet, the tailnet needed the bond, the bond needed the agent,
+# the travel router over the tailnet, the tailnet needed the bond, the bond needed the agent,
 # and `/etc/init.d/zippie stop` severed the connection before `start` could be
 # sent. The router sat with the agent stopped and nothing scheduled to undo it.
 #

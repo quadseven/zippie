@@ -3,7 +3,7 @@
 // A SECOND LISTENER, DELIBERATELY BESIDE THE LIVE ONE. The deployed home
 // transport is Python, single-peer, and carrying the household's traffic
 // through the travel router right now. This process does not touch it: its own
-// port, its own TUN, its own address range. If it falls over, suzu's bond is
+// port, its own TUN, its own address range. If it falls over, the travel router's bond is
 // unaffected - which is the only acceptable way to introduce a new code path
 // under something people are using.
 //

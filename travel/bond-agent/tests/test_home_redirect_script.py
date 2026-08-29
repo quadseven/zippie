@@ -51,7 +51,7 @@ def test_full_packet_mode_sends_every_port_to_the_transport():
 def test_staged_rollout_gives_the_transport_one_port_and_leaves_wg_the_rest():
     """The shape that makes deploying the transport safe.
 
-    suzu's live tunnels only dial 51821, so handing the transport a spare port
+    the travel router's live tunnels only dial 51821, so handing the transport a spare port
     proves the receive path while route mode keeps carrying real traffic.
     """
     mod = _load()

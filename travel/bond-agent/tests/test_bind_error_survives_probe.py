@@ -3,7 +3,7 @@ throws that away three lines later.
 
 On 2026-08-07 the announced leg `iphone-8fe5` was refused the bridge because
 the static `companion-iphone` had already claimed relay endpoint
-10.20.0.151:51999. `match_interfaces` computed the right sentence - "another
+10.99.0.151:51999. `match_interfaces` computed the right sentence - "another
 leg already relays through this phone" - and `/api/status` reported:
 
     {"name": "iphone-8fe5", "dynamic": true, "interface": null,
@@ -69,8 +69,8 @@ def _agent(paths):
 # --------------------------------------------- match_interfaces records WHY
 def test_endpoint_collision_is_recorded_as_bind_error(monkeypatch):
     """The exact 2026-08-07 shape: two legs, one phone."""
-    static = _leg("companion-iphone", relay="10.20.0.151:51999")
-    dynamic = _leg("iphone-8fe5", relay="10.20.0.151:51999")
+    static = _leg("companion-iphone", relay="10.99.0.151:51999")
+    dynamic = _leg("iphone-8fe5", relay="10.99.0.151:51999")
     a = _agent([static, dynamic])
     _match(monkeypatch, a, [_Link("br-lan")])
 
@@ -98,8 +98,8 @@ def test_bind_error_is_recorded_even_when_the_leg_is_already_down(monkeypatch):
     router showed the wrong message rather than a brief flicker of the right
     one.
     """
-    static = _leg("companion-iphone", relay="10.20.0.151:51999")
-    dynamic = _leg("iphone-8fe5", relay="10.20.0.151:51999")
+    static = _leg("companion-iphone", relay="10.99.0.151:51999")
+    dynamic = _leg("iphone-8fe5", relay="10.99.0.151:51999")
     dynamic.state = PathState.DOWN
     a = _agent([static, dynamic])
     _match(monkeypatch, a, [_Link("br-lan")])
@@ -121,7 +121,7 @@ def test_binding_successfully_clears_a_previous_bind_error(monkeypatch):
 
 # ------------------------------------------------- the probe surfaces it
 def test_packet_probe_reports_the_specific_reason(monkeypatch):
-    leg = _leg("iphone-8fe5", relay="10.20.0.151:51999")
+    leg = _leg("iphone-8fe5", relay="10.99.0.151:51999")
     leg.interface = None
     leg.bind_error = "another leg already relays through this phone"
     a = object.__new__(agent_mod.BondAgent)

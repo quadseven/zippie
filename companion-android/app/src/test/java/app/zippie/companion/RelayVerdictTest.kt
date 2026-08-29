@@ -136,8 +136,8 @@ class RelayVerdictTest {
     fun `no verdict ever claims a connection to the router even when named`() {
         for (v in RelayVerdict.ALL_CASES_FOR_COPY_REVIEW) {
             assertFalse(
-                "$v says: ${v.detail(router = "suzu")}",
-                v.detail(router = "suzu").lowercase().contains("connected to the router"),
+                "$v says: ${v.detail(router = "travel-router")}",
+                v.detail(router = "travel-router").lowercase().contains("connected to the router"),
             )
         }
     }
@@ -165,7 +165,7 @@ class RelayVerdictTest {
 
         assertEquals(RelayVerdict.RouterQuiet(40_000), v)
         assertEquals("Your zippie router stopped sending. Last packet 40s ago.", v.detail())
-        assertEquals("suzu stopped sending. Last packet 40s ago.", v.detail(router = "suzu"))
+        assertEquals("travel-router stopped sending. Last packet 40s ago.", v.detail(router = "travel-router"))
     }
 
     @Test
@@ -368,7 +368,7 @@ class RelayVerdictTest {
     @Test
     fun `named router states use the given name`() {
         for (v in listOf(RelayVerdict.Listening, RelayVerdict.NotForwarding(null), RelayVerdict.RouterQuiet(40_000))) {
-            assertTrue(v.detail(router = "suzu"), v.detail(router = "suzu").startsWith("suzu "))
+            assertTrue(v.detail(router = "travel-router"), v.detail(router = "travel-router").startsWith("travel-router "))
         }
     }
 
@@ -382,6 +382,6 @@ class RelayVerdictTest {
     @Test
     fun `naming does not leak into states that are not about the router`() {
         val v = RelayVerdict.Carrying
-        assertEquals(v.detail(), v.detail(router = "suzu"))
+        assertEquals(v.detail(), v.detail(router = "travel-router"))
     }
 }

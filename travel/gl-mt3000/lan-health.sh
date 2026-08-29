@@ -1,7 +1,7 @@
 #!/bin/sh
 # Is the LAN actually usable by a CLIENT - not "does the router have internet".
 #
-# WHY THIS EXISTS. On 2026-08-11 suzu's DHCP handed out an address and no
+# WHY THIS EXISTS. On 2026-08-11 the travel router's DHCP handed out an address and no
 # resolver for hours. The router itself was perfectly online the whole time, so
 # watchdog.sh - which asks only "can the ROUTER reach the internet" - saw
 # nothing wrong. Every phone on the wifi was dead. iOS hid the wifi icon and

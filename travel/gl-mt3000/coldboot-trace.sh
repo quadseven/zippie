@@ -19,7 +19,11 @@
 # /tmp on purpose: this is a one-shot diagnostic for the CURRENT boot, and
 # writing to overlayfs every 15s would be flash wear for a file that only
 # matters until it is read.
-PHONE="${ZIPPIE_TRACE_PHONE:-10.20.0.174}"
+# REQUIRED, WITH NO DEFAULT. A default address here would be somebody else's
+# phone, and the counting rules would attach to a host that is not in the
+# conversation - reporting a confident, permanent zero for exactly the reason
+# the header above says this tracer must never do. Unset is an error, loudly.
+PHONE="${ZIPPIE_TRACE_PHONE:?set ZIPPIE_TRACE_PHONE to the LAN address of the phone being traced}"
 PORT="${ZIPPIE_TRACE_PORT:-51999}"
 LOG=/tmp/coldboot-trace.log
 CHAIN_OUT=ZIPPIE_TRACE_OUT
