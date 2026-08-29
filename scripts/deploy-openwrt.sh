@@ -151,6 +151,67 @@ except ModuleNotFoundError:
 with open(sys.argv[1], "rb") as fh:
     tomllib.load(fh)
 PY
+# ---------------------------------------------------------------------------
+# RENDER SECRETS THE REPO DELIBERATELY DOES NOT CARRY.
+#
+# `travel/gl-mt3000/zippie.toml` ships `server_public_key = "<server-public-key>"`
+# on purpose - the real key must not be in a repo that is going public. Nothing
+# ever substituted it back in, so this script shipped the literal placeholder,
+# `wg setconf` rejected it ("Key is not the correct length or format"), the bond
+# never came up, and because zippie owns the router's only default route the box
+# fell off the network entirely. Cost a manual recovery on 2026-08-29.
+#
+# The TOML validation above did NOT catch it: "<server-public-key>" is perfectly
+# valid TOML. It checks that the config PARSES, not that it is USABLE.
+#
+# We do not fetch the key into CI. We take the one the ROUTER already has, which
+# means the secret never enters git, a GitHub secret, or a runner's memory. That
+# is also the shape muster will take over later (per-device `app-config` over
+# mTLS) - so this does not have to be unwound when it does.
+RENDERED_CONFIG="$(mktemp)"
+trap 'rm -f "${RENDERED_CONFIG}"' EXIT
+cp "${CONFIG_SRC}" "${RENDERED_CONFIG}"
+
+if grep -qE '^[[:space:]]*server_public_key[[:space:]]*=[[:space:]]*"<' "${RENDERED_CONFIG}"; then
+  say "server_public_key is a placeholder - preserving the key already on the router"
+  LIVE_KEY="$(ssh_run "sed -n 's/^[[:space:]]*server_public_key[[:space:]]*=[[:space:]]*\"\\(.*\\)\"[[:space:]]*$/\\1/p' ${REMOTE_CONFIG} 2>/dev/null | head -1")"
+  # A wg public key is 44 chars of base64 ending in '='. Anything else - empty,
+  # truncated, or another placeholder - must stop the deploy BEFORE the router
+  # is touched, because the failure mode is the router leaving the network.
+  if ! printf '%s' "${LIVE_KEY}" | grep -qE '^[A-Za-z0-9+/]{43}=$'; then
+    die "the repo ships a placeholder server_public_key and the router has no valid
+    one to preserve (got ${#LIVE_KEY} chars). NOTHING was sent - the router is
+    untouched. Restore a good key on the router, or teach this script where to
+    fetch one, before deploying."
+  fi
+  python3 - "${RENDERED_CONFIG}" "${LIVE_KEY}" <<'RENDER'
+import re, sys
+path, key = sys.argv[1], sys.argv[2]
+src = open(path).read()
+out, n = re.subn(
+    r'(^[ \t]*server_public_key[ \t]*=[ \t]*)"<[^"]*>"',
+    lambda m: m.group(1) + '"' + key + '"',
+    src, count=1, flags=re.M,
+)
+if n != 1:
+    sys.exit("could not substitute server_public_key")
+open(path, "w").write(out)
+RENDER
+  [[ $? -eq 0 ]] || die "failed to render server_public_key into the config"
+fi
+
+# NOTHING WITH AN UNSUBSTITUTED PLACEHOLDER MAY REACH THE ROUTER. This catches
+# every future scrubbed value, not just the one that bit us - a scrub that adds
+# a new `<placeholder>` fails here, loudly, on the runner.
+if grep -nE '=[[:space:]]*"<[^"]*>"' "${RENDERED_CONFIG}"; then
+  die "the rendered config still contains an unsubstituted <placeholder> (shown
+    above). NOTHING was sent - the router is untouched and still running its
+    previous config."
+fi
+
+CONFIG_SRC="${RENDERED_CONFIG}"
+# ---------------------------------------------------------------------------
+
 CONFIG_SHA="$(sha256_of "${CONFIG_SRC}")"
 
 say "deploying to ${HOST}"
