@@ -261,8 +261,9 @@ ROLLBACKS_AT_LAST_DEPLOY="${ROLLBACKS_AT_LAST_DEPLOY:-0}"
 if [[ "${ROLLBACKS_FIRED}" -gt "${ROLLBACKS_AT_LAST_DEPLOY}" ]]; then
   echo
   echo "  !! A DEPLOY ROLLBACK HAS FIRED SINCE THE LAST DEPLOY"
-  echo "     $(( ROLLBACKS_FIRED - ROLLBACKS_AT_LAST_DEPLOY )) firing(s); the router rescued itself from a deploy that did not finish."
-  ssh_run "tail -5 ${FIRED_MARKER} 2>/dev/null" | sed 's/^/     /'
+  echo "     $(( ROLLBACKS_FIRED - ROLLBACKS_AT_LAST_DEPLOY )) new since the last deploy; the router rescued itself from a deploy that did not finish."
+  echo "     the marker's most recent entries (history, not all of them new):"
+  ssh_run "tail -5 ${FIRED_MARKER} 2>/dev/null" | sed 's/^/       /'
   echo "     So the running build may be the one BEFORE the last deploy, not after it."
   echo "     logread | grep zippie-rollback   on the router has the rest."
   echo
