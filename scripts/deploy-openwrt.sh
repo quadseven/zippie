@@ -695,6 +695,23 @@ printf '{"commit":"%s","deployed_at":"%s","fingerprint":"%s","modules":%s,"confi
 # proves works here.
 say "restarting agent (from the router's cron - an ssh-driven restart cannot survive its own tunnel teardown)"
 
+# WHICH PROCESS IS SERVING RIGHT NOW, captured BEFORE anything is scheduled.
+#
+# THE FINGERPRINT CANNOT ANSWER THIS. `build.fingerprint()` is a digest of the
+# files on disk, recomputed on every call - its own module docstring says so -
+# so the moment the package is copied, the OLD process starts reporting the NEW
+# fingerprint. Measured on suzu 2026-08-29 07:20:10: this script printed
+# "running da4311bb261cc8cc" and declared the deploy verified while the agent
+# that had been running since 06:58 was still the one answering, and the restart
+# was still 50 seconds in the future.
+#
+# That is not a cosmetic inaccuracy. Everything after this point - provisioning,
+# and DISARMING THE ROLLBACK - ran while the risky part had not happened yet, so
+# the agent restarted with no fallback armed at all. A pid is the cheapest thing
+# on this box that only a restart can change.
+AGENT_PID_BEFORE="$(ssh_run "ps | awk '/python3 -m zippie/ && !/awk/ {print \$1; exit}'" || true)"
+echo "  agent pid now: ${AGENT_PID_BEFORE:-(none running)}"
+
 RESTART_WHEN="$(ssh_run "python3 -c 'import time; t=time.localtime(time.time()+70); print(\"%d %d\" % (t.tm_min, t.tm_hour))'" || true)"
 case "${RESTART_WHEN}" in
   [0-9]*\ [0-9]*) : ;;
@@ -720,9 +737,13 @@ esac
 echo "  scheduled: ${RESTART_ARMED}"
 
 # ------------------------------------------- prove the RUNNING agent is this one
-# The file check above proves what is ON DISK. This proves what is IN MEMORY,
-# which is the question that actually matters and the one nothing has ever
-# answered for this router.
+# THE FINGERPRINT ALONE NEVER PROVED THIS, and the comment here used to claim it
+# did. `build.fingerprint()` digests the files on disk and is recomputed on every
+# call, so after the copy above BOTH the old process and a new one report the
+# same value - the check could not tell them apart and passed either way.
+#
+# What proves it is the pid changing. The fingerprint then says the new process
+# is running the right tree, which is the other half and still worth asking.
 # MEASURED, NOT GUESSED. The old window was 30s, and on 2026-08-29 the router
 # took between 36 and 56 seconds to answer again after an agent restart - the
 # phone legs re-announce on a 45s lease and the tailnet only comes back once the
@@ -731,7 +752,16 @@ echo "  scheduled: ${RESTART_ARMED}"
 # first. 4 minutes, against a rollback armed for ten.
 say "verifying running agent (the restart is on the router's clock; this can take a few minutes)"
 RUNNING_FP=""
+AGENT_PID_NOW=""
 for _attempt in $(seq 1 80); do
+  # THE PID FIRST, AND THE FINGERPRINT ONLY ONCE IT HAS MOVED. Asking for the
+  # fingerprint alone is what let this script call a deploy verified before the
+  # restart it scheduled had run - see AGENT_PID_BEFORE above.
+  AGENT_PID_NOW="$(ssh_run "ps | awk '/python3 -m zippie/ && !/awk/ {print \$1; exit}'" 2>/dev/null || true)"
+  if [[ -z "${AGENT_PID_NOW}" || "${AGENT_PID_NOW}" == "${AGENT_PID_BEFORE}" ]]; then
+    sleep 3
+    continue
+  fi
   RUNNING_FP="$(ssh_run "wget -q -O - ${STATUS_URL} 2>/dev/null" \
     | python3 -c 'import json,sys
 try:
@@ -741,6 +771,13 @@ except Exception:
   [[ -n "${RUNNING_FP}" ]] && break
   sleep 3
 done
+
+if [[ -z "${AGENT_PID_NOW}" || "${AGENT_PID_NOW}" == "${AGENT_PID_BEFORE}" ]]; then
+  die "the agent process never changed within 4 minutes (pid ${AGENT_PID_BEFORE:-none}
+  before, ${AGENT_PID_NOW:-none} now), so the restart scheduled above did not
+  happen. The new package and config are on disk and the OLD process is still
+  serving them. The rollback is STILL ARMED and will restore the previous build."
+fi
 
 if [[ -z "${RUNNING_FP}" ]]; then
   die "the agent did not serve a build fingerprint within 4 minutes. It may be

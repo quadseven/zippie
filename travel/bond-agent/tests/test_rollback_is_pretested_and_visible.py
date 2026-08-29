@@ -509,3 +509,65 @@ def test_the_verification_window_outlasts_a_measured_recovery(deploy):
         f"the verification window is {budget}s; a cron-scheduled restart can "
         "take 60s to begin and this router took up to 56s to answer afterwards"
     )
+
+
+def test_the_running_agent_proof_is_not_the_fingerprint_alone(deploy):
+    """THE PROOF THAT PROVED NOTHING.
+
+    `build.fingerprint()` digests the files on disk and is recomputed on every
+    call - build.py's own docstring says so. So the moment the package is copied,
+    the OLD process starts reporting the NEW fingerprint, and a check that asks
+    only for the fingerprint passes whether or not anything restarted.
+
+    Measured on suzu 2026-08-29 07:20:10: the deploy printed
+    "running da4311bb261cc8cc" and declared itself verified while the agent
+    running since 06:58 was still the one answering and the restart was 50
+    seconds in the future. It then provisioned and DISARMED THE ROLLBACK, so the
+    agent restarted with no fallback at all.
+    """
+    code = _code(deploy)
+    assert "AGENT_PID_BEFORE=" in code, (
+        "nothing captures the agent's process identity, so the deploy cannot "
+        "tell a restart from a file copy"
+    )
+    captured = code.index("AGENT_PID_BEFORE=")
+    scheduled = code.index("RESTART_WHEN=")
+    assert captured < scheduled, (
+        "the pid is captured after the restart is scheduled, so it may already "
+        "be the new one"
+    )
+
+
+def test_the_verification_waits_for_a_new_process(deploy):
+    """A fingerprint read while the old process is serving is not evidence."""
+    code = _code(deploy)
+    loop = code.split("for _attempt in $(seq 1 80); do", 1)[1].split("\ndone", 1)[0]
+    assert "AGENT_PID_NOW=" in loop, "the loop does not re-read the pid"
+    pid_gate = loop.index("AGENT_PID_NOW=")
+    fp_read = loop.index("RUNNING_FP=")
+    assert pid_gate < fp_read, (
+        "the fingerprint is read before the pid is checked, so a deploy can "
+        "still be verified by the process it is replacing"
+    )
+    assert 'continue' in loop, "the loop does not skip until the pid has moved"
+
+
+def test_a_restart_that_never_happened_stops_the_deploy(deploy):
+    """And says the rollback is still armed, because it is - the disarm is below
+    this point and that ordering is the whole fix."""
+    code = _code(deploy)
+    block = code.split('if [[ -z "${AGENT_PID_NOW}" || "${AGENT_PID_NOW}" == "${AGENT_PID_BEFORE}" ]]; then', 1)
+    assert len(block) == 2, "nothing refuses a restart that did not happen"
+    body = block[1].split("\nfi", 1)[0]
+    assert "die " in body
+    assert "STILL ARMED" in body
+
+
+def test_nothing_is_disarmed_before_the_restart_is_proven(deploy):
+    """THE ORDERING THAT FAILED. Everything after the verification ran while the
+    restart had not happened, which is how the agent came to restart with no
+    fallback armed."""
+    code = _code(deploy)
+    verify = code.index('say "verifying running agent')
+    disarm = code.index('say "disarming the rollback"')
+    assert verify < disarm, "the rollback is disarmed before the restart is proven"
