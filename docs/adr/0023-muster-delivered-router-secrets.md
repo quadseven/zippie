@@ -133,6 +133,46 @@ This costs nothing to support now and cannot be added later without a format
 change. A key that cannot be rotated without an outage is a key that never gets
 rotated.
 
+### Where the key goes, and what reads it
+
+Settled against zippie#7 rather than guessed. `zippie/auth.py` takes
+`auth_key_file` - a **path** in `[policy]`, so the public repo carries no secret
+- and `load_bond_secret` reads raw bytes from that file, strips trailing
+whitespace, requires at least 16 bytes, and **refuses** a file readable by group
+or other. Its own docstring says "Distribution of that file is what muster is
+expected to take over."
+
+So the client writes that file, at 0600, atomically, with nothing appended -
+`load_bond_secret` strips a trailing newline, but a newline at one end and not
+the other derives two different keys and presents as "the MAC never verifies",
+which is a miserable thing to debug from either end.
+
+`keys.json` keeps only the **record**: the revision, the key's digest, and where
+it was put. Two homes for one credential is one more place to leak it from, and
+the second is always the one nobody remembers to rotate.
+
+Writing it into a JSON section instead would have been the "unit-tested, never
+wired" shape this estate keeps rediscovering: a field nothing opens.
+
+### The rotation overlap has a delivery half and a verifier half, and only one exists
+
+zippie#7's four-rung ladder (`off` -> `observe` -> `sign` -> `require`, ends never
+more than one rung apart, home first) solves **turning authentication on** without
+an outage. It does not solve **changing the key afterwards**: `load_bond_secret`
+returns one secret and `Identity` holds one derived key, so an authenticated bond
+has no window in which both the old and the new key verify.
+
+That is the same class of problem the ladder was built for, one layer down, and
+on this router it is worse: the management path rides the link the key protects,
+so a rotation that breaks the bond also removes the route to the fix.
+
+This design delivers `key.current` **and** `key.previous` from day one, and writes
+the second beside the first, because a format that cannot express an overlap
+forces an outage at every rotation and cannot be widened later without changing
+both ends at once. Nothing verifies against the previous key yet; the missing
+half is a verifier that accepts either, and it is filed separately. Delivery is
+deliberately not the thing blocking it.
+
 ### The cache is authoritative; muster is a refresher
 
 `/etc/zippie/keys.json` (0600, already the home of the per-path WireGuard private

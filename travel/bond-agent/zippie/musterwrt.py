@@ -119,10 +119,28 @@ USER_AGENT = "musterwrt/1 (openwrt; zippie)"
 # the vocabulary belongs to whatever reads the file, and this is ours.
 DATAPATH_SUBJECT = "zippie.datapath"
 
-# Where a validated key set lands. ADDITIVE, under its own top-level object:
-# `config.load_config` reads only `private_key`, `public_key` and `paths` out of
-# keys.json, so this can be written before anything consumes it without changing
-# what the agent loads today.
+# WHERE THE SECRET ITSELF GOES, and it is a file rather than a JSON field
+# because that is what reads it.
+#
+# `zippie/auth.py` (zippie#7) takes `auth_key_file` - a PATH in `[policy]`, so
+# the public repo carries no secret - and `load_bond_secret` reads raw bytes from
+# it, strips trailing whitespace, requires at least MIN_BOND_SECRET bytes, and
+# REFUSES a file that is readable by group or other. Its own docstring says
+# "Distribution of that file is what muster is expected to take over", which is
+# this module.
+#
+# Writing the key into keys.json instead would have been a section nothing reads
+# - the shape this estate keeps rediscovering as "unit-tested, never wired".
+#
+# THE PREVIOUS KEY GOES BESIDE IT, under this suffix. Nothing verifies against it
+# yet: auth.py holds ONE key, so the overlap a rotation needs cannot be expressed
+# through its loader today. The file is written anyway so that delivery is not
+# the thing blocking a rotation later, and the reason is recorded here rather
+# than discovered by whoever tries.
+PREVIOUS_SUFFIX = ".previous"
+
+# What keys.json keeps: the RECORD, never the secret. Two homes for one credential
+# is one more place to leak it from and one more to forget to rotate.
 KEYS_SECTION = "datapath"
 
 # A datapath key is 32 bytes. Base64 of 32 bytes is 44 characters ending in a
@@ -286,25 +304,65 @@ def _digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()[:12]
 
 
-def merge_into_keys(existing: dict, keys: dict[str, str], revision: str) -> dict:
-    """What keys.json becomes. Everything already there is preserved.
+def merge_into_keys(
+    existing: dict, keys: dict[str, str], revision: str, key_path: str
+) -> dict:
+    """What keys.json becomes: a RECORD of the delivery, not the secret.
 
     A WHOLESALE REWRITE WOULD BE A DISASTER and it is the obvious implementation.
     keys.json holds the per-path WireGuard private keys this router cannot
     regenerate - `store.py` makes the same argument about legs.json, that losing
     it means losing something nobody can recompute. This module owns exactly one
     top-level object in that file and must not be able to touch the rest.
+
+    NO KEY MATERIAL IN HERE. The secret lives in one file, the one `auth.py`
+    reads. What is kept is what answers an operator's questions without holding
+    the credential: which revision, which key (by digest), and where it was put.
     """
     merged = dict(existing)
-    merged[KEYS_SECTION] = {
-        "current": keys[CURRENT],
-        "previous": keys.get(PREVIOUS, ""),
+    record = {
         # The revision muster computed over the bytes it served. Stable across
         # pods and restarts (policy._revision), so it answers "is this router on
         # the policy the operator wrote" without anybody holding the key.
         "revision": revision,
+        "key_file": key_path,
+        "current_digest": _digest(keys[CURRENT]),
     }
+    if PREVIOUS in keys:
+        record["previous_digest"] = _digest(keys[PREVIOUS])
+    merged[KEYS_SECTION] = record
     return merged
+
+
+def write_secret(path: Path, secret: str) -> None:
+    """One key, at 0600, atomically, with nothing appended.
+
+    THE MODE IS NOT ADVISORY. `auth.load_bond_secret` refuses a key file that is
+    readable by group or other - refuses rather than warns - so a key written at
+    0644 is an agent that will not start rather than a quiet weakness. The mode
+    is set on the temporary file before a byte of the secret is written to it.
+
+    NO TRAILING NEWLINE. `load_bond_secret` strips trailing whitespace precisely
+    because `wg genpsk >` adds one, so either would work - but a newline at one
+    end and not the other derives two different keys and presents as "the MAC
+    never verifies", and the cheapest way not to have that conversation is to
+    write exactly the bytes that were delivered.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".bondkey.", suffix=".tmp")
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(secret)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def write_keys(path: Path, document: dict) -> None:
@@ -485,28 +543,61 @@ def fetch_configuration(
 
 
 def refresh(
-    base_url: str, key_path: Path, certificate_pem: str, keys_path: Path
+    base_url: str,
+    identity_key: Path,
+    certificate_pem: str,
+    keys_path: Path,
+    bond_key_path: Path,
 ) -> str:
-    """Ask muster, validate, and update the cache only if all of that worked.
+    """Ask muster, validate, and write only if all of that worked.
+
+    `identity_key` is this device's own P-256 key, used to sign muster's nonce.
+    `bond_key_path` is the file `auth.py` reads - `auth_key_file` in `[policy]`.
+    They are different credentials with different jobs and are deliberately not
+    the same argument.
 
     Returns a one-line human summary. Raises Refused or Unreachable, and in
-    BOTH cases keys.json is exactly as it was - which is the whole contract.
+    EVERY failing case both files are exactly as they were - which is the whole
+    contract this module exists to keep.
     """
-    files, revision = fetch_configuration(base_url, key_path, certificate_pem)
+    files, revision = fetch_configuration(base_url, identity_key, certificate_pem)
     keys = datapath_keys(files)
     existing = read_keys(keys_path)
     held = existing.get(KEYS_SECTION, {})
-    if held.get("current") == keys[CURRENT] and held.get(
-        "previous", ""
-    ) == keys.get(PREVIOUS, ""):
+
+    # COMPARED BY DIGEST AGAINST THE RECORD, and then confirmed against the FILE.
+    # The record alone would say "unchanged" for a key file somebody deleted or
+    # truncated by hand, which is the state where re-writing it matters most.
+    on_disk = ""
+    if bond_key_path.is_file():
+        try:
+            on_disk = bond_key_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            on_disk = ""
+    if held.get("current_digest") == _digest(keys[CURRENT]) and on_disk == keys[CURRENT]:
         # NOT REWRITTEN WHEN NOTHING CHANGED, for the same reason the deploy does
         # not rewrite an unchanged zippie.toml: a file whose mtime moves on every
         # poll teaches an operator reading `ls -l` that the key rotated when it
         # did not.
         return f"unchanged (revision {revision}, current {_digest(keys[CURRENT])})"
-    write_keys(keys_path, merge_into_keys(existing, keys, revision))
+
+    # THE SECRET FIRST, THE RECORD SECOND. If the record were written first and
+    # the key write then failed, the next poll would read "unchanged" and never
+    # retry - a router left without the key, reported as up to date.
+    write_secret(bond_key_path, keys[CURRENT])
+    note = ""
+    if PREVIOUS in keys:
+        write_secret(Path(str(bond_key_path) + PREVIOUS_SUFFIX), keys[PREVIOUS])
+    elif Path(str(bond_key_path) + PREVIOUS_SUFFIX).exists():
+        # NOT DELETED HERE. An absent `key.previous` is how a completed rotation
+        # looks, and it is also how a policy file somebody is midway through
+        # editing looks. Deleting key material is the irreversible direction, so
+        # it is said out loud and left for a person - the same posture as the
+        # absent `app-config` above.
+        note = "; a previous-key file is still on disk and muster no longer names one"
+    write_keys(keys_path, merge_into_keys(existing, keys, revision, str(bond_key_path)))
     return (
         f"updated (revision {revision}, current {_digest(keys[CURRENT])}"
         + (f", previous {_digest(keys[PREVIOUS])}" if PREVIOUS in keys else "")
-        + ")"
+        + f") -> {bond_key_path}{note}"
     )
