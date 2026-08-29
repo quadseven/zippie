@@ -115,7 +115,7 @@ spec:
           # The readable twin of this digest is the tag `sha-807e7430784f`.
           # More than one tag may point here, and that is information rather
           # than a bug: those commits did not change the image.
-          image: ghcr.io/quadseven/zippie-clienthome@sha256:7a4059dc06c7f8a0076624025621e4ad069f6d79ebdeb43a273aa253af995787
+          image: ghcr.io/quadseven/zippie-clienthome@sha256:db012452516f78e788edf938dea9af6a8a4e2ab3bf6efb0abb014519667392a5
           args:
             - -listen=:51920           # NOT 51901/51902 - those are the live bond
             - -tun=zippie0
