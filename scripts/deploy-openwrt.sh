@@ -29,6 +29,7 @@
 #   scripts/deploy-openwrt.sh <host> --prune      also remove modules the repo
 #                                                 no longer has
 #   scripts/deploy-openwrt.sh <host> --allow-dirty
+#   scripts/deploy-openwrt.sh <host> --no-pretest-rollback
 #
 # THIS RESTARTS THE BOND on a live travel router. Do not run it against a
 # router someone is currently driving behind.
@@ -39,6 +40,11 @@ PKG_SRC="${REPO_ROOT}/travel/bond-agent/zippie"
 REMOTE_ROOT=/opt/zippie-agent
 REMOTE_PKG="${REMOTE_ROOT}/zippie"
 STAMP=/etc/zippie/build.json
+# WHERE THE ROLLBACK SAYS IT FIRED. Append-only, on overlayfs, so a reboot
+# cannot erase the record of a rescue - see travel/gl-mt3000/deploy-rollback.sh
+# and zippie#5, where a rollback that worked perfectly was diagnosed as broken
+# because the only evidence it left was a file in /tmp.
+FIRED_MARKER=/etc/zippie/state/deploy-rollback.fired
 CONFIG_SRC="${REPO_ROOT}/travel/gl-mt3000/zippie.toml"
 REMOTE_CONFIG=/etc/zippie/zippie.toml
 STATUS_URL=http://127.0.0.1:8787/api/status
@@ -47,19 +53,27 @@ HOST=""
 DRY_RUN=0
 PRUNE=0
 ALLOW_DIRTY=0
+# ON BY DEFAULT, and the default is the whole point. A rollback that has never
+# executed is an assumption, not a fallback, and the two incidents this script
+# carries scars from were both "the failsafe was armed" - once with nothing
+# scheduled at all (2026-08-24, 45 minutes stopped, power-cycled by hand) and
+# once with a rescue that fired and could not be seen (2026-08-29). Opting out
+# is for a human at the router who can reach it if it goes dark.
+PRETEST=1
 
 for arg in "$@"; do
   case "${arg}" in
     --dry-run)     DRY_RUN=1 ;;
     --prune)       PRUNE=1 ;;
     --allow-dirty) ALLOW_DIRTY=1 ;;
+    --no-pretest-rollback) PRETEST=0 ;;
     -*)            echo "unknown flag: ${arg}" >&2; exit 2 ;;
     *)             HOST="${arg}" ;;
   esac
 done
 
 if [[ -z "${HOST}" ]]; then
-  echo "usage: $0 <host> [--dry-run] [--prune] [--allow-dirty]" >&2
+  echo "usage: $0 <host> [--dry-run] [--prune] [--allow-dirty] [--no-pretest-rollback]" >&2
   exit 2
 fi
 
@@ -222,6 +236,38 @@ echo "  config      ${CONFIG_SHA:0:16}"
 
 # ------------------------------------------------------------ what is there
 say "current state on ${HOST}"
+
+# DID A ROLLBACK FIRE SINCE THE LAST DEPLOY? (zippie#5)
+#
+# On 2026-08-29 one did, correctly, and was diagnosed during the incident as
+# never having fired. Three places to look and all three said no: the log was in
+# /tmp, nothing reached logread, and the crontab line was gone because the
+# rollback disarms itself. The marker fixes the first two on the router; this
+# fixes the third problem, which is that nobody thinks to look.
+#
+# Reported FIRST, before anything is changed, because "the last deploy was
+# reverted" changes what this deploy means. Deploying over a reverted state is
+# how a bad change gets re-applied by somebody who believes they are shipping
+# something new.
+#
+# NOT FATAL. A rollback that fired is history, not a blocker, and stopping the
+# deploy over it would leave the router on the OLD build with no way to ship the
+# fix. It is printed loudly and the count is carried into the stamp so the next
+# run can tell a new firing from this same old one.
+ROLLBACKS_FIRED="$(ssh_run "wc -l < ${FIRED_MARKER} 2>/dev/null | tr -d ' '" 2>/dev/null || true)"
+ROLLBACKS_FIRED="${ROLLBACKS_FIRED:-0}"
+ROLLBACKS_AT_LAST_DEPLOY="$(ssh_run "python3 -c 'import json; print(json.load(open(\"${STAMP}\")).get(\"rollbacks_fired\", 0))' 2>/dev/null" || true)"
+ROLLBACKS_AT_LAST_DEPLOY="${ROLLBACKS_AT_LAST_DEPLOY:-0}"
+if [[ "${ROLLBACKS_FIRED}" -gt "${ROLLBACKS_AT_LAST_DEPLOY}" ]]; then
+  echo
+  echo "  !! A DEPLOY ROLLBACK HAS FIRED SINCE THE LAST DEPLOY"
+  echo "     $(( ROLLBACKS_FIRED - ROLLBACKS_AT_LAST_DEPLOY )) new since the last deploy; the router rescued itself from a deploy that did not finish."
+  echo "     the marker's most recent entries (history, not all of them new):"
+  ssh_run "tail -5 ${FIRED_MARKER} 2>/dev/null" | sed 's/^/       /'
+  echo "     So the running build may be the one BEFORE the last deploy, not after it."
+  echo "     logread | grep zippie-rollback   on the router has the rest."
+  echo
+fi
 # BOTH SIDES ARE SORTED HERE, WITH THE SAME COLLATION. `comm` requires that,
 # and busybox `sort` on the router does not order the same way as the host's,
 # so sorting remotely and comparing locally reports files as missing that are
@@ -295,36 +341,225 @@ fi
 # `date -d "+N minutes"`; it fails, and a crontab line built from the empty
 # result comes out malformed - the real example was `2: * * * /tmp/rollback.sh`,
 # which cron accepts silently and never fires.
+ROLLBACK_MIN="${ZIPPIE_ROLLBACK_MINUTES:-10}"
+# How far ahead the PRE-TEST schedules its deliberate firing. Two minutes, not
+# one: an entry written at hh:mm:59 for hh:mm+1 is a race, and losing it would
+# abort a deploy that had nothing wrong with it.
+PRETEST_MIN="${ZIPPIE_ROLLBACK_PRETEST_MINUTES:-2}"
+
+# ---------------------------------------------------------------------------
+# THE ROLLBACK, AS THREE THINGS THAT CAN BE DONE MORE THAN ONCE.
+#
+# It was one straight-line block until the pre-test below needed to arm twice -
+# once to fire deliberately, once for real. Copying the block would have meant
+# two copies of the read-back, and the read-back is the step whose absence
+# already let a malformed crontab line sit through a real cutover while
+# everybody believed a rollback was armed. One copy, called twice.
+
+# Everything the rollback needs in order to have something to restore. Taken
+# from what is RUNNING, which is what makes the pre-test safe: restoring this
+# snapshot puts the router back into the state it is already in.
+snapshot_for_rollback() {
+  ssh_run "rm -rf ${REMOTE_ROOT}/zippie.deploy-rollback; \
+           [ -d ${REMOTE_PKG} ] && cp -a ${REMOTE_PKG} ${REMOTE_ROOT}/zippie.deploy-rollback || true"
+  ssh_run "[ -f ${REMOTE_CONFIG} ] && cp ${REMOTE_CONFIG} ${REMOTE_CONFIG}.deploy-rollback || true"
+}
+
+# How many times the rollback has EVER fired, from the append-only marker on
+# overlayfs. Empty (no marker yet) reads as 0; a router that cannot be asked
+# also reads as 0, and the caller compares two readings taken the same way, so
+# an unreadable marker under-reports rather than inventing a firing.
+rollback_firings() {
+  ssh_run "wc -l < ${FIRED_MARKER} 2>/dev/null | tr -d ' '" 2>/dev/null || true
+}
+
+# Schedule a one-shot at a fixed wall-clock minute, and PROVE the line is one
+# cron will run. Sets ARMED_LINE.
+#
+# A CRON ONE-SHOT, NOT `nohup &`. Measured on this box 2026-08-01: `setsid` and
+# `nohup &` do not survive, and `( sleep N; rollback ) &` did not fire at 480s.
+# The only launch that reliably works here is a self-removing cron entry.
+#
+# THE MINUTE IS COMPUTED IN PYTHON, on the router. busybox has no
+# `date -d "+N minutes"`; it fails, and a crontab line built from the empty
+# result comes out malformed - the real example was `2: * * * /tmp/rollback.sh`,
+# which cron accepts silently and never fires.
+arm_rollback() {
+  local minutes="$1" when armed
+  when="$(ssh_run "python3 -c 'import time; t=time.localtime(time.time()+${minutes}*60); print(\"%d %d\" % (t.tm_min, t.tm_hour))'" || true)"
+  case "${when}" in
+    [0-9]*\ [0-9]*) : ;;
+    *) die "could not compute a rollback time on the router (got '${when}'). NOTHING has been changed." ;;
+  esac
+  ssh_run "crontab -l 2>/dev/null | grep -v deploy-rollback > /tmp/ct.\$\$; \
+           echo '${when} * * * /etc/zippie/deploy-rollback.sh' >> /tmp/ct.\$\$; \
+           crontab /tmp/ct.\$\$; rm -f /tmp/ct.\$\$; /etc/init.d/cron reload"
+
+  # READ IT BACK. A failsafe you have not read back is not a failsafe.
+  armed="$(ssh_run "crontab -l 2>/dev/null | grep deploy-rollback" || true)"
+  case "${armed}" in
+    [0-9]*\ [0-9]*\ \*\ \*\ \*\ /etc/zippie/deploy-rollback.sh) : ;;
+    *) die "the rollback line did not read back as a valid crontab entry (got '${armed}').
+     NOTHING has been changed. Fix the arming before deploying." ;;
+  esac
+  ARMED_LINE="${armed}"
+}
+
+# How many rollback lines are in the router's crontab right now.
+#
+# `|| true` IS INSIDE THE REMOTE COMMAND, AND THAT IS THE WHOLE POINT. `grep -c`
+# prints `0` and exits 1 when it matches nothing, ssh hands that exit status
+# back, and a `|| echo 0` on THIS side then appends a second `0` to the `0` grep
+# already printed. The variable holds "0\n0", every `== "0"` test is false, and
+# a correctly disarmed rollback reads as one that is still armed.
+#
+# Found 2026-08-29 by the pre-test, on the live router, before a single byte of
+# the deploy had been copied - which is precisely the job the pre-test exists to
+# do. The same defect was in the final disarm check before this refactor, where
+# it printed "WARNING: a rollback line is still armed" after every successful
+# deploy that had correctly disarmed one.
+#
+# `tr -d` because `wc`/`grep` output carries whitespace that a string comparison
+# does not forgive. An ssh that fails outright yields "", which compares unequal
+# to "0" and is therefore read as STILL ARMED - the safe direction.
+rollback_cron_lines() {
+  ssh_run "crontab -l 2>/dev/null | grep -c deploy-rollback || true" 2>/dev/null \
+    | tr -d '[:space:]'
+}
+
+# Take the one-shot back out. Returns non-zero if a line survived, because a
+# rollback still armed after a successful deploy will revert it.
+disarm_rollback() {
+  ssh_run "crontab -l 2>/dev/null | grep -v deploy-rollback | crontab -; /etc/init.d/cron reload" || true
+  [[ "$(rollback_cron_lines)" == "0" ]]
+}
+
 say "arming the rollback"
 
-ROLLBACK_MIN="${ZIPPIE_ROLLBACK_MINUTES:-10}"
-
-ssh_run "mkdir -p /etc/zippie ${REMOTE_ROOT}"
-# Snapshot what is there now, so the rollback has something to restore.
-ssh_run "rm -rf ${REMOTE_ROOT}/zippie.deploy-rollback;          [ -d ${REMOTE_PKG} ] && cp -a ${REMOTE_PKG} ${REMOTE_ROOT}/zippie.deploy-rollback || true"
-ssh_run "[ -f ${REMOTE_CONFIG} ] && cp ${REMOTE_CONFIG} ${REMOTE_CONFIG}.deploy-rollback || true"
+ssh_run "mkdir -p /etc/zippie /etc/zippie/state ${REMOTE_ROOT}"
+snapshot_for_rollback
 
 # The rollback script itself, from the repo, so it is reviewable and not a heredoc.
-tar -C "${REPO_ROOT}/travel/gl-mt3000" -cf - deploy-rollback.sh   | ssh_run "tar -C /etc/zippie -xf - && chmod +x /etc/zippie/deploy-rollback.sh"   || die "could not install the rollback script. NOTHING has been changed."
+# OWNED BY root AFTER EXTRACTION. busybox tar keeps the uid from the archive, so
+# a runner extracting as uid 1001 leaves the rescue script owned by 1001 - which
+# is what is on suzu today. Nothing on this router runs as 1001, so it is not an
+# exploit; it is a file that is supposed to be the last line of defence and is
+# writable by something that is not root.
+# restart-once.sh ships alongside it and for the same reason: both have to be
+# on the router BEFORE anything is stopped, because both are launched by cron
+# after the ssh session is already gone.
+tar -C "${REPO_ROOT}/travel/gl-mt3000" -cf - deploy-rollback.sh restart-once.sh \
+  | ssh_run "tar -C /etc/zippie -xf - && chmod +x /etc/zippie/deploy-rollback.sh /etc/zippie/restart-once.sh && chown root:root /etc/zippie/deploy-rollback.sh /etc/zippie/restart-once.sh" \
+  || die "could not install the rollback script. NOTHING has been changed."
 
-CRON_WHEN="$(ssh_run "python3 -c 'import time; t=time.localtime(time.time()+${ROLLBACK_MIN}*60); print(\"%d %d\" % (t.tm_min, t.tm_hour))'" || true)"
-case "${CRON_WHEN}" in
-  [0-9]*\ [0-9]*) : ;;
-  *) die "could not compute a rollback time on the router (got '${CRON_WHEN}'). NOTHING has been changed." ;;
-esac
+# ------------------------------------------------------ PRE-TEST THE ROLLBACK
+# "ARMED" IS A CLAIM. THIS IS THE STEP THAT MAKES IT A FACT.
+#
+# Everything above arms a path and hopes. Both incidents this script carries
+# scars from were exactly that shape: on 2026-08-24 nothing was scheduled at all
+# and the router sat stopped for 45 minutes until somebody power-cycled it, and
+# on 2026-08-29 a rescue fired correctly and was diagnosed as broken because it
+# left no evidence anyone could find. A rollback path that has never executed on
+# this box, in this state, is an assumption.
+#
+# So it is fired DELIBERATELY, NOW, while nothing is broken.
+#
+# IT IS SAFE BY CONSTRUCTION, which is why it can run before every deploy. The
+# snapshot it restores was taken seconds ago from the RUNNING package and config,
+# so the restore copies a directory onto itself and restarts the agent. The cost
+# is one restart of the bond - the same restart this deploy is about to perform
+# anyway, a couple of minutes earlier - and the worst state it can leave behind
+# is the state the router was already in.
+#
+# WHAT IT PROVES, none of which is provable by reading the crontab:
+#   * cron on this box really does fire a one-shot at a Python-computed minute,
+#   * the line that read back as well-formed is a line cron will run,
+#   * the restore commands work against the real filesystem,
+#   * the agent comes back afterwards and the router still answers.
+#
+# Measured 2026-08-29 06:20:00 and 06:22:00 EDT on suzu with a throwaway copy of
+# this mechanism, on a path that could not touch the bond: fired on the minute
+# both times, self-disarmed both times, appended to its marker, logged to
+# logread, and left the router's other eight crontab entries byte-identical.
+if [[ "${PRETEST}" -eq 1 ]]; then
+  say "pre-testing the rollback - firing it deliberately, with nothing broken"
+  fired_before="$(rollback_firings)"; fired_before="${fired_before:-0}"
+  arm_rollback "${PRETEST_MIN}"
+  echo "  armed for the pre-test: ${ARMED_LINE}"
+  echo "  waiting for cron to fire it (marker is at ${FIRED_MARKER}, currently ${fired_before} firings)"
 
-ssh_run "crontab -l 2>/dev/null | grep -v deploy-rollback > /tmp/ct.\$\$;          echo '${CRON_WHEN} * * * /etc/zippie/deploy-rollback.sh' >> /tmp/ct.\$\$;          crontab /tmp/ct.\$\$; rm -f /tmp/ct.\$\$; /etc/init.d/cron reload"
+  # POLLED ON THE MARKER, NOT ON A CLOCK. "The minute has passed" is not
+  # evidence that cron ran; the marker is written by the rollback itself as its
+  # first act, so it is the one thing that cannot be true unless it fired.
+  pretest_fired=0
+  for _tick in $(seq 1 $(( (PRETEST_MIN + 2) * 4 ))); do
+    sleep 15
+    fired_now="$(rollback_firings)"; fired_now="${fired_now:-0}"
+    if [[ "${fired_now}" -gt "${fired_before}" ]]; then pretest_fired=1; break; fi
+  done
 
-# READ IT BACK. A failsafe you have not read back is not a failsafe - this is the
-# step whose absence let a malformed line sit in crontab through a real cutover
-# while everybody believed a rollback was armed.
-ARMED="$(ssh_run "crontab -l 2>/dev/null | grep deploy-rollback" || true)"
-case "${ARMED}" in
-  [0-9]*\ [0-9]*\ \*\ \*\ \*\ /etc/zippie/deploy-rollback.sh) : ;;
-  *) die "the rollback line did not read back as a valid crontab entry (got '${ARMED}').
-     NOTHING has been changed. Fix the arming before deploying." ;;
-esac
-echo "  armed: ${ARMED}"
+  if [[ "${pretest_fired}" -ne 1 ]]; then
+    # DISARM BEFORE DYING. A one-shot left armed by a failed pre-test fires
+    # later, at a minute nobody is expecting, and restarts the agent under
+    # whoever is driving behind this router.
+    disarm_rollback || true
+    die "the rollback did NOT fire within $((PRETEST_MIN + 2)) minutes, so this deploy
+  has no working fallback and will not proceed. NOTHING has been changed - the
+  router is still running what it was running. Check on the router:
+      crontab -l | grep deploy-rollback
+      logread | grep zippie-rollback
+      cat ${FIRED_MARKER}
+  busybox cron accepts a malformed line silently, and /etc/init.d/cron may not
+  be running at all."
+  fi
+
+  # IT FIRED. Now prove the three things a firing is supposed to leave behind,
+  # because "the marker grew" only proves the script started.
+  echo "  fired: $(ssh_run "tail -1 ${FIRED_MARKER}")"
+  ssh_run "logread 2>/dev/null | grep -q zippie-rollback" \
+    || die "the rollback fired but put nothing in logread. That is the zippie#5
+  failure exactly - a rescue nobody outside the box can see - and it means the
+  ONE piece of evidence an operator greps for during an incident is missing.
+  NOTHING has been changed."
+  echo "  logread: $(ssh_run "logread 2>/dev/null | grep zippie-rollback | tail -1")"
+
+  still_armed="$(rollback_cron_lines)"
+  [[ "${still_armed}" == "0" ]] \
+    || die "the rollback fired but did not disarm itself (${still_armed} lines left), so
+  the next cron tick would start a second restore over the first. NOTHING has
+  been changed."
+  echo "  self-disarmed"
+
+  # AND THE ROUTER IS STILL THERE. This is the claim the whole pre-test exists
+  # to support: not "the script exited", but "the agent came back and the box is
+  # still on the network". It is asked over the same ssh path the deploy uses,
+  # so a router that answers this answers the deploy too.
+  back=""
+  for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+    back="$(ssh_run "wget -q -O - ${STATUS_URL} 2>/dev/null" | head -c 1 || true)"
+    [[ -n "${back}" ]] && break
+    sleep 3
+  done
+  [[ -n "${back}" ]] \
+    || die "the rollback fired and the agent did not come back within 30s. The
+  fallback this deploy depends on is the thing that is broken, so NOTHING has
+  been changed. Recover the agent by hand before deploying:
+      ssh root@${HOST} '/etc/init.d/zippie status; logread | tail -40'"
+  echo "  agent answered after the restore - the rollback path works on this router"
+
+  # ------------------------------------------------------------------ RE-ARM
+  # The firing disarmed the cron line and the restore is done, so from here the
+  # router has no fallback again. Re-snapshot first: the pre-test restarted the
+  # agent, and the snapshot must describe what is running NOW.
+  say "re-arming the rollback for the real change"
+  snapshot_for_rollback
+  arm_rollback "${ROLLBACK_MIN}"
+else
+  echo "  --no-pretest-rollback: the fallback is armed but UNPROVEN on this router"
+  arm_rollback "${ROLLBACK_MIN}"
+fi
+
+echo "  armed: ${ARMED_LINE}"
 echo "  if this deploy does not disarm it, the router restores itself in ~${ROLLBACK_MIN} min"
 
 # ------------------------------------------------------------------- copy it
@@ -428,23 +663,106 @@ elif [[ "${CONFIG_WAS}" != "${CONFIG_SHA}" ]]; then
 fi
 
 # ------------------------------------------------------------ record what we did
-printf '{"commit":"%s","deployed_at":"%s","fingerprint":"%s","modules":%s,"config_sha256":"%s"}\n' \
+# `rollbacks_fired` IS READ AGAIN HERE, not carried down from the top of the
+# script. The pre-test fires the rollback deliberately, so the count has moved
+# since then - and a stamp written with the older number would make the NEXT
+# deploy report this deploy's own pre-test as an unexplained rescue, every time,
+# until nobody reads the warning any more.
+ROLLBACKS_NOW="$(ssh_run "wc -l < ${FIRED_MARKER} 2>/dev/null | tr -d ' '" 2>/dev/null || true)"
+ROLLBACKS_NOW="${ROLLBACKS_NOW:-0}"
+printf '{"commit":"%s","deployed_at":"%s","fingerprint":"%s","modules":%s,"config_sha256":"%s","rollbacks_fired":%s}\n' \
   "${COMMIT}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${LOCAL_FP}" "${LOCAL_COUNT}" \
-  "${CONFIG_SHA}" \
+  "${CONFIG_SHA}" "${ROLLBACKS_NOW}" \
   | ssh_run "cat > ${STAMP} && chmod 0644 ${STAMP}"
 
 # ---------------------------------------------------------------- restart it
-say "restarting agent"
-ssh_run "/etc/init.d/zippie stop" || true
-ssh_run "/etc/init.d/zippie start"
+# THE RESTART IS HANDED TO CRON, NOT SENT OVER SSH - and this is the fix for
+# the failure that made the rollback necessary in the first place.
+#
+# `stop` removes pbz0; pbz0 carries the default route; the default route carries
+# the tailnet; the tailnet carries THIS SSH SESSION. So `stop` destroys the
+# transport for the `start` that has to follow it.
+#
+#   2026-08-24  a CI deploy sent `stop`; `start` never arrived. 45 minutes
+#               stopped, recovered by a human power-cycling the box.
+#   2026-08-29  the same thing at 06:58:28 - `zippie-stop: removed tunnel(s):
+#               pbz0`, then nothing from the agent at all until the armed
+#               rollback fired at 07:10:00. Reproduced by THIS script, with the
+#               rollback catching it, which is how the cause finally got read.
+#
+# One ssh call holding the session open across the gap does not work either: the
+# remote shell dies with the connection. `setsid` and `nohup &` do not survive
+# on this box (2026-08-01), so cron it is - the primitive the rollback already
+# proves works here.
+say "restarting agent (from the router's cron - an ssh-driven restart cannot survive its own tunnel teardown)"
+
+# WHICH PROCESS IS SERVING RIGHT NOW, captured BEFORE anything is scheduled.
+#
+# THE FINGERPRINT CANNOT ANSWER THIS. `build.fingerprint()` is a digest of the
+# files on disk, recomputed on every call - its own module docstring says so -
+# so the moment the package is copied, the OLD process starts reporting the NEW
+# fingerprint. Measured on suzu 2026-08-29 07:20:10: this script printed
+# "running da4311bb261cc8cc" and declared the deploy verified while the agent
+# that had been running since 06:58 was still the one answering, and the restart
+# was still 50 seconds in the future.
+#
+# That is not a cosmetic inaccuracy. Everything after this point - provisioning,
+# and DISARMING THE ROLLBACK - ran while the risky part had not happened yet, so
+# the agent restarted with no fallback armed at all. A pid is the cheapest thing
+# on this box that only a restart can change.
+AGENT_PID_BEFORE="$(ssh_run "ps | awk '/python3 -m zippie/ && !/awk/ {print \$1; exit}'" || true)"
+echo "  agent pid now: ${AGENT_PID_BEFORE:-(none running)}"
+
+RESTART_WHEN="$(ssh_run "python3 -c 'import time; t=time.localtime(time.time()+70); print(\"%d %d\" % (t.tm_min, t.tm_hour))'" || true)"
+case "${RESTART_WHEN}" in
+  [0-9]*\ [0-9]*) : ;;
+  *) die "could not compute a restart time on the router (got '${RESTART_WHEN}'). The
+  new package and config are on disk but the agent has NOT been restarted, so it
+  is still running the previous build. The armed rollback will restore it." ;;
+esac
+
+ssh_run "crontab -l 2>/dev/null | grep -v restart-once > /tmp/ct.\$\$; \
+         echo '${RESTART_WHEN} * * * /etc/zippie/restart-once.sh' >> /tmp/ct.\$\$; \
+         crontab /tmp/ct.\$\$; rm -f /tmp/ct.\$\$; /etc/init.d/cron reload"
+
+# READ IT BACK, for the same reason the rollback line is read back: busybox cron
+# accepts a malformed entry silently and never fires it, and this one is now the
+# only thing that will start the agent.
+RESTART_ARMED="$(ssh_run "crontab -l 2>/dev/null | grep restart-once" || true)"
+case "${RESTART_ARMED}" in
+  [0-9]*\ [0-9]*\ \*\ \*\ \*\ /etc/zippie/restart-once.sh) : ;;
+  *) die "the restart line did not read back as a valid crontab entry (got '${RESTART_ARMED}').
+  The agent has NOT been restarted and is still running the previous build; the
+  armed rollback will restore the previous package and config." ;;
+esac
+echo "  scheduled: ${RESTART_ARMED}"
 
 # ------------------------------------------- prove the RUNNING agent is this one
-# The file check above proves what is ON DISK. This proves what is IN MEMORY,
-# which is the question that actually matters and the one nothing has ever
-# answered for this router.
-say "verifying running agent"
+# THE FINGERPRINT ALONE NEVER PROVED THIS, and the comment here used to claim it
+# did. `build.fingerprint()` digests the files on disk and is recomputed on every
+# call, so after the copy above BOTH the old process and a new one report the
+# same value - the check could not tell them apart and passed either way.
+#
+# What proves it is the pid changing. The fingerprint then says the new process
+# is running the right tree, which is the other half and still worth asking.
+# MEASURED, NOT GUESSED. The old window was 30s, and on 2026-08-29 the router
+# took between 36 and 56 seconds to answer again after an agent restart - the
+# phone legs re-announce on a 45s lease and the tailnet only comes back once the
+# bond does. Add up to 60s for cron to reach the restart minute at all, and 30s
+# was never going to be enough; it just happened not to be the thing that failed
+# first. 4 minutes, against a rollback armed for ten.
+say "verifying running agent (the restart is on the router's clock; this can take a few minutes)"
 RUNNING_FP=""
-for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+AGENT_PID_NOW=""
+for _attempt in $(seq 1 80); do
+  # THE PID FIRST, AND THE FINGERPRINT ONLY ONCE IT HAS MOVED. Asking for the
+  # fingerprint alone is what let this script call a deploy verified before the
+  # restart it scheduled had run - see AGENT_PID_BEFORE above.
+  AGENT_PID_NOW="$(ssh_run "ps | awk '/python3 -m zippie/ && !/awk/ {print \$1; exit}'" 2>/dev/null || true)"
+  if [[ -z "${AGENT_PID_NOW}" || "${AGENT_PID_NOW}" == "${AGENT_PID_BEFORE}" ]]; then
+    sleep 3
+    continue
+  fi
   RUNNING_FP="$(ssh_run "wget -q -O - ${STATUS_URL} 2>/dev/null" \
     | python3 -c 'import json,sys
 try:
@@ -455,8 +773,15 @@ except Exception:
   sleep 3
 done
 
+if [[ -z "${AGENT_PID_NOW}" || "${AGENT_PID_NOW}" == "${AGENT_PID_BEFORE}" ]]; then
+  die "the agent process never changed within 4 minutes (pid ${AGENT_PID_BEFORE:-none}
+  before, ${AGENT_PID_NOW:-none} now), so the restart scheduled above did not
+  happen. The new package and config are on disk and the OLD process is still
+  serving them. The rollback is STILL ARMED and will restore the previous build."
+fi
+
 if [[ -z "${RUNNING_FP}" ]]; then
-  die "the agent did not serve a build fingerprint within 30s. It may be
+  die "the agent did not serve a build fingerprint within 4 minutes. It may be
   running an older build with no build module, or it may not have come back at
   all. Check: ssh root@${HOST} '/etc/init.d/zippie status; logread | tail -40'"
 fi
@@ -625,9 +950,8 @@ ssh_run "grep -q '^export ZIPPIE_GH_TOKEN=' /etc/zippie/env 2>/dev/null" || drif
 # installed; until that is true the router should still be able to rescue itself
 # without anybody connected.
 say "disarming the rollback"
-ssh_run "crontab -l 2>/dev/null | grep -v deploy-rollback | crontab -; /etc/init.d/cron reload" || true
-STILL="$(ssh_run "crontab -l 2>/dev/null | grep -c deploy-rollback" || echo 0)"
-[[ "${STILL}" == "0" ]] || echo "  WARNING: a rollback line is still armed - it will fire and revert this deploy"
+disarm_rollback \
+  || echo "  WARNING: a rollback line is still armed - it will fire and revert this deploy"
 ssh_run "rm -rf ${REMOTE_ROOT}/zippie.deploy-rollback ${REMOTE_CONFIG}.deploy-rollback" || true
 
 say "deployed and verified"
