@@ -83,16 +83,28 @@ def test_a_firing_reaches_logread(rollback):
 
 
 def test_the_firing_is_recorded_somewhere_a_reboot_cannot_erase(rollback):
-    """/tmp is tmpfs. A reboot erases the record of the rescue, which is exactly
-    the situation in which a rescue is most likely to have happened."""
+    """The existing log lives on tmpfs, so a reboot erases the record of the
+    rescue - which is exactly the situation in which a rescue is most likely to
+    have happened.
+
+    PINNED AGAINST LOG_FILE RATHER THAN AGAINST A HARDCODED PATH. The property
+    that matters is not "the marker is at some particular directory", it is that
+    the durable record is NOT kept where the ephemeral one is. Asserting the
+    relationship survives somebody moving either file, and asserting a literal
+    would not. Measured on suzu 2026-08-29: `/` is overlayfs on ubifs and the
+    log's directory is tmpfs, and twelve files under the marker's directory
+    predate the current boot while nothing the rollback wrote to the log does.
+    """
     marker = _shell_assignment(rollback, "FIRED_MARKER")
-    assert not marker.startswith("/tmp"), (
-        f"the durable marker is at {marker}, which is tmpfs on this router - "
-        "the same mistake the log file already makes"
+    ephemeral = _shell_assignment(rollback, "LOG_FILE").rsplit("/", 1)[0]
+    assert not marker.startswith(ephemeral + "/"), (
+        f"the durable marker is at {marker}, in the same tmpfs directory as the "
+        f"log ({ephemeral}) - so it makes exactly the mistake it exists to fix"
     )
-    assert "/etc/zippie" in marker, (
-        "the marker must be on overlayfs, for the reason this script's own "
-        "header gives for why the script itself is not in /tmp"
+    state = _shell_assignment(rollback, "STATE_DIR")
+    assert marker.startswith(state + "/"), (
+        f"the marker is at {marker}, outside the state directory ({state}) that "
+        "this router keeps on overlayfs for things that must outlive a reboot"
     )
 
 
