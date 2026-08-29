@@ -41,7 +41,17 @@ jobs:
     # k8s-oke-lan-sp7p-worker-01, which is where arc-zippie sits.
     if: github.repository == 'quadseven/zippie'
     runs-on: arc-zippie
-    timeout-minutes: 15
+    # RAISED FROM 15 FOR THE ROLLBACK PRE-TEST. The deploy now fires the
+    # rollback deliberately before it changes anything and waits for cron to run
+    # it, which costs up to ZIPPIE_ROLLBACK_PRETEST_MINUTES + 2 (default 4) plus
+    # the agent restart the firing performs.
+    #
+    # A TIMEOUT HERE IS NOT A HARMLESS RED X. Actions kills the job, which kills
+    # the ssh session mid-deploy, and a deploy cut between `stop` and `start` is
+    # the 2026-08-24 incident exactly - the router sat stopped for 45 minutes.
+    # The armed rollback now rescues that, but a budget that makes it likely is
+    # a budget that is wrong.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
