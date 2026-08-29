@@ -43,6 +43,13 @@ import time
 from collections import deque
 from dataclasses import dataclass, replace
 
+from zippie.auth import (
+    AuthLevel,
+    Identity,
+    UnauthenticatedError,
+    pack_auth,
+    unpack_auth,
+)
 from zippie.classify import Classifier, ClassifierConfig
 from zippie.datapath import (
     DEFAULT_DUPLICATE_FANOUT,
@@ -86,6 +93,18 @@ FLAG_NACK = 0x04
 FLAG_RETRANSMIT = 0x20
 
 _RECV_MAX = 65535
+
+# HOW LONG A STREAM MUST BE SILENT before a frame bearing a different epoch may
+# replace it. Matches epochTakeoverIdle in the Go transport, and the two must
+# stay equal: a Go end and a Python end are the two halves of the same bond and
+# a shorter window at one end is the window an attacker uses.
+#
+# The cost of getting this wrong in each direction: too short and an attacker
+# can reset a briefly-idle stream at will; too long and a genuine peer restart
+# stalls for that long before its first data frame is believed. Five seconds
+# sits under the WireGuard handshake retry, so a restart is never delayed by
+# more than one retry that would have happened anyway.
+EPOCH_TAKEOVER_IDLE_S = 5.0
 
 # How many datagrams to take from ONE ready socket before moving on.
 #
@@ -274,6 +293,25 @@ class TransportStats:
     no_path: int = 0
     client_payload_tx_bytes: int = 0
     client_payload_rx_bytes: int = 0
+    # Frames whose epoch did not match a live stream: spoofed, stale, or a
+    # restart that arrived while the current stream was still talking. Counted
+    # apart from `malformed` because a well-formed frame from the wrong stream
+    # is a different event from garbage, and on a public UDP port the first is
+    # the one worth watching.
+    unauthenticated: int = 0
+    # The three header-MAC counters (auth.py). They are what a rollout is
+    # WATCHED with, and they only ever move above the off rung:
+    #
+    #   mac_verified - arrived as v3 and the MAC checked out.
+    #   mac_legacy   - arrived as v2 and was accepted because the rung still
+    #                  tolerates legacy. This going to zero at both ends is the
+    #                  signal that `require` is safe.
+    #   mac_rejected - dropped for failing to authenticate. Counted apart from
+    #                  `malformed` so a forgery, a key mismatch and a truncated
+    #                  datagram can be told apart from outside the process.
+    mac_verified: int = 0
+    mac_legacy: int = 0
+    mac_rejected: int = 0
 
     def as_dict(self) -> dict[str, int]:
         return {
@@ -287,6 +325,10 @@ class TransportStats:
             "rate_limited": self.rate_limited,
             "client_payload_tx_bytes": self.client_payload_tx_bytes,
             "client_payload_rx_bytes": self.client_payload_rx_bytes,
+            # Reported unconditionally, unlike the three MAC counters: the
+            # epoch gate runs at EVERY rung, so this one is never not the
+            # answer to "is something spraying this port".
+            "unauthenticated": self.unauthenticated,
         }
 
 
@@ -340,8 +382,45 @@ class Transport:
         _clock=time.monotonic,
         # Injectable so tests can pin it; None means pick a fresh one.
         epoch: int | None = None,
+        # WHICH RUNG OF THE HEADER-MAC LADDER THIS ENDPOINT STANDS ON (auth.py).
+        # OFF IS THE DEFAULT AND IS BYTE-IDENTICAL TO BEFORE: every existing
+        # caller and every existing test gets exactly the wire it had, so
+        # merging this cannot change what either end puts on the network.
+        auth_level: AuthLevel = AuthLevel.OFF,
+        identity: Identity | None = None,
+        # How long the stream must be silent before a frame bearing a DIFFERENT
+        # epoch is allowed to replace it. Long enough that a real restart
+        # clears it (the agent takes seconds to rebuild links and WireGuard
+        # longer to handshake), short enough that a genuine restart is not
+        # stalled for a human-noticeable time. Injectable for tests only.
+        epoch_takeover_idle_s: float = EPOCH_TAKEOVER_IDLE_S,
     ) -> None:
         self._clock = _clock
+        # BOTH INCONSISTENT COMBINATIONS ARE REFUSED, not silently resolved,
+        # because each one looks like a working rollout from the outside: a
+        # credential with the rung left off never starts signing, and a rung
+        # above off with no credential cannot verify anything. Failing at
+        # construction is the only point where either is visible.
+        if identity is not None and auth_level is AuthLevel.OFF:
+            raise ValueError(
+                "an auth identity was configured with auth level off: set the "
+                "level to observe, sign or require, or pass no identity")
+        if identity is None and auth_level is not AuthLevel.OFF:
+            raise ValueError(f"auth level {auth_level} needs an identity")
+        self._auth = auth_level
+        self._identity = identity
+        self._epoch_takeover_idle_s = epoch_takeover_idle_s
+        # When a frame last PASSED the epoch check. Only a frame that passed
+        # updates it, so a flood of rejected frames cannot hold the takeover
+        # window open forever and wedge a genuine restart out.
+        self._last_good_frame: float | None = None
+        if auth_level is not AuthLevel.OFF and identity is not None:
+            # The key id, not the key. Printed at startup because comparing it
+            # across the two ends is the one-step way to tell "the MAC is
+            # broken" apart from "the ends hold different key material", which
+            # is the failure this rollout actually has.
+            log.info("header MAC %s (key %s, peer %d)",
+                     auth_level, identity.key_id(), identity.client_id)
         # WHICH RUN OF THIS PROCESS FRAMES BELONG TO. Random rather than a
         # counter because there is nowhere durable to keep a counter on a
         # router whose /tmp is wiped, and a repeated epoch after a reboot
@@ -553,6 +632,17 @@ class Transport:
     def set_link_health(self, path_id: int, healthy: bool) -> None:
         self.scheduler.set_healthy(path_id, healthy)
 
+    def _pack(self, frame: Frame) -> bytes:
+        """Serialise a frame at this endpoint's rung.
+
+        EVERY send goes through here - data, keepalives, keepalive replies,
+        NACKs and retransmits alike. A frame that forgot to ask would be an
+        unauthenticated frame on an authenticated bond, and against a peer at
+        the require rung it would simply be dropped, which presents as one
+        frame type mysteriously not working.
+        """
+        return pack_auth(frame, self._identity, self._auth)
+
     def send_keepalives(self) -> None:
         """Probe every link, including the ones currently marked unhealthy.
 
@@ -570,10 +660,10 @@ class Transport:
             # the wire and an old peer on either end still interoperates. A
             # keepalive returns before the reassembler, so a non-zero seq here
             # never touches the data stream.
-            wire = Frame(
+            wire = self._pack(Frame(
                 seq=probe, path_id=path_id, payload=b"", flags=FLAG_KEEPALIVE,
                 epoch=self._epoch,
-            ).pack()
+            ))
             if self._send_on(path_id, wire):
                 outstanding = self._ka_sent.setdefault(path_id, {})
                 outstanding[probe] = self._clock()
@@ -716,7 +806,8 @@ class Transport:
         mode = self.classifier.mode_for(
             len(payload), paths_available=len(healthy), overhead=overhead
         )
-        targets, frames = self.scheduler.build(payload, mode, self._epoch)
+        targets, frames = self.scheduler.build(
+            payload, mode, self._epoch, pack=self._pack)
         if not targets:
             self.stats.no_path += 1
             return 0
@@ -739,8 +830,8 @@ class Transport:
 
     def _send_nack(self, seq: int) -> None:
         """Ask the far end for a missing sequence, on any healthy link."""
-        frame = Frame(seq=seq, path_id=0, payload=b"", flags=FLAG_NACK,
-                      epoch=self._epoch).pack()
+        frame = self._pack(Frame(seq=seq, path_id=0, payload=b"", flags=FLAG_NACK,
+                                 epoch=self._epoch))
         for path_id in [p.path_id for p in self.scheduler.healthy_paths]:
             if self._send_on(path_id, frame):
                 return
@@ -756,32 +847,104 @@ class Transport:
             candidates = [p.path_id for p in self.scheduler.healthy_paths]
         if not candidates:
             return
-        wire = Frame(seq=seq, path_id=candidates[0], payload=payload,
-                     flags=FLAG_RETRANSMIT, epoch=self._epoch).pack()
+        wire = self._pack(Frame(seq=seq, path_id=candidates[0], payload=payload,
+                                flags=FLAG_RETRANSMIT, epoch=self._epoch))
         self._send_on(candidates[0], wire)
 
-    def _on_link_data(self, raw: bytes, path_id: int | None = None) -> list[bytes]:
+    def _on_link_data(self, raw: bytes, path_id: int | None = None,
+                      addr: tuple[str, int] | None = None) -> list[bytes]:
+        """Handle one datagram off a link socket. Returns payloads to deliver.
+
+        `addr` is the UDP source. It is taken here rather than acted on by the
+        caller because ROAMING TO IT IS A SIDE EFFECT THAT MUST BE GATED, and
+        the gate lives in this function - see below.
+        """
         try:
-            frame = Frame.unpack(raw)
+            # At the off rung this IS Frame.unpack, so the existing wire path
+            # is unchanged. Above it a v3 frame is verified against the shared
+            # key and a v2 frame is accepted only while the rung still
+            # tolerates legacy, which is what carries a mixed-version bond.
+            frame, authed = unpack_auth(raw, self._identity, self._auth)
+        except UnauthenticatedError as exc:
+            # A forgery, a key mismatch, or a peer that has not moved up the
+            # ladder yet. Counted apart from malformed input so the three can
+            # be told apart from outside the process.
+            self.stats.mac_rejected += 1
+            log.debug("dropping unauthenticated frame: %s", exc)
+            return []
         except DatapathError as exc:
             # Bytes off the internet: malformed input is expected, not a bug.
             self.stats.malformed += 1
             log.debug("dropping malformed frame: %s", exc)
             return []
 
+        if self._auth is not AuthLevel.OFF:
+            if authed:
+                self.stats.mac_verified += 1
+            else:
+                self.stats.mac_legacy += 1
+
         self.stats.received += 1
 
-        # THE PEER RESTARTED. Act before the frame is judged, because the whole
-        # point is that its sequence numbers now look like ones already handled.
-        # Keepalives carry the epoch too, so this fires before any data flows
-        # rather than after the reassembler has silently binned a handshake.
-        if frame.epoch != self._peer_epoch:
-            if self._peer_epoch is not None:
-                log.info("peer restarted (epoch %d -> %d); resetting stream",
-                         self._peer_epoch, frame.epoch)
-                self.reassembler.reset_stream()
-                self._reset_gap_tracking()
-            self._peer_epoch = frame.epoch
+        # NOTHING BELOW THIS POINT IS AUTHENTICATED AT THE OFF AND OBSERVE
+        # RUNGS, so be careful what a stranger's packet is allowed to do. At
+        # the require rung it is: `authed` is true for every frame that reaches
+        # here, and the epoch heuristics below become a second line rather than
+        # the only one.
+        #
+        # This is a public UDP port. Anyone can send a well-formed 17-byte
+        # header, and without the gate below the only thing separating a real
+        # peer from an attacker is nothing at all. Three side effects have to
+        # be gated or a single spoofed datagram is enough to take the tunnel:
+        #
+        #   roaming        - moves where every reply goes, i.e. hands the
+        #                    tunnel to whoever spoke last (hijack)
+        #   NACK answers   - 17 bytes in, up to ~1400 out, to a source we never
+        #                    verified (an ~80x reflector)
+        #   keepalive rep. - a smaller reflector on the same principle
+        #
+        # The epoch is trust-on-first-use and only a real peer can plausibly
+        # guess it once established, so a running tunnel cannot be stolen
+        # without 32 bits of luck. A restart is still honoured, but ONLY FROM A
+        # DATA FRAME and only once the current stream has actually gone quiet -
+        # otherwise an attacker flips the epoch repeatedly and resets the
+        # stream at will, which is a denial of service even without a hijack.
+        #
+        # WHY A KEEPALIVE MAY NOT CLAIM A RESTART, given that a keepalive is
+        # exactly what arrives first after one: because a keepalive is the
+        # cheapest frame to forge and the one an attacker would choose. The
+        # real peer's WireGuard keeps a persistent keepalive running, so DATA
+        # follows within seconds and takes over then; the cost of the rule is a
+        # few seconds of a restart not being believed, and the cost of not
+        # having it is that 17 bytes resets the stream.
+        known = self._peer_epoch is not None and frame.epoch == self._peer_epoch
+        if not known:
+            idle = (self._last_good_frame is None
+                    or self._clock() - self._last_good_frame
+                    > self._epoch_takeover_idle_s)
+            first_ever = self._peer_epoch is None
+            takeover = not frame.is_keepalive and not (frame.flags & FLAG_NACK) and idle
+            if first_ever or takeover:
+                if not first_ever:
+                    log.info("peer restarted (epoch %d -> %d); resetting stream",
+                             self._peer_epoch, frame.epoch)
+                    self.reassembler.reset_stream()
+                    self._reset_gap_tracking()
+                self._peer_epoch = frame.epoch
+            else:
+                # Wrong epoch on a live tunnel: someone else's packet.
+                self.stats.unauthenticated += 1
+                log.debug("dropping frame with epoch %d (stream is on %d)",
+                          frame.epoch, self._peer_epoch)
+                return []
+        self._last_good_frame = self._clock()
+
+        # FOLLOW THE TRAVEL ROUTER AS IT MOVES BETWEEN ISPs - but only now, on
+        # the far side of the gate. This used to happen in run_once BEFORE the
+        # frame was parsed at all, so one unauthenticated 17-byte datagram
+        # repointed every reply at whoever sent it.
+        if self._roam and addr is not None and path_id is not None:
+            self._roam_link(path_id, addr)
 
         # Credit the leg BEFORE inspecting the frame type. Any well-formed
         # frame proves the leg round-trips, whether it is a keepalive answer or
@@ -839,13 +1002,13 @@ class Transport:
                 # link the scheduler happens to like would measure that link
                 # instead, and the answer would prove nothing about the leg
                 # being probed.
-                self._send_on(path_id, Frame(
+                self._send_on(path_id, self._pack(Frame(
                     seq=frame.seq,
                     path_id=path_id,
                     payload=b"",
                     flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
                     epoch=self._epoch,
-                ).pack())
+                )))
             return []
 
         # The frame's OWN path_id, not the socket it turned up on. Home listens
@@ -1023,11 +1186,15 @@ class Transport:
                     self._wg_peer = addr
                     self.send_payload(raw)
                 else:
-                    if self._roam:
-                        # Follow the travel router as it moves between ISPs:
-                        # replies go back to wherever this frame arrived from.
-                        self._roam_link(path_id, addr)
-                    self._deliver_to_wireguard(self._on_link_data(raw, path_id))
+                    # The source address is HANDED DOWN rather than acted on
+                    # here. Roaming used to happen at this line, before the
+                    # datagram had been parsed or judged, which made one
+                    # unauthenticated 17-byte header enough to point every
+                    # reply at a stranger. _on_link_data roams only after the
+                    # frame has passed the epoch gate (and, above the off rung,
+                    # its MAC).
+                    self._deliver_to_wireguard(
+                        self._on_link_data(raw, path_id, addr))
         self.tick()
         # Rolling mean, cheap and good enough to spot a datapath regression.
         # Weighted so a single slow iteration does not dominate but a sustained
@@ -1069,7 +1236,7 @@ class Transport:
             self.stats.client_payload_tx_bytes
             + self.stats.client_payload_rx_bytes
         )
-        return {
+        out: dict[str, object] = {
             "transport": self.stats.as_dict(),
             "reassembly": self.reassembler.stats.as_dict(),
             "retransmit": self.retransmit.stats.as_dict(),
@@ -1086,3 +1253,18 @@ class Transport:
             "buffered": len(self.reassembler._buffer),
             "loop_us": round(self._loop_us, 1),
         }
+        # The auth section appears ONLY above the off rung, so a deployment
+        # that has not started the rollout reports exactly the keys it always
+        # did and no dashboard or log parser sees a new field it must handle.
+        # `legacy` falling to zero at both ends is the evidence that moving to
+        # `require` is safe; `key` is what proves the two ends hold the same
+        # key material when it does not.
+        if self._auth is not AuthLevel.OFF:
+            out["auth"] = {
+                "level": str(self._auth),
+                "key": self._identity.key_id() if self._identity else "",
+                "verified": self.stats.mac_verified,
+                "legacy": self.stats.mac_legacy,
+                "rejected": self.stats.mac_rejected,
+            }
+        return out

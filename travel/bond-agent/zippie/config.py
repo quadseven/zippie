@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from zippie.auth import parse_auth_level
 from zippie.models import (
     AgentConfig,
     BondMode,
@@ -212,6 +213,15 @@ def parse_config(data: dict[str, Any], *, private_key: str = "", public_key: str
         home_port=(int(policy_raw["home_port"]) if policy_raw.get("home_port") else None),
         reorder_deadline_ms=int(policy_raw.get("reorder_deadline_ms", 250)),
         transport_roam=bool(policy_raw.get("transport_roam", False)),
+        # Validated HERE, at load, rather than at first use. parse_auth_level
+        # refuses an unrecognised rung, and a typo that silently meant "off"
+        # would look exactly like a working rollout - the agent must refuse to
+        # start instead. The value is stored as the string it came in as; the
+        # agent parses it again where it builds the Transport.
+        auth_level=str(parse_auth_level(
+            str(policy_raw.get("auth_level", "off")))),
+        auth_key_file=str(policy_raw.get("auth_key_file", "")),
+        auth_peer_id=int(policy_raw.get("auth_peer_id", 1)),
         # Flat under [policy], matching every other transport knob above
         # rather than introducing a nested table for three keys.
         duplicate_enabled=bool(policy_raw.get("duplicate_enabled", True)),

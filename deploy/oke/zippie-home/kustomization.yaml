@@ -51,6 +51,7 @@ configMapGenerator:
   - name: zippie-transport-pkg
     files:
       - zippie-pkg/__init__.py
+      - zippie-pkg/auth.py
       - zippie-pkg/classify.py
       - zippie-pkg/datapath.py
       - zippie-pkg/home_transport.py
