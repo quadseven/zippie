@@ -33,9 +33,9 @@
 | Piece | Recommendation |
 |---|---|
 | Bond server | Mini PC / NUC / Pi 5 with Ethernet to UniFi LAN |
-| NIC | 2.5G if you want headroom toward FiOS |
+| NIC | 2.5G if you want headroom toward a multi-gigabit uplink |
 | Gateway | Port-forward UDP 51820–51823 → bond server |
-| DDNS | UniFi DDNS or `cloudflared` / Route53 / DuckDNS to track FiOS IP |
+| DDNS | UniFi DDNS or `cloudflared` / Route53 / DuckDNS to track the home public IP |
 
 ## Cabling tips
 

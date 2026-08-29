@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit
 class LegAnnouncerTest {
 
     private fun config(
-        host: String = "10.20.0.1:8787",
+        host: String = "10.99.0.1:8787",
         token: String = "tok",
         port: Int = 51999,
     ) = LegAnnouncer.Config(
@@ -64,12 +64,12 @@ class LegAnnouncerTest {
     @Test
     fun `an announcement carries everything the router needs`() {
         val http = Recorder()
-        LegAnnouncer(http).announce(config(), "10.20.0.151")
+        LegAnnouncer(http).announce(config(), "10.99.0.151")
 
         val sent = http.sent!!
-        assertEquals("http://10.20.0.1:8787/api/legs/announce", http.url)
+        assertEquals("http://10.99.0.1:8787/api/legs/announce", http.url)
         assertEquals("pixel-8-3f9a", sent.getString("name"))
-        assertEquals("10.20.0.151", sent.getString("host"))
+        assertEquals("10.99.0.151", sent.getString("host"))
         assertEquals(51999, sent.getInt("port"))
         assertEquals("Pixel 8 (T-Mobile)", sent.getString("label"))
         assertEquals(
@@ -83,7 +83,7 @@ class LegAnnouncerTest {
     @Test
     fun `the bearer token is sent`() {
         val http = Recorder()
-        LegAnnouncer(http).announce(config(token = "s3cret"), "10.20.0.151")
+        LegAnnouncer(http).announce(config(token = "s3cret"), "10.99.0.151")
         assertEquals("s3cret", http.token)
     }
 
@@ -116,7 +116,7 @@ class LegAnnouncerTest {
     @Test
     fun `a bad token is refused, not unreachable`() {
         val http = Recorder(code = 401, body = """{"error":"bad or missing bearer token"}""")
-        val outcome = LegAnnouncer(http).announce(config(), "10.20.0.151")
+        val outcome = LegAnnouncer(http).announce(config(), "10.99.0.151")
         val refused = outcome as LegAnnouncer.Outcome.Refused
         assertTrue(refused.reason.contains("token"))
     }
@@ -136,7 +136,7 @@ class LegAnnouncerTest {
     @Test
     fun `an unauthenticated announce is refused with the router's exact wording`() {
         val http = Recorder(code = 401, body = """{"error":"bad or missing bearer token"}""")
-        val outcome = LegAnnouncer(http).announce(config(), "10.20.0.151")
+        val outcome = LegAnnouncer(http).announce(config(), "10.99.0.151")
         assertEquals(
             LegAnnouncer.Outcome.Refused("bad or missing bearer token"),
             outcome,
@@ -161,7 +161,7 @@ class LegAnnouncerTest {
     @Test
     fun `a refusal with no body falls back to the status code`() {
         val http = Recorder(code = 503, body = "<html>gateway</html>")
-        val outcome = LegAnnouncer(http).announce(config(), "10.20.0.151")
+        val outcome = LegAnnouncer(http).announce(config(), "10.99.0.151")
         assertEquals("HTTP 503", (outcome as LegAnnouncer.Outcome.Refused).reason)
     }
 
@@ -172,7 +172,7 @@ class LegAnnouncerTest {
     @Test
     fun `an unreachable router is distinct from a refusal`() {
         val http = Recorder(throwing = IOException("connect timed out"))
-        val outcome = LegAnnouncer(http).announce(config(), "10.20.0.151")
+        val outcome = LegAnnouncer(http).announce(config(), "10.99.0.151")
         val unreachable = outcome as LegAnnouncer.Outcome.Unreachable
         assertTrue(unreachable.reason.contains("timed out"))
     }
@@ -180,7 +180,7 @@ class LegAnnouncerTest {
     @Test
     fun `the granted lease is read back from the router`() {
         val http = Recorder(body = """{"leg":"pixel-8-3f9a","lease_s":42.5}""")
-        val outcome = LegAnnouncer(http).announce(config(), "10.20.0.151")
+        val outcome = LegAnnouncer(http).announce(config(), "10.99.0.151")
         assertEquals(42.5, (outcome as LegAnnouncer.Outcome.Announced).leaseRemainingS, 0.001)
     }
 
@@ -188,7 +188,7 @@ class LegAnnouncerTest {
     fun `withdraw names the leg`() {
         val http = Recorder(body = """{"withdrawn":true}""")
         LegAnnouncer(http).withdraw(config())
-        assertEquals("http://10.20.0.1:8787/api/legs/withdraw", http.url)
+        assertEquals("http://10.99.0.1:8787/api/legs/withdraw", http.url)
         assertEquals("pixel-8-3f9a", http.sent!!.getString("name"))
     }
 
@@ -215,7 +215,7 @@ class LegAnnouncerTest {
         val http = Recorder()
         val announcer = LegAnnouncer(http)
         for (c in listOf(config(host = ""), config(token = ""), config(port = 0))) {
-            val outcome = announcer.announce(c, "10.20.0.151")
+            val outcome = announcer.announce(c, "10.99.0.151")
             assertTrue("expected refused for $c", outcome is LegAnnouncer.Outcome.Refused)
         }
         assertEquals(0, http.calls)
@@ -240,7 +240,7 @@ class LegAnnouncerTest {
         // the interval is driven down. Everything else - the withdraw on stop,
         // the address re-read - is the production path.
         val announcer = LegAnnouncer(http, renewIntervalMs = 20)
-        announcer.start(config(), address = { "10.20.0.151" }, report = {})
+        announcer.start(config(), address = { "10.99.0.151" }, report = {})
         assertTrue(
             "the announcer stopped renewing",
             announced.await(5, TimeUnit.SECONDS),
@@ -271,18 +271,18 @@ class LegAnnouncerTest {
             }
             ConsoleReply(200, """{"lease_s":45}""")
         }
-        var address = "10.20.0.151"
+        var address = "10.99.0.151"
         val announcer = LegAnnouncer(http, renewIntervalMs = 20)
         announcer.start(config(), address = {
             val current = address
-            address = "10.20.0.152"
+            address = "10.99.0.152"
             current
         }, report = {})
         assertTrue(second.await(5, TimeUnit.SECONDS))
         announcer.stop()
         synchronized(seen) {
-            assertEquals("10.20.0.151", seen[0])
-            assertEquals("the router would still be dialling the old address", "10.20.0.152", seen[1])
+            assertEquals("10.99.0.151", seen[0])
+            assertEquals("the router would still be dialling the old address", "10.99.0.152", seen[1])
         }
     }
 }

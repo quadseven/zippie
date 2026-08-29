@@ -169,7 +169,7 @@ spec:
           env:
             - name: PYTHONUNBUFFERED
               value: "1"
-            # The address travel clients dial. A bare FiOS IP works but moves;
+            # The address travel clients dial. A bare residential IP works but moves;
             # point this at DDNS once one exists. Changing it does NOT rekey.
             - name: ZIPPIE_HOME_ENDPOINT
               valueFrom:

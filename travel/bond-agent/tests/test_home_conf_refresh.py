@@ -186,7 +186,7 @@ def test_up_keeps_every_provisioned_peer_while_refreshing(home):
 
     The peer blocks are the provisioned clients. Dropping them takes the live
     bond down, so they are carried over verbatim rather than re-rendered - a
-    peer hand-added during live surgery (suzu's ethernet path, 2026-07-30)
+    peer hand-added during live surgery (the travel router's ethernet path, 2026-07-30)
     survives too.
     """
     mod = home.mod

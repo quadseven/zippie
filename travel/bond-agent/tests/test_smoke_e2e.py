@@ -630,7 +630,7 @@ def _run_home(provisioned, *args, check=True):
 
 def test_add_path_mints_one_new_peer_for_an_existing_client(provisioned):
     """add-path exists so the next path is not live PVC surgery (2026-07-30:
-    suzu's ethernet path was hand-added with wg set + two file edits)."""
+    the travel router's ethernet path was hand-added with wg set + two file edits)."""
     out = _run_home(provisioned, "add-path", "smoke-pi", "ethernet", "--port", "51901")
     frag = json.loads(out.stdout)
     path = frag["path"]

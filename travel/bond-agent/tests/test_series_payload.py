@@ -12,7 +12,7 @@ endpoint-specific, not host-specific:
 
     zippie.ts.example-home.invalid/api/status   133 x 200
     zippie.ts.example-home.invalid/api/series    65 x timeout, 0 successes
-    10.20.0.1:8787/api/series         60 x 200, 18-30 ms on-LAN
+    10.99.0.1:8787/api/series         60 x 200, 18-30 ms on-LAN
 
 So the Companion history screen reads "The console did not answer" every time
 the phone is away from the router, and the per-leg detail it exists to show is
@@ -137,7 +137,7 @@ def test_since_is_still_capped_if_it_asks_for_everything():
 def test_a_full_default_payload_is_small_enough_to_cross_a_wan():
     """The acceptance criterion, asserted rather than asserted-in-prose.
 
-    Sized against the real shape: 720 points x 3 legs is what suzu holds. The
+    Sized against the real shape: 720 points x 3 legs is what the travel router holds. The
     64 KB bound is the issue's, and it is checked on the ENCODED body because
     that is what has to cross the link.
     """

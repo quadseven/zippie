@@ -29,9 +29,9 @@ final class DiagnosticsTests: XCTestCase {
 
     /// The distinction the whole type exists for.
     func testViaRouterIsNotGreenAndSaysItWillNotSurviveLeaving() {
-        let d = Diagnostics(tailnet: .viaRouter(host: "suzu"))
+        let d = Diagnostics(tailnet: .viaRouter(host: "travel-router"))
         let row = d.rows().first { $0.label == "Tailnet" }!
-        XCTAssertEqual(row.value, "via suzu")
+        XCTAssertEqual(row.value, "via travel-router")
         XCTAssertNotEqual(row.tone, .good,
                           "reachable-only-here must not look identical to reachable-anywhere")
         XCTAssertEqual(row.hint, "only on this network - leaving it loses the MDM")
@@ -95,10 +95,10 @@ final class DiagnosticsTests: XCTestCase {
     }
 
     func testAPresentResolverIsNamed() {
-        let d = Diagnostics(ssid: "Suzu", dhcpResolver: .address("10.20.0.1"))
+        let d = Diagnostics(ssid: "TravelRouter", dhcpResolver: .address("10.99.0.1"))
         let row = d.rows().first { $0.label == "Network" }!
-        XCTAssertEqual(row.value, "Suzu")
-        XCTAssertEqual(row.hint, "DNS from DHCP: 10.20.0.1")
+        XCTAssertEqual(row.value, "TravelRouter")
+        XCTAssertEqual(row.hint, "DNS from DHCP: 10.99.0.1")
     }
 
     // MARK: - failure kinds are named, not "failed"
@@ -156,7 +156,7 @@ final class DiagnosticsTests: XCTestCase {
     }
 
     func testReachableOnlyHereIsItsOwnHeadline() {
-        let d = Diagnostics(mdm: .ok(detail: nil), tailnet: .viaRouter(host: "suzu"))
+        let d = Diagnostics(mdm: .ok(detail: nil), tailnet: .viaRouter(host: "travel-router"))
         XCTAssertEqual(d.headline, "Reachable, but only on this network")
     }
 
@@ -176,7 +176,7 @@ final class TailnetAddressTests: XCTestCase {
     func testTheCgnatRangeIsRecognised() {
         XCTAssertTrue(TailnetAddress.isTailnetV4("100.64.0.1"))
         XCTAssertTrue(TailnetAddress.isTailnetV4("100.127.255.254"))
-        XCTAssertTrue(TailnetAddress.isTailnetV4("100.80.232.120"))
+        XCTAssertTrue(TailnetAddress.isTailnetV4("100.64.100.2"))
     }
 
     func testAddressesJustOutsideTheRangeAreRejected() {
@@ -186,7 +186,7 @@ final class TailnetAddressTests: XCTestCase {
     }
 
     func testUnrelatedAddressesAreRejected() {
-        for ip in ["192.168.1.1", "10.20.0.1", "192.0.2.2", "", "100", "not.an.ip.x"] {
+        for ip in ["192.168.1.1", "10.99.0.1", "192.0.2.2", "", "100", "not.an.ip.x"] {
             XCTAssertFalse(TailnetAddress.isTailnetV4(ip), "\(ip) is not a tailnet address")
         }
     }

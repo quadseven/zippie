@@ -64,7 +64,7 @@ def _agent(paths):
 
 
 def _announce(agent, name="iphone-abcd", tier=None):
-    agent.dynamic.announce(name=name, host="10.20.0.151", port=51999,
+    agent.dynamic.announce(name=name, host="10.99.0.151", port=51999,
                            label="iPhone", tier=tier)
     agent_mod.BondAgent.reconcile_dynamic_legs(agent)
     return next(p for p in agent.paths if p.name == name)
@@ -153,7 +153,7 @@ def test_dynamic_leg_tier_is_optional_at_the_store_level():
     """`None` has to survive as far as reconcile, or the default is re-applied
     before anything can resolve it - which is the bug in miniature."""
     legs = DynamicLegs()
-    leg = legs.announce(name="iphone-abcd", host="10.20.0.151", port=51999, tier=None)
+    leg = legs.announce(name="iphone-abcd", host="10.99.0.151", port=51999, tier=None)
     assert leg.tier is None
 
 
@@ -163,7 +163,7 @@ def test_an_out_of_range_explicit_tier_is_still_rejected():
     legs = DynamicLegs()
     for bad in (0, 100, -1):
         try:
-            legs.announce(name="iphone-abcd", host="10.20.0.151", port=51999, tier=bad)
+            legs.announce(name="iphone-abcd", host="10.99.0.151", port=51999, tier=bad)
         except ValueError:
             continue
         raise AssertionError(f"tier {bad} was accepted")

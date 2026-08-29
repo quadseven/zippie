@@ -101,7 +101,7 @@ def wan_gateways() -> dict[str, str]:
     somewhere else; a downstream bridge does not, because this router IS its
     gateway. Without this a "match anything with an address" rule adopts
     br-lan - the router bonding through its own LAN, which is a loop, not a
-    path. On suzu br-lan carries 10.20.0.1 and looks exactly like a candidate.
+    path. On the travel router br-lan carries 10.99.0.1 and looks exactly like a candidate.
 
     A gateway-less `default dev X` is deliberately NOT counted: it is the same
     multi-access trap `_pin_endpoint_route` already refuses, and a link that
@@ -219,7 +219,7 @@ def pin_host_route(host_ip: str, dev: str, gw: str | None) -> bool:
 
     Packet mode installs `default dev pbz0`, and the transport's remote is the
     PUBLIC home address - so without this the home endpoint resolves into the
-    very tunnel it is supposed to carry. Measured on suzu 2026-08-02 with
+    very tunnel it is supposed to carry. Measured on the travel router 2026-08-02 with
     packet mode live:
 
         ip route get 203.0.113.33              -> dev pbz0 src 10.66.0.2
@@ -463,7 +463,7 @@ def _wg_up_native(conf_path: str, iface: str, address: str | None, mtu: int) -> 
         # so on ANY later failure it exists with no peer (or no address, or
         # still down) - and callers guard bring-up with "does the interface
         # exist", so the wreck would be mistaken for a live tunnel forever.
-        # Live on suzu 2026-08-02: `wg setconf pb2` timed out, pb2 sat DOWN,
+        # Live on the travel router 2026-08-02: `wg setconf pb2` timed out, pb2 sat DOWN,
         # and the bond stayed DEGRADED until a human restarted the agent.
         run_or_dry(["ip", "link", "del", iface], check=False)
         raise
@@ -891,7 +891,7 @@ def ensure_firewall(ifaces: list[str], *, force: bool = False) -> None:
     # LOG THE CHANGE, NOT THE REBUILD (#87). The agent calls this with
     # force=True periodically as self-heal, so the rebuild happens whether or
     # not anything moved - and announcing each one put a line in the router's
-    # small in-RAM log every ~40 s. Measured on suzu after the packet-mode pair
+    # small in-RAM log every ~40 s. Measured on the travel router after the packet-mode pair
     # was silenced: four of the five remaining lines were this one.
     #
     # Which tunnels are masqueraded IS worth a line when it changes; that the
@@ -1047,7 +1047,7 @@ RESOLVER_KICK_TIMEOUT_S = 5.0
 class ResolverKicker:
     """Make the router's OWN resolver re-dial after the default route moves.
 
-    THE 2026-08-02 OUTAGE. The instant `default dev pbz0` was installed on suzu
+    THE 2026-08-02 OUTAGE. The instant `default dev pbz0` was installed on the travel router
     the router lost DNS outright - `curl` exit 6 on the box - while
     `nslookup <name> 1.1.1.1` THROUGH the tunnel answered normally. Forwarding,
     NAT and the tunnel were healthy the entire time, so nothing in the datapath

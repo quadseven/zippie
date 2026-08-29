@@ -73,7 +73,7 @@ targets:
         # address (10.0.0.45) on the simulator, so this is NOT proven to be
         # load-bearing for the current `10.20.0.1:8787` default - ATS is
         # lenient about raw IP literals. It is kept because the setting is
-        # operator-editable: point it at `suzu.local` or any hostname and ATS
+        # operator-editable: point it at `travel-router.local` or any hostname and ATS
         # does apply, at which point its absence is a silent connection
         # failure that reads as "router unreachable". Cheap insurance against
         # a config change, not a fix for a reproduced failure.

@@ -117,7 +117,7 @@ def run(cfg: HomeTransportConfig) -> None:
 
     Stats are logged on an interval, unconditionally. This end of the datapath
     had NO periodic visibility at all: on 2026-08-02 the whole question of
-    "did suzu's frames reach home, and what did the reassembler do with them"
+    "did the travel router's frames reach home, and what did the reassembler do with them"
     was unanswerable from logs, and had to be reconstructed from WireGuard
     byte counters and hand-inserted iptables counting rules. One INFO line a
     minute is what that night cost."""

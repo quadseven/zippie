@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy the bond agent to an OpenWrt router (GL-MT3000 "suzu") and PROVE it
+# Deploy the bond agent to an OpenWrt router (GL-MT3000 "travel-router") and PROVE it
 # landed.
 #
 # Why this exists
@@ -176,7 +176,7 @@ PY
 # network. Recovery took physical access.
 #
 # THE FIX FOR THAT CAUGHT ONE FIELD, AND THE SAME BUG WAS STILL ARMED ONE FIELD
-# OVER. Found 2026-08-29 by dry-running this script against suzu: the repo also
+# OVER. Found 2026-08-29 by dry-running this script against the travel router: the repo also
 # ships `endpoint = "dns-e.example-home.invalid"` and a `lan_endpoints` block on
 # 192.0.2.0/24. `.invalid` is a reserved TLD that can never resolve (RFC 2606)
 # and 192.0.2.0/24 is documentation space (RFC 5737) - so a deploy would have
@@ -204,8 +204,11 @@ PY
 #   reads VALUES, not text, so the RFC addresses in this file's own comments are
 #   not findings.
 #
-# This is what muster takes over (see docs/adr/0023): a device fetching its own
-# identity over its own credential, rather than a deploy pipeline splicing it in.
+# This is what muster takes over: a device fetching its own identity over its
+# own credential, rather than a deploy pipeline splicing it in. muster proves
+# possession at the APPLICATION layer - the device signs a server-issued,
+# single-use nonce with a key in its keystore - so the proof does not depend on
+# the transport. (This used to cite docs/adr/0023, which does not exist here.)
 RENDERED_CONFIG="$(mktemp)"
 LIVE_CONFIG="$(mktemp)"
 trap 'rm -f "${RENDERED_CONFIG}" "${LIVE_CONFIG}"' EXIT
@@ -549,7 +552,7 @@ snapshot_for_rollback
 # The rollback script itself, from the repo, so it is reviewable and not a heredoc.
 # OWNED BY root AFTER EXTRACTION. busybox tar keeps the uid from the archive, so
 # a runner extracting as uid 1001 leaves the rescue script owned by 1001 - which
-# is what is on suzu today. Nothing on this router runs as 1001, so it is not an
+# is what is on the travel router today. Nothing on this router runs as 1001, so it is not an
 # exploit; it is a file that is supposed to be the last line of defence and is
 # writable by something that is not root.
 # restart-once.sh ships alongside it and for the same reason: both have to be
@@ -584,7 +587,7 @@ tar -C "${REPO_ROOT}/travel/gl-mt3000" -cf - deploy-rollback.sh restart-once.sh 
 #   * the restore commands work against the real filesystem,
 #   * the agent comes back afterwards and the router still answers.
 #
-# Measured 2026-08-29 06:20:00 and 06:22:00 EDT on suzu with a throwaway copy of
+# Measured 2026-08-29 06:20:00 and 06:22:00 EDT on the travel router with a throwaway copy of
 # this mechanism, on a path that could not touch the bond: fired on the minute
 # both times, self-disarmed both times, appended to its marker, logged to
 # logread, and left the router's other eight crontab entries byte-identical.
@@ -808,7 +811,7 @@ say "restarting agent (from the router's cron - an ssh-driven restart cannot sur
 # THE FINGERPRINT CANNOT ANSWER THIS. `build.fingerprint()` is a digest of the
 # files on disk, recomputed on every call - its own module docstring says so -
 # so the moment the package is copied, the OLD process starts reporting the NEW
-# fingerprint. Measured on suzu 2026-08-29 07:20:10: this script printed
+# fingerprint. Measured on the travel router 2026-08-29 07:20:10: this script printed
 # "running da4311bb261cc8cc" and declared the deploy verified while the agent
 # that had been running since 06:58 was still the one answering, and the restart
 # was still 50 seconds in the future.
@@ -903,7 +906,7 @@ fi
 # ---------------------------------------------------------------- provision it
 #
 # EVERYTHING ABOVE THIS LINE DEPLOYS THE PYTHON PACKAGE. That was the whole of
-# this script until 2026-08-16, and it is why suzu died on a reboot that day:
+# this script until 2026-08-16, and it is why the travel router died on a reboot that day:
 # the agent bytes were perfect and `/etc/init.d/zippie enable` had never been
 # run, so there was no S99 symlink and the service simply did not start at boot.
 # It had survived 35 hours of uptime because nothing rebooted. The router came
@@ -975,7 +978,7 @@ echo "  $(ssh_run "ls /etc/rc.d/ | grep zippie | tr '\n' ' '")"
 # radio identity.
 #
 # THE OUTAGE THAT FOUND IT (#293). Both relay phones sat on cellular for eight
-# hours beside a working "Suzu" beacon they had joined the day before, and the
+# hours beside a working "TravelRouter" beacon they had joined the day before, and the
 # household had no internet for all of it. Android keys per-BSSID connection and
 # validation history in WifiScoreCard, so every reboot handed auto-join what
 # looked like an unfamiliar AP - and one that had failed validation before.
@@ -1047,7 +1050,7 @@ done
 # NOT FATAL, deliberately. This is an observability credential, not the
 # datapath; failing the deploy of a working bond over it would teach the
 # operator to reach for --skip flags, and a deploy people avoid running is how
-# main and suzu drifted in the first place. Loud and last, so it cannot scroll
+# main and the travel router drifted in the first place. Loud and last, so it cannot scroll
 # past, is the right weight.
 drift_token_present=1
 ssh_run "grep -q '^export ZIPPIE_GH_TOKEN=' /etc/zippie/env 2>/dev/null" || drift_token_present=0

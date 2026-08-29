@@ -1,12 +1,12 @@
 """A leg on the house LAN dials home by its LAN address, not the house's own public IP.
 
-At home suzu's WAN sits on the house LAN while the ethernet leg dials
+At home the travel router's WAN sits on the house LAN while the ethernet leg dials
 `dns-e.example-home.invalid`, which resolves to the house's OWN public address. That is a
 NAT hairpin the edge does not implement, so the leg has never carried a byte
 (#204 measured rx=0, loss=100%, never_handshaked=true). Every byte therefore
 leaves over metered cellular while a free wire is plugged in (#258).
 
-The fix must be automatic. suzu is a TRAVEL router: a hardcoded LAN address
+The fix must be automatic. The travel router is a TRAVEL router: a hardcoded LAN address
 would be wrong the moment eth0 is plugged into hotel ethernet, so the pairing
 is applied only when a leg's OWN address falls inside the paired network.
 """
@@ -29,7 +29,7 @@ def test_a_leg_on_the_paired_network_is_redirected_to_the_lan_address():
 
 def test_a_leg_somewhere_else_keeps_the_public_endpoint():
     # Hotel ethernet, an LTE dongle, a phone hotspot - none of these are home.
-    for elsewhere in ("192.168.8.14", "172.20.10.3", "10.20.0.1", "100.64.7.9"):
+    for elsewhere in ("192.168.8.14", "172.20.10.3", "10.99.0.1", "100.64.7.9"):
         assert net.lan_home_endpoint(elsewhere, HOUSE) is None, elsewhere
 
 
@@ -140,9 +140,9 @@ def test_a_companion_relay_endpoint_still_wins_over_a_lan_pairing(tmp_path):
     """A companion leg dials the PHONE. The phone owns the cellular; sending
     it to home would be this router's own uplink under another name."""
     agent = _agent(tmp_path, lan_endpoints=PAIR)
-    path = _path("pixel", local_ip="192.0.2.55", relay="10.20.0.174:51999")
+    path = _path("pixel", local_ip="192.0.2.55", relay="10.99.0.174:51999")
     assert agent._leg_remote(path, ("203.0.113.33", 51902)) == \
-        ("10.20.0.174", 51999)
+        ("10.99.0.174", 51999)
 
 
 def test_no_pairing_configured_leaves_every_leg_unchanged(tmp_path):
@@ -250,11 +250,11 @@ def test_the_console_never_claims_a_companion_leg_dials_home_via_lan(tmp_path):
     what this field was added to prevent.
     """
     agent = _agent(tmp_path, lan_endpoints=PAIR)
-    path = _path("pixel", local_ip="192.0.2.55", relay="10.20.0.174:51999")
+    path = _path("pixel", local_ip="192.0.2.55", relay="10.99.0.174:51999")
     agent.paths = [path]
 
     host, port = agent._leg_remote(path, ("203.0.113.33", 51902))
-    assert (host, port) == ("10.20.0.174", 51999)
+    assert (host, port) == ("10.99.0.174", 51999)
 
     row = next(p for p in agent.status_dict()["paths"] if p["name"] == "pixel")
     assert row["home_via_lan"] == "", (

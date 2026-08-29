@@ -39,7 +39,7 @@ import pytest
 @pytest.fixture()
 def reg():
     """A registry with one configured router and no clients yet."""
-    return hub.Registry([{"name": "suzu", "url": "http://10.20.0.1:8787"}])
+    return hub.Registry([{"name": "travel-router", "url": "http://10.99.0.1:8787"}])
 
 
 def _names(registry) -> set[str]:
@@ -127,10 +127,10 @@ def test_a_router_is_never_evicted(reg) -> None:
     """Routers come from config and are always listed, unreachable or not -
     "omitting the node would make a dead router look like a router nobody
     added". Eviction must not touch them however long they have been silent."""
-    assert "suzu" in _names(reg)
+    assert "travel-router" in _names(reg)
     for _ in range(3):
-        assert "suzu" in _names(reg)
-    node = next(n for n in reg.snapshot() if n["name"] == "suzu")
+        assert "travel-router" in _names(reg)
+    node = next(n for n in reg.snapshot() if n["name"] == "travel-router")
     assert node["unreachable"] is True, (
         "a router that has never answered must be listed AS unreachable"
     )
@@ -142,4 +142,4 @@ def test_evicting_one_client_leaves_the_others(reg) -> None:
     _age_client(reg, "old", hub.CLIENT_RETAIN_S + 60)
     names = _names(reg)
     assert "old" not in names
-    assert {"current", "suzu"} <= names
+    assert {"current", "travel-router"} <= names

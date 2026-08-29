@@ -65,7 +65,7 @@ def _timed(fn, iterations: int) -> float:
 def _buffered_reassembler(depth: int, stride: int = 1) -> Reassembler:
     """A reassembler holding `depth` packets behind one permanent hole.
 
-    Which is not a contrived state: the legs on suzu measured 33 ms, 73 ms and
+    Which is not a contrived state: the legs on the travel router measured 33 ms, 73 ms and
     334 ms on 2026-08-07, so a sprayed stream is out of order continuously and
     something is always waiting.
 

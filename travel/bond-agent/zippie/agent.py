@@ -307,7 +307,7 @@ class BondStanddown:
     question `on_all_paths_down` never asks, because by its own definition it
     only fires once every leg is DOWN.
 
-    MEASURED LIVE ON SUZU 2026-08-11: the ethernet leg dropped, the bond
+    MEASURED LIVE ON THE TRAVEL ROUTER 2026-08-11: the ethernet leg dropped, the bond
     carried on the hotspot alone at 661ms, and kept the metric-1 default while
     a healthy physical WAN sat unused at metric 20. One leg was still alive,
     so `on_all_paths_down` correctly did not fire - and nothing else was
@@ -322,7 +322,7 @@ class BondStanddown:
     under `failover_rtt_ms` while its TAIL is catastrophic
     (test_the_mean_hides_the_tail, test_bufferbloat_leg_is_shed.py) - the
     right story for a leg that BOUNCES. A SUSTAINED bad leg is different and
-    turned out to be the actual suzu mechanism, found only by driving the real
+    turned out to be the actual the travel router mechanism, found only by driving the real
     control pass (see BondAgent._carrying_best_tail_ms's own docstring): a
     constant-bad sample pushes classify_state to DOWN almost immediately, and
     packet mode's route decision does not require a leg to be alive at all -
@@ -336,7 +336,7 @@ class BondStanddown:
 
     WHY A SUSTAIN WINDOW, NOT A SINGLE READING. #107's phantom-RTT defect (a
     dropped keepalive reads as one ~500ms spike, decaying over a handful of
-    passes at `rtt_tail_decay`) is not deployed to suzu, so a single bad probe
+    passes at `rtt_tail_decay`) is not deployed to the travel router, so a single bad probe
     pass cannot be trusted either. `standdown_enter_after_s` requires the
     carrying set's BEST leg to stay above the floor for a sustained run of
     passes - long enough that an isolated phantom spike (which self-heals
@@ -359,7 +359,7 @@ class BondStanddown:
     netifd's physical-WAN defaults, which already sit in the kernel's routing
     table underneath it (see net.ZIPPIE_ROUTE_METRIC), take over unassisted.
     That is correct even when the alternative rides the exact same physical
-    interface as the dying bond leg, which is what suzu's own incident was:
+    interface as the dying bond leg, which is what the travel router's own incident was:
     apclix0 carried both the tunnelled hotspot leg and netifd's own
     untunnelled default at metric 20.
     """
@@ -640,7 +640,7 @@ class BondAgent:
         # PATHBOND_TAGS is the pre-rename name and is still what the live
         # routers carry in /etc/zippie/env. Reading only ZIPPIE_TAGS meant every
         # metric and log shipped UNTAGGED - present in Datadog but unfindable,
-        # with no device:suzu to filter on. Accept both; the new name wins.
+        # with no device:travel-router to filter on. Accept both; the new name wins.
         _raw = os.environ.get("ZIPPIE_TAGS") or os.environ.get("PATHBOND_TAGS", "")
         _tags = [t for t in _raw.split(",") if t]
         # HTTP API preferred: a travel device cannot rely on reaching a home
@@ -762,7 +762,7 @@ class BondAgent:
         bonds whatever it finds without a config edit per venue.
 
         REQUIRING A GATEWAY IS THE SAFETY RAIL, NOT A DETAIL. "Has an address
-        and is UP" also describes br-lan, which on suzu carries 10.20.0.1 and
+        and is UP" also describes br-lan, which on the travel router carries 10.99.0.1 and
         is otherwise indistinguishable from a candidate. Adopting it would
         bond the router through its own LAN - a loop whose traffic exits via
         the very uplinks being balanced, which is the same class of mistake
@@ -919,8 +919,8 @@ class BondAgent:
         `hotspot` in zippie.toml is labelled "Phone hotspot" - a static
         string that was true once, when the leg really was a phone, and has
         stayed on the console, both phone apps and the diagnostics screen for
-        as long as suzu has actually been associated to an access point
-        called M2000. The SSID is readable straight off the interface; the
+        as long as the travel router has actually been associated to an access point
+        called the upstream AP. The SSID is readable straight off the interface; the
         agent knows more than the config does and should say so.
 
         RUN AFTER match_interfaces, IN THE SAME TICK - it needs this pass's
@@ -948,7 +948,7 @@ class BondAgent:
         SCOPED TO INTERFACE-MATCHED LEGS whose resolved interface is
         currently a station radio (iwinfo Mode: Client) - never `ethernet`,
         never an SSID- or any-matched leg, and never a leg that resolved to
-        an AP radio (ra0/rax0, broadcasting Suzu/_IOT/_WERK - see
+        an AP radio (ra0/rax0, broadcasting its own SSIDs - see
         wifi_uci.station_info's docstring for why those can never be the
         answer here). `uci show wireless` and `iw` are both unusable for
         this - see wifi_uci.station_info.
@@ -1008,7 +1008,7 @@ class BondAgent:
         THE ROUTE GATE, and the reason packet mode used to take the internet
         down with it. It was gated on net.tunnel_is_carrying, which is satisfied
         by a recent handshake plus ANY receive - and a handshake RESPONSE alone
-        makes WireGuard's rx counter non-zero. Live on suzu 2026-08-02 that read
+        makes WireGuard's rx counter non-zero. Live on the travel router 2026-08-02 that read
         as 188 bytes received, so a tunnel that had merely said hello was judged
         good enough to carry every client on the LAN. It was not, and the
         watchdog spent the afternoon tearing the bond down three minutes at a
@@ -1101,7 +1101,7 @@ class BondAgent:
 
         `zippie-home add-client` provisions a SEPARATE keypair and /32 per leg,
         because route mode needs each tunnel to be a distinct peer at home.
-        There is often no top-level key at all - suzu has none, which is why
+        There is often no top-level key at all - the travel router has none, which is why
         the first live cutover died with "re-import the client bundle" while
         the bundle was perfectly valid.
 
@@ -1137,7 +1137,7 @@ class BondAgent:
                 # ON CHANGE ONLY. This runs every control tick, and WHICH leg
                 # lends its key is a steady-state fact, not an event - it was
                 # one of the two messages that made up 154 of 158 lines in
-                # suzu's log buffer (#87). The identity itself is still worth a
+                # the travel router's log buffer (#87). The identity itself is still worth a
                 # line when it moves: it decides the tunnel's inside address,
                 # and a mismatch there is the "handshakes but moves nothing"
                 # stall this method's docstring is about.
@@ -1191,7 +1191,7 @@ class BondAgent:
         route". True of pbz0's PEER; false of the TRANSPORT's remote, which is
         the public home address. Once `default dev pbz0` is installed the home
         endpoint resolves into the tunnel it is supposed to carry - measured on
-        suzu 2026-08-02 with packet mode live:
+        the travel router 2026-08-02 with packet mode live:
 
             ip route get 203.0.113.33              -> dev pbz0 src 10.66.0.2
             ip route get 203.0.113.33 oif apclix0  -> via 10.3.0.1 dev apclix0
@@ -1791,7 +1791,7 @@ class BondAgent:
         # SMOOTHED rtt, not this one probe - the same rule effective_weight
         # already follows, and for the same reason.
         #
-        # Measured live 2026-08-04: suzu's hotspot leg swings 57-311ms of
+        # Measured live 2026-08-04: the travel router's hotspot leg swings 57-311ms of
         # ordinary cellular jitter around a 250ms degraded threshold, so
         # classifying on the raw sample flipped its state 14 times in 90
         # seconds while its AVERAGE (206ms) sat comfortably healthy. Every flip
@@ -2245,7 +2245,7 @@ class BondAgent:
         # reinstates the announced label, apply_leg_overrides re-applies the
         # legs.json one immediately after, and the pair runs every tick - so
         # the field flips twice per pass and the override logs a line each
-        # time. Measured on suzu: that message was 25 of the last 25 log
+        # time. Measured on the travel router: that message was 25 of the last 25 log
         # entries, about one every 1.3 s, which evicted everything else from
         # the router's small in-RAM ring buffer.
         #
@@ -2264,7 +2264,7 @@ class BondAgent:
         # The tier used to be decided once, in the branch above, and every
         # later announcement updated the endpoint and the label and nothing
         # else. So the tier a leg landed on at announce time was the tier it
-        # kept. Measured on suzu: a phone joined at tier 2 beside two
+        # kept. Measured on the travel router: a phone joined at tier 2 beside two
         # physical legs, the operator moved those legs back to tier 1, and
         # the phone stayed at 2 - leased, healthy, and carrying nothing,
         # because packet_mode_legs admits only min(tier).
@@ -2598,7 +2598,7 @@ class BondAgent:
             # unconditional withdraw clears it. _apply_all_paths_down owns the
             # memo reset and the degrade/killswitch logging.
             self._apply_all_paths_down()
-        # Router DNS does NOT survive this on its own - measured on suzu
+        # Router DNS does NOT survive this on its own - measured on the travel router
         # 2026-08-02, where the flip to `default dev pbz0` left the box with no
         # working resolver until a human restarted nextdns, and every LAN
         # client with none either (resolv.conf -> 127.0.0.1). Short-circuit, so
@@ -2935,7 +2935,7 @@ class BondAgent:
         passed. This read only the first field until 2026-08-07, so it answered
         "what integer is in the file", not "how much budget is left".
 
-        The difference is not cosmetic. Measured on suzu 2026-08-06: the file
+        The difference is not cosmetic. Measured on the travel router 2026-08-06: the file
         held `2 1785715991`, the window had opened 3.6 DAYS earlier against a
         24h window, and the true in-window count was 0 - while `/api/status`
         and `custom.zippie.watchdog.rearms_used` both reported 2 of a maximum
@@ -3209,7 +3209,7 @@ class BondAgent:
 
         This exists because `_home_ip` was declared and never assigned, so
         every transport link was handed the raw hostname as its remote - and
-        `socket.sendto` resolves a hostname on EVERY CALL. Measured on suzu
+        `socket.sendto` resolves a hostname on EVERY CALL. Measured on the travel router
         2026-08-02: 0.569ms per send to a hostname against 0.040ms to an
         address, a 14x cost paid per datagram with a WARM cache, inside the
         single-threaded packet loop.
@@ -3294,10 +3294,10 @@ class BondAgent:
         always empty and ensure_firewall() created, flushed and filled the
         chains with nothing, every pass, forever.
 
-        Found live 2026-08-04: a phone on suzu's wifi read "no internet
+        Found live 2026-08-04: a phone on the travel router's wifi read "no internet
         connection" while the router itself pinged out fine. That asymmetry is
         the tell - the router's own traffic sources from pbz0's address and
-        routes home cleanly, while a LAN client's leaves as 10.20.0.x, which
+        routes home cleanly, while a LAN client's leaves as 10.99.0.x, which
         home has no route back to. It is verbatim the outage ensure_firewall's
         docstring exists to prevent.
 
@@ -3494,7 +3494,7 @@ class BondAgent:
         rules. Adding a member there would change how the bond BEHAVES in order
         to change what it SAYS, which is backwards.
 
-        Found live on suzu 2026-08-17 (#204): the ethernet leg had sent 403618
+        Found live on the travel router 2026-08-17 (#204): the ethernet leg had sent 403618
         bytes, received 0, loss 100%, for nine hours, reporting `degraded` the
         whole time. Nothing distinguished it from a leg having a bad afternoon.
         The cause was a NAT hairpin - the travel router was plugged into the

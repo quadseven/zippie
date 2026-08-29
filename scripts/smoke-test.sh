@@ -70,10 +70,11 @@ if command -v tailscale >/dev/null 2>&1 || [[ -x /Applications/Tailscale.app/Con
     fi
   fi
   echo "    tailscale: present"
-  # Prefer home-ish / OKE nodes as future zippie-home hosts
-  "${TS}" status 2>/dev/null | awk '
-    /k8s-oke|srv-unraid|srv-rpi|srv-oracle/ {print "    candidate host:", $1, $2}
-  ' | head -12 || true
+  # Any always-on tailnet peer on the home LAN is a candidate zippie-home
+  # host. This used to filter on one estate's own naming scheme, which matched
+  # nothing on anybody else's tailnet and quietly printed no candidates at all.
+  "${TS}" status 2>/dev/null | awk 'NF {print "    candidate host:", $1, $2}' \
+    | head -12 || true
 else
   echo "    tailscale: not found (ok for offline smoke)"
 fi
@@ -85,5 +86,6 @@ echo "  - 3 peers / 3 tunnel IPs"
 echo "  - client import + per-path keys"
 echo "  - policy aggregate/failover/degraded + dashboard API"
 echo
-echo "Next real hardware step: run zippie-home on a FiOS LAN host"
-echo "(e.g. srv-unraid / rpi) with UDP 51820-23 forwarded; see docs/tailnet-home.md"
+echo "Next real hardware step: run zippie-home on a home LAN host"
+echo "(a LAN worker node or small always-on box) with UDP 51820-23 forwarded;"
+echo "see docs/tailnet-home.md"

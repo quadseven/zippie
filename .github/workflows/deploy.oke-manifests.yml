@@ -204,7 +204,7 @@ jobs:
           persist-credentials: false
       - name: Age of the last successful reconcile
         env:
-          # `gh` is NOT installed on srv-unraid-gha, and jq is not guaranteed
+          # `gh` is NOT installed on the self-hosted Linux runner, and jq is not guaranteed
           # either, so this is stdlib python against the REST API - the same
           # choice infra's emitters make for the same reason.
           RECONCILE_TOKEN: ${{ github.token }}

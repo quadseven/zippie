@@ -69,7 +69,7 @@ class DatadogApiTelemetry:
         # blocked for the full 15s. The control loop fell from 1s to ~15s,
         # keepalives went out every 15s against a 6s staleness threshold, and
         # so EVERY LEG READ DEAD - permanently, and for no reason other than
-        # measuring it. Live on suzu 2026-08-02: 3 keepalives in 50 seconds,
+        # measuring it. Live on the travel router 2026-08-02: 3 keepalives in 50 seconds,
         # which is 50/15.
         #
         # Self-reinforcing, which is what made it so hard to see: telemetry
@@ -264,7 +264,7 @@ _TRANSPORT_COUNTERS = {
     # gap, because the wait ran out. Sustained `capped` means the spread
     # between legs has outgrown what the reorder deadline leaves room to wait
     # out, and it is the number that would have named the "retransmits tripled
-    # in a step rather than drifting" episode on suzu the first time.
+    # in a step rather than drifting" episode on the travel router the first time.
     "nacks": ("nacks_sent", "abandoned", "dropped", "reordered", "capped"),
 }
 
@@ -465,7 +465,7 @@ def _path_samples(p: dict, mode: str, primary: str | None,
     #
     # In packet mode there is no per-leg wg interface, so tx_bytes/rx_bytes read
     # 0 for every leg and path.tx_bps is None - the whole per-leg volume picture
-    # goes dark in the mode suzu actually runs. Only the transport knows which
+    # goes dark in the mode the travel router actually runs. Only the transport knows which
     # link a frame left on, and these are its counters. Published raw because
     # the first version of the accounting recorded a 30 MB transfer as 100 KB
     # and there was no way to tell the counter from the delta arithmetic.
@@ -531,7 +531,7 @@ def _build_samples(status: dict) -> list:
     deploy tool installed, False means one of them changed on the box since, and
     None means there is no usable stamp to compare against - a checkout that was
     never deployed, or a corrupt build.json. Since #228 this covers the config
-    as well as the modules, because it did not, and suzu spent six days
+    as well as the modules, because it did not, and the travel router spent six days
     reporting 1 while running a `zippie.toml` main had already replaced. Which
     half moved is in `/api/status` as `code_matches_deploy` and
     `config_matches_deploy`; the metric stays one number so the monitor built on
@@ -581,7 +581,7 @@ def _build_samples(status: dict) -> list:
 def _free_leg_idle(paths: list[dict]) -> int:
     """1 when a free leg is present and carrying nothing while a metered leg carries.
 
-    THE FREE WIRE NOBODY IS USING (zippie#258 AC5). That was suzu's state for
+    THE FREE WIRE NOBODY IS USING (zippie#258 AC5). That was the travel router's state for
     12h45m on 2026-08-20 - roughly 3 GB/day of household traffic on phone plans
     with a cable plugged in - and the only way to see it was to read per-path
     byte counters and notice one of them was not moving.

@@ -1,6 +1,6 @@
 """Weight stability: the bond must stop re-hashing flows when nothing changed.
 
-Measured on suzu 2026-07-31 with three healthy ISPs sitting idle: the ethernet
+Measured on the travel router 2026-07-31 with three healthy ISPs sitting idle: the ethernet
 weight swung 37 -> 125 -> 177 within a minute, and `ip route replace` ran on
 EVERY loop pass - at probe_interval_ms=500 that is twice a second, ~172k times
 a day, on a bond where nothing had changed. Each replace re-hashes live flows,

@@ -411,7 +411,7 @@ class TestTheNewFlagBitIsActuallyFree:
     # interpreted both ways on any one datagram.
     #
     # This is the collision this guard's own blind spot let ship: FLAG_RETRANSMIT
-    # (0x20, quadseven/zippie#116, live on suzu since 2026-08-11) already shares
+    # (0x20, quadseven/zippie#116, live on the travel router since 2026-08-11) already shares
     # this bit with FlagEncrypted, and nobody noticed because the guard read
     # only frame.go, not seal.go. Excluded here rather than "fixed" by moving
     # FLAG_RETRANSMIT - changing an already-shipped wire value on code carrying

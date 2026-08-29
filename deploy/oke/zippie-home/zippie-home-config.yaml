@@ -1,5 +1,5 @@
 # Operator-set values. Deliberately a ConfigMap, not baked into the Deployment:
-# the endpoint WILL change (FiOS IPs move, and the exit may relocate to a public
+# the endpoint WILL change (residential IPs move, and the exit may relocate to a public
 # host to avoid the port-forward entirely - see README). Changing it does not
 # rekey the server or invalidate provisioned clients.
 apiVersion: v1
@@ -9,7 +9,7 @@ metadata:
   namespace: zippie
 data:
   # The UDM keeps this current via its built-in Cloudflare DDNS (inadyn).
-  # Using the NAME, not the IP, because FiOS addresses move - and the name is
+  # Using the NAME, not the IP, because residential addresses move - and the name is
   # only trustworthy now that the duplicate-A-record bug is fixed and guarded
   # (custom.cloudflare.dns.duplicate_names). Before that cleanup this name
   # resolved to a stale IP half the time, which would have sent half of every

@@ -38,7 +38,7 @@ struct BondScreen: View {
                     ToolbarItem(placement: .topBarTrailing) {
                         NavigationLink {
                             // The router's HOST, not its URL. This name is
-                            // shown to a human as "via suzu", so a full
+                            // shown to a human as "via travel-router", so a full
                             // http://10.20.0.1:8787 would be noise in the one
                             // sentence that has to be read quickly.
                             DiagnosticsScreen(

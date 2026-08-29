@@ -5,7 +5,7 @@ Two incidents, three weeks apart, on the router that is sometimes its own only
 uplink:
 
 * 2026-08-24. A CI deploy stopped the agent and never reached `start`. The
-  runner reaches suzu over the tailnet, the tailnet rides the bond, the bond is
+  runner reaches the travel router over the tailnet, the tailnet rides the bond, the bond is
   the agent. Nothing was scheduled to undo it. The router sat stopped for 45
   minutes and a human power-cycled it.
 
@@ -91,7 +91,7 @@ def test_the_firing_is_recorded_somewhere_a_reboot_cannot_erase(rollback):
     that matters is not "the marker is at some particular directory", it is that
     the durable record is NOT kept where the ephemeral one is. Asserting the
     relationship survives somebody moving either file, and asserting a literal
-    would not. Measured on suzu 2026-08-29: `/` is overlayfs on ubifs and the
+    would not. Measured on the travel router 2026-08-29: `/` is overlayfs on ubifs and the
     log's directory is tmpfs, and twelve files under the marker's directory
     predate the current boot while nothing the rollback wrote to the log does.
     """
@@ -519,7 +519,7 @@ def test_the_running_agent_proof_is_not_the_fingerprint_alone(deploy):
     the OLD process starts reporting the NEW fingerprint, and a check that asks
     only for the fingerprint passes whether or not anything restarted.
 
-    Measured on suzu 2026-08-29 07:20:10: the deploy printed
+    Measured on the travel router 2026-08-29 07:20:10: the deploy printed
     "running da4311bb261cc8cc" and declared itself verified while the agent
     running since 06:58 was still the one answering and the restart was 50
     seconds in the future. It then provisioned and DISARMED THE ROLLBACK, so the

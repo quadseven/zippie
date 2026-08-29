@@ -10,7 +10,7 @@ import (
 // The home end for PHONE CLIENTS, as distinct from the travel router.
 //
 // WHY THIS IS A SEPARATE THING FROM THE LIVE HOME. The deployed home transport
-// is Python, single-peer, and carrying the household's traffic through suzu
+// is Python, single-peer, and carrying the household's traffic through the travel router
 // right now. It assumes one stable peer and hands what it receives to a
 // WireGuard server that was already the other end of that tunnel.
 //
@@ -20,7 +20,7 @@ import (
 // not running WireGuard, the datapath itself is the secure channel (seal.go).
 //
 // So this is built as a second listener on its own port, deliberately beside
-// the live one rather than replacing it. Suzu's bond is load-bearing; it does
+// the live one rather than replacing it. The travel router's bond is load-bearing; it does
 // not get to be the test subject for a new code path.
 //
 // WHAT THIS TYPE DOES AND DOES NOT DO. It owns the wire: verify, decrypt,

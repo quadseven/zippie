@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Zippie home exit server: WireGuard multipath endpoint + NAT + client provisioning.
 
-Run on a machine at home that can reach the internet via FiOS and accept UDP
+Run on a machine at home that can reach the internet via a home uplink and accept UDP
 port-forwards from your gateway.
 
 Each travel path is a distinct WireGuard peer (own key + tunnel IP) so return
@@ -206,7 +206,7 @@ def _redirect_mapping(
     staged rollout    ONE spare public port -> the transport, the rest -> wg
     full packet mode  every public port -> the transport
 
-    The staged shape is what makes deploying the transport safe. suzu's live
+    The staged shape is what makes deploying the transport safe. The travel router's live
     tunnels only ever dial one port, so handing the transport a spare port
     proves the whole receive path end to end while route mode keeps carrying
     real traffic on its own port, untouched. An all-or-nothing target would
@@ -371,7 +371,7 @@ def _write_server_conf(wg_path: Path, meta: dict[str, Any], *, keep_peers: bool)
       up    keep_peers=True. The peers are the provisioned clients and dropping
             one takes the live bond down. They are carried over VERBATIM rather
             than re-rendered from meta["clients"], so a peer added by live
-            surgery (suzu's ethernet path, 2026-07-30) survives a refresh even
+            surgery (the travel router's ethernet path, 2026-07-30) survives a refresh even
             though it may not be in meta.
       init  keep_peers=False. init only reaches here on a NEW install or under
             --force, and --force is a rekey that resets meta["clients"] to {}.
@@ -473,7 +473,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     print(f"  state           : {meta_path}")
     print()
     print("Next:")
-    print(f"  1) Port-forward UDP {ports} from your FiOS/UniFi gateway to this host")
+    print(f"  1) Port-forward UDP {ports} from your home gateway to this host")
     print("  2) sudo zippie-home up")
     print("  3) sudo zippie-home add-client travel-pi")
     return 0
@@ -597,7 +597,7 @@ def cmd_add_path(args: argparse.Namespace) -> int:
     """Mint ONE new path (WG peer) for an EXISTING client.
 
     Exists because the alternative was live surgery: adding the ethernet path
-    to suzu (2026-07-30) meant hand-editing pb-home0.conf and server.json in
+    to the travel router (2026-07-30) meant hand-editing pb-home0.conf and server.json in
     the zippie-home PVC and running `wg set` by hand. add-client cannot do
     it - it always mints a whole new client with a fresh set of paths.
     """
@@ -617,7 +617,7 @@ def cmd_add_path(args: argparse.Namespace) -> int:
     client_cidr = f"{prefix}.{octet}/32"
     ports = list(meta["ports"])
     # Rotation mirrors add-client, but real gateways often forward only ONE of
-    # the advertised ports (suzu forwards 51901 alone; a path handed 51900
+    # the advertised ports (the travel router forwards 51901 alone; a path handed 51900
     # sends into a black hole forever) - hence --port to pin it.
     port = args.port if args.port else ports[len(client["paths"]) % len(ports)]
 

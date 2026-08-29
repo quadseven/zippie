@@ -1,13 +1,17 @@
 # Zippie
 
-Self-hosted multipath internet bonding. Aggregate Starlink, T-Mobile, Verizon (and anything else) into one resilient tunnel that exits your home **2.5 Gbps FiOS**. No commercial bonding license. Your pipes, your box, your traffic.
+Self-hosted multipath internet bonding. Aggregate Starlink, T-Mobile, Verizon (and anything else) into one resilient tunnel that exits at **your own home uplink**. No commercial bonding license. Your pipes, your box, your traffic.
 
 > Bonds every link you have into one connection that exits at your own house. Built for a personal home-exit kit (Pi / GL-MT3000 / UniFi UTR).
+
+Device identity - which this repo deliberately does not solve in-tree, after a
+deploy pipeline splicing a static key into a router config caused an outage -
+lives in [muster](https://github.com/quadseven/muster).
 
 ```
   Travel kit                              Home
   --------                                ----
-  Starlink Wi-Fi  --\                       FiOS 2.5G
+  Starlink Wi-Fi  --\                       Home fiber
   T-Mobile hotsp  ---+--> [ bond client ] ===== encrypted multipath =====> [ bond server ] --> Internet
   Verizon hotsp   --/     Pi / GL-MT3000              (your house)           NAT/exit
                               |
@@ -45,7 +49,7 @@ epic/sub-issue conventions that history left behind).
 | Typical commercial bonding | Zippie |
 |---|---|
 | Per-router / seat license | Free, self-hosted |
-| Vendor cloud exit nodes | **Your** FiOS exit (low latency to home, full rate) |
+| Vendor cloud exit nodes | **Your own** home exit (low latency to home, full rate) |
 | Black-box bonding | Inspectable agent + WireGuard + optional OpenMPTCProuter |
 | Extra SKU for travel routers | Designed for Pi, GL-MT3000, UniFi UTR |
 
@@ -67,7 +71,7 @@ Best for: always-up travel with Starlink + several 50GB phone lines (Operator + 
 
 When you need **true MPTCP channel bonding** of a single TCP stream, so one download spans several WANs at once:
 
-- Home: OMR server install on a always-on box with a public IP or port-forward to FiOS
+- Home: OMR server install on a always-on box with a public IP or port-forward at the home gateway
 - Travel: OMR OpenWrt image on Pi (or custom build for MT3000-class hardware)
 
 See [docs/openmptcprouter.md](docs/openmptcprouter.md). Zippie can sit in front as WAN health / SSID joiner even when OMR owns the tunnels.
@@ -82,7 +86,7 @@ See [docs/openmptcprouter.md](docs/openmptcprouter.md). Zippie can sit in front 
 | WAN sources | Starlink, phone hotspots (T-Mo, VZ) | Agent auto-joins preferred SSIDs |
 | **Phone legs** | iPhone / Android on the router's wifi | Run the Companion relay; the phone lends its cellular. iOS **announces** itself; Android cannot yet (#53) |
 | **Phone power** | USB-C PD source, not the router | See below - the router cannot keep a relaying phone charged |
-| Bond server | Mini PC / Pi / NUC on FiOS LAN | Port-forward UDP 51820+; 2.5G NIC preferred |
+| Bond server | Mini PC / Pi / NUC on the home LAN | Port-forward UDP 51820+; 2.5G NIC preferred |
 
 ### Powering phone legs
 
@@ -120,21 +124,21 @@ is diagnosable as the phone or the port rather than the cable.
 ./scripts/smoke-test.sh   # or: make smoke
 ```
 
-Offline proof (no root, no real WANs): home provision → 3 per-path WireGuard peers → client import → aggregate multipath → Starlink-down failover → degraded reweight → dashboard `/api/status`. See [docs/tailnet-home.md](docs/tailnet-home.md) for how this pairs with your Tailscale / k8s-oke hosts (`srv-unraid`, OCI workers).
+Offline proof (no root, no real WANs): home provision → 3 per-path WireGuard peers → client import → aggregate multipath → Starlink-down failover → degraded reweight → dashboard `/api/status`. See [docs/tailnet-home.md](docs/tailnet-home.md) for how this pairs with your own Tailscale / Kubernetes hosts.
 
 ## Quick start
 
 ### 1. Home server (once)
 
 ```bash
-# On a Debian/Ubuntu box at home with internet via FiOS:
+# On a Debian/Ubuntu box at home with internet via a home fiber uplink:
 curl -fsSL https://raw.githubusercontent.com/quadseven/zippie/main/scripts/install-home.sh | sudo bash
 sudo zippie-home init --public-endpoint home.example.com:51820
 sudo zippie-home add-client travel-pi
 # Save the printed client bundle (or pull from /var/lib/zippie/clients/)
 ```
 
-Port-forward on your FiOS / UniFi gateway:
+Port-forward on your home gateway:
 
 - UDP `51820` (path 0 default)
 - UDP `51821`..`51823` if you pin one UDP port per path (optional, helps some CGNAT paths)
@@ -188,6 +192,7 @@ zippie/
   configs/examples/     # sample zippie.toml + SSID profiles
   scripts/              # installers
   docs/                 # architecture, threat model, OMR guide
+                        #   start at docs/architecture.md
 ```
 
 ## Configuration sketch
@@ -196,7 +201,7 @@ zippie/
 
 ```toml
 [home]
-endpoint = "home.example.com"   # Dynamic DNS to your FiOS public IP
+endpoint = "home.example.com"   # Dynamic DNS to your home public IP
 # one UDP port per path (recommended) OR single port with multi-peer
 ports = [51820, 51821, 51822, 51823]
 
@@ -233,7 +238,7 @@ With Starlink + two cellular paths:
 1. Any single path death is sub-second failover (policy-driven).
 2. Lossy Starlink rain fade: agent de-weights or switches to cellular.
 3. Hotel captive portals: path marked down until portal cleared; others carry traffic.
-4. Home FiOS is the single high-capacity exit — bonded uplink is limited by **sum of travel WANs**, downlink by **min(sum of travel WANs, FiOS, server NIC)**.
+4. The home uplink is the single high-capacity exit — bonded uplink is limited by **sum of travel WANs**, downlink by **min(sum of travel WANs, home uplink, server NIC)**.
 
 ## License
 

@@ -9,7 +9,7 @@ was read from the two running systems, not inferred from their documentation.
 
 | | serial | Android | enrolled | role |
 |---|---|---|---|---|
-| Headwind `h0001` | not recorded (no IMEI) | - | 2026-08-11 | the LIVE uplink, `pixel-6a-a554` at 10.20.0.174 |
+| Headwind `h0001` | not recorded (no IMEI) | - | 2026-08-11 | the LIVE uplink, `pixel-6a-a554` at 10.99.0.174 |
 | Fleet host 1 | `PLACEHOLDER0000` | 16 | 2026-08-17 22:38Z | the second Pixel, carrying nothing |
 
 The live phone was last seen by Headwind at 22:51Z, so it is actively syncing -
@@ -50,7 +50,7 @@ both MDMs, and `ManagedConfig.kt` already reads them.
 
 Headwind serves:
 
-    http://10.20.0.1/zippie-companion-0.1.0-78-109e9aa-TESTKEY.apk
+    http://10.99.0.1/zippie-companion-0.1.0-78-109e9aa-TESTKEY.apk
 
 Two facts in that one line.
 
@@ -62,8 +62,8 @@ reinstall**, not an update - and an uninstall takes the relay, its managed
 configuration and its announce state with it.
 
 **It is served over plain HTTP from the router's own LAN address.** That works
-only while the phone is on suzu's wifi, and it is the reason
-`network_security_config.xml` still pins `10.20.0.1` as a cleartext exemption
+only while the phone is on the travel router's wifi, and it is the reason
+`network_security_config.xml` still pins `10.99.0.1` as a cleartext exemption
 (#156). Fleet does not deliver APKs this way at all: a custom Android app reaches
 a device as a **private app published to managed Google Play**, which needs a Play
 Console account, and since 2026-07-13 new packages must be `.aab` rather than

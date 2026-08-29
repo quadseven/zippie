@@ -1,4 +1,4 @@
-# Live config for the GL-MT3000 "Suzu". Paths are matched by INTERFACE only:
+# Live config for the GL-MT3000 "TravelRouter". Paths are matched by INTERFACE only:
 # SSIDs are user-editable at any moment and must never be load-bearing
 # (2026-07-30, hotspot renamed mid-trip and the SSID-matched path fell out).
 #
@@ -23,7 +23,7 @@ server_public_key = "<server-public-key>"
 dns = ["1.1.1.1", "9.9.9.9"]
 allowed_ips = ["0.0.0.0/0", "::/0"]
 persistent_keepalive = 3
-# HOME OVER THE WIRE (#258). At home suzu's WAN sits on the house LAN while
+# HOME OVER THE WIRE (#258). At home the travel router's WAN sits on the house LAN while
 # `endpoint` above resolves to 203.0.113.33 - the house's OWN public address.
 # The edge does not implement hairpin NAT and egresses through a VPN, so the
 # ethernet leg dialling it is answered by nothing: measured rx=0, loss=100%,
@@ -94,13 +94,13 @@ match = { type = "interface", interface = "eth0" }
 # this file requires.
 #
 # Despite the label, apclix0 is currently associated to an access point
-# called M2000, not a phone (#153 tracks fixing the label to say so
+# called the upstream AP, not a phone (#153 tracks fixing the label to say so
 # automatically from the live SSID; a legs.json override already renders it
-# as "Wi-Fi Repeater - M2000" on the console ahead of that landing).
+# as "Wi-Fi Repeater - UpstreamAP" on the console ahead of that landing).
 #
 # monthly_cap_gb is UNSET here, not carried over from the old glob's 50. That
 # 50 was a phone's plan size applied to whichever radio happened to answer -
-# right for a phone, meaningless for the M2000's own uplink, which is
+# right for a phone, meaningless for the upstream AP's own uplink, which is
 # genuinely metered (T-Mobile, 172.56.163.44, AS21928, mobile: true) but on a
 # plan this repo does not know the size of. Leaving it unset means
 # over_soft_limit simply never fires for this leg rather than firing against
@@ -117,7 +117,7 @@ match = { type = "interface", interface = "apclix0" }
 # 2.4GHz station radio (apcli0). #154: the other half of the split above. Idle
 # as of the 2026-08-12 survey ("ESSID: unknown", no IPv4) - a free slot for
 # whatever joins this band next, historically an actual phone hotspot (unlike
-# apclix0's M2000).
+# apclix0's upstream AP).
 #
 # New identity, deliberately: nothing has ever carried under the name
 # "hotspot-2ghz", so there is no key, counter or retransmit history to lose by
@@ -167,7 +167,7 @@ dashboard_host = "0.0.0.0"
 #
 #   1. It PREVENTED the real thing from working. match_interfaces excludes
 #      legs on relay endpoint, so the static companion-iphone claimed
-#      10.20.0.151:51999 and the announced leg (iphone-8fe5) was refused the
+#      10.99.0.151:51999 and the announced leg (iphone-8fe5) was refused the
 #      bridge, left interface=None, DOWN, and out of the bond. The same phone
 #      appeared twice in the app, once alive and once dead.
 #   2. companion-co-operator dialled a phone that has never run the relay, forever,

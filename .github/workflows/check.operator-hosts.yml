@@ -6,21 +6,17 @@ name: Check - no operator hosts in the shipped apps
 # emptied at all. This pins both states and fails on any movement, in either
 # direction - tightening included, so that progress is recorded rather than
 # silently diverging from the allowlist.
+#
+# THE SCRIPT NOW ALSO CHECKS THE WHOLE TREE, not just the two app directories,
+# so THE PATH FILTER IS GONE ON PURPOSE. A publication audit found the previous
+# scrub had left this estate's networks in roughly a hundred files, almost none
+# of them under companion/ - a filter scoped to the apps would not have run on
+# a single one of them. A guard that does not run is not a guard.
 
 on:
   push:
     branches: [main]
-    paths:
-      - 'companion-android/**'
-      - 'companion/**'
-      - 'scripts/check-no-operator-hosts.sh'
-      - '.github/workflows/check.operator-hosts.yml'
   pull_request:
-    paths:
-      - 'companion-android/**'
-      - 'companion/**'
-      - 'scripts/check-no-operator-hosts.sh'
-      - '.github/workflows/check.operator-hosts.yml'
   workflow_dispatch: {}
 
 permissions:
@@ -51,5 +47,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-      - name: No new operator hosts in shipped source
+      # THE DETECTOR PROVES ITSELF FIRST. A pattern that cannot match cannot
+      # find anything, and the clean report it then prints is a lie - which is
+      # the exact way the previous scrub's own scanner passed a dirty tree.
+      - name: Prove the address allowlist can still tell permitted from not
+        run: bash scripts/check-no-operator-hosts.sh --self-test
+      - name: No new operator hosts in shipped source, and none in the tree
         run: bash scripts/check-no-operator-hosts.sh

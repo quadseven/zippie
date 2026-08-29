@@ -61,16 +61,16 @@ class BondLegsTest {
      */
     @Test
     fun `only the leg the router dials at this phone is marked as this phone`() {
-        val rows = rows(localIp = "10.20.0.100")
+        val rows = rows(localIp = "10.99.0.100")
         assertEquals(1, rows.count { it.isYou })
-        assertTrue(row("companion-co-operator", localIp = "10.20.0.100").isYou)
+        assertTrue(row("companion-co-operator", localIp = "10.99.0.100").isYou)
         assertEquals("This phone is not one of them.", BondLegs.subhead(rows))
     }
 
     @Test
     fun `no local address means no leg is claimed`() {
         assertEquals(0, rows(localIp = null).count { it.isYou })
-        assertFalse(rows(localIp = "10.20.0.100", listenPort = 51998).any { it.isYou })
+        assertFalse(rows(localIp = "10.99.0.100", listenPort = 51998).any { it.isYou })
     }
 
     @Test

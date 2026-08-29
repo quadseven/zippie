@@ -148,10 +148,10 @@ class WidgetContentTest {
         // notices. #44 shipped because a view wrote its own sentence.
         val report = carrying(now)
         val verdict = RelayVerdict.evaluate(report, now)
-        val content = WidgetContent.from(report, now, routerName = "suzu")
+        val content = WidgetContent.from(report, now, routerName = "travel-router")
 
         assertEquals(verdict.headline, content.headline)
-        assertEquals(verdict.detail("suzu"), content.detail)
+        assertEquals(verdict.detail("travel-router"), content.detail)
     }
 
     @Test
@@ -162,8 +162,8 @@ class WidgetContentTest {
         // name it are the ones describing what the far end is or is not doing.
         val listening = RelayReport(stats(), now)
 
-        val named = WidgetContent.from(listening, now, routerName = "suzu")
-        assertTrue("a named router should be named", named.detail.contains("suzu"))
+        val named = WidgetContent.from(listening, now, routerName = "travel-router")
+        assertTrue("a named router should be named", named.detail.contains("travel-router"))
 
         val unnamed = WidgetContent.from(listening, now)
         assertTrue(
@@ -175,10 +175,10 @@ class WidgetContentTest {
     @Test
     fun `carrying deliberately does not name the router`() {
         // Guards the asymmetry above from being "tidied" into consistency.
-        val content = WidgetContent.from(carrying(now), now, routerName = "suzu")
+        val content = WidgetContent.from(carrying(now), now, routerName = "travel-router")
         assertTrue(
             "carrying is about this phone, not about which router",
-            !content.detail.contains("suzu"),
+            !content.detail.contains("travel-router"),
         )
     }
 }

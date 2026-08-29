@@ -123,7 +123,7 @@ MAX_GAP_SCAN = NackTracker.MAX_PENDING
 # 0.6 leaves 40% of the deadline for the NACK to travel, be answered, and come
 # back on a different leg. At the packet-mode default of 250 ms that is a
 # 150 ms wait and 100 ms of budget for the round trip, against legs measured at
-# 33/73/334 ms on suzu. The floor is `nack_delay_ms` itself, so a deployment
+# 33/73/334 ms on the travel router. The floor is `nack_delay_ms` itself, so a deployment
 # that shortens the reorder deadline below the NACK delay degrades to exactly
 # the pre-#108 behaviour rather than to something worse than it.
 NACK_MAX_DELAY_FRACTION = 0.6

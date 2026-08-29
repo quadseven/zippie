@@ -30,7 +30,7 @@ def classify_state(
     """Classify one path, with HYSTERESIS on the way back up.
 
     A single threshold chatters whenever the measured value sits near it, and
-    smoothing does not save you: measured live 2026-08-04, suzu's hotspot leg
+    smoothing does not save you: measured live 2026-08-04, the travel router's hotspot leg
     averages ~228ms against a 250ms degraded threshold, so even the EWMA drifts
     across the line on its own. It changed state 8 times in 90 seconds while
     genuinely being one consistently-mediocre leg. Each change divides or
@@ -339,7 +339,7 @@ def free_leg_is_carrying(paths: list[PathRuntime]) -> bool:
     """Is a free leg actually doing the work right now?
 
     PROOF, NOT PRESENCE, and the distinction is the whole point of zippie#258.
-    A wire was plugged into suzu for 12h45m while the bond ran entirely on phone
+    A wire was plugged into the travel router for 12h45m while the bond ran entirely on phone
     plans - roughly 3 GB/day of household traffic on metered cellular - because
     the ethernet leg was present, `state=down`, and had never completed a
     handshake. Preferring it on the strength of existing would have replaced a
@@ -452,7 +452,7 @@ def effective_weight(
     #
     # The deadband above is exactly what it says: large moves pass straight
     # through. That is right for jitter and useless for bufferbloat, because
-    # bufferbloat IS large moves. Measured on suzu 2026-08-09 (#81): a leg
+    # bufferbloat IS large moves. Measured on the travel router 2026-08-09 (#81): a leg
     # swinging 54 -> 370 -> 54 ms cleared the deadband on every swing and the
     # console read a different weight at every one of six samples 22 s apart -
     # and at probe_interval_ms=500 those six are a subsample of a value moving

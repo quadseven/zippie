@@ -8,10 +8,10 @@ Use it when Zippie's per-flow multipath is not enough (e.g. one big `scp`/`curl`
 
 | Role | What to run | Where |
 |---|---|---|
-| OMR server (VPS) | Official Debian/Ubuntu install script | **Home** box with public IP / port forward (your FiOS), **or** a nearby VPS if you accept cloud exit |
+| OMR server (VPS) | Official Debian/Ubuntu install script | **Home** box with public IP / port forward (your own home uplink), **or** a nearby VPS if you accept cloud exit |
 | OMR router | Official OpenWrt image | Raspberry Pi 4/5 (supported images), or custom build for other boards |
 
-## Home as the OMR server (your FiOS)
+## Home as the OMR server (your own uplink)
 
 On a Debian/Ubuntu machine at home (x86_64 recommended for the official script):
 
@@ -31,7 +31,7 @@ The installer typically brings up:
 
 Port-forward whatever ports the installer reports (often SSH moves to a high port; proxy ports 65xxx range historically).
 
-Point Dynamic DNS at your FiOS public IP.
+Point Dynamic DNS at your home public IP.
 
 ## Travel: Raspberry Pi as OMR router
 

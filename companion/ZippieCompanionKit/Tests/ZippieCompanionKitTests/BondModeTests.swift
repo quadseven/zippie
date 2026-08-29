@@ -61,11 +61,11 @@ final class BondModeTests: XCTestCase {
         XCTAssertFalse(s.contains("The router"), s)
     }
 
-    /// Given a name, the sentence names it - "suzu is not answering" tells
+    /// Given a name, the sentence names it - "travel-router is not answering" tells
     /// the reader which box to go and look at.
     func testUnreachableWithANameUsesIt() {
-        let s = ModeDecision(proximity: .unreachable).summary(router: "suzu")
-        XCTAssertTrue(s.hasPrefix("suzu is not answering"), s)
+        let s = ModeDecision(proximity: .unreachable).summary(router: "travel-router")
+        XCTAssertTrue(s.hasPrefix("travel-router is not answering"), s)
     }
 
     /// `.local` and `.remote` already describe a relationship this phone just
@@ -73,7 +73,7 @@ final class BondModeTests: XCTestCase {
     func testNamingOnlyAffectsTheUnreachableSentence() {
         for p in [RouterProximity.local, .remote] {
             let d = ModeDecision(proximity: p)
-            XCTAssertEqual(d.summary(router: "suzu"), d.summary())
+            XCTAssertEqual(d.summary(router: "travel-router"), d.summary())
         }
     }
 }

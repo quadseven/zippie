@@ -1,6 +1,6 @@
 """A flapping leg must stop rewriting its own weight several times a minute.
 
-MEASURED, NOT IMAGINED (#81). suzu, 2026-08-09, the same episode that produced
+MEASURED, NOT IMAGINED (#81). The travel router, 2026-08-09, the same episode that produced
 the leg-shedding work. The console sampled the bond every ~22 s and reported a
 DIFFERENT weight on the ethernet leg every single time:
 
@@ -20,7 +20,7 @@ column at PROBE cadence is therefore the faithful reconstruction of what the
 weight was actually doing, not an exaggeration of it: it produces 40 weight
 changes in 60 s of simulated time (test_the_measured_profile_flaps_today).
 
-The absolute weights differ from the console's because suzu's ethernet leg is
+The absolute weights differ from the console's because the travel router's ethernet leg is
 configured with a different base weight and cost class; the SHAPE - a weight
 that walks down on a spike and straight back up on the next quiet probe, over
 and over - is what is reproduced and what is being fixed.

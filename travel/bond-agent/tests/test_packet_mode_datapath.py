@@ -238,7 +238,7 @@ def test_without_home_port_a_leg_keeps_its_own_port(tmp_path):
 def test_packet_mode_adopts_a_per_leg_identity_when_there_is_no_top_level_key(tmp_path, monkeypatch):
     """`zippie-home add-client` provisions a keypair and /32 PER LEG, because
     route mode needs each tunnel to be a distinct peer. There is often no
-    top-level key at all - suzu has none, and the first live cutover died here
+    top-level key at all - the travel router has none, and the first live cutover died here
     with "re-import the client bundle" while the bundle was perfectly valid."""
     written = {}
     monkeypatch.setattr(net, "write_wg_config", lambda path, **kw: written.update(kw))
@@ -262,7 +262,7 @@ def test_adopted_identity_is_a_pair_never_two_halves(tmp_path, monkeypatch):
     half-by-half backfill adopted the LEG'S key with the DEFAULT address.
     At home that is peer X speaking with peer Y's inner source, and cryptokey
     routing silently drops every data packet while handshakes and keepalives
-    (no inner IP) sail through - live on suzu 2026-08-02:
+    (no inner IP) sail through - live on the travel router 2026-08-02:
     'Packet has unallowed src IP (10.66.0.2) from peer ... (127.0.0.1:51831)'.
     The tunnel LOOKED established and moved nothing, in both directions."""
     written = {}
@@ -271,7 +271,7 @@ def test_adopted_identity_is_a_pair_never_two_halves(tmp_path, monkeypatch):
     a = _agent(tmp_path)
     a.config.private_key = ""
     # home.address_cidr deliberately LEFT AT ITS MODEL DEFAULT - the exact
-    # condition on suzu, and the one the sibling tests fake away.
+    # condition on the travel router, and the one the sibling tests fake away.
     assert a.config.home.address_cidr, "precondition: the default must exist"
     a.paths[0].config.private_key = "bGVnMA=="
     a.paths[0].config.address_cidr = "10.66.0.5/32"
@@ -423,7 +423,7 @@ def test_no_route_until_the_tunnel_actually_carries(tmp_path, monkeypatch):
 
     # A HANDSHAKE IS NOT DELIVERY. This used to be gated on
     # net.tunnel_is_carrying, which a handshake response alone satisfies - 188
-    # bytes on suzu 2026-08-02 - so the route went in over a tunnel that then
+    # bytes on the travel router 2026-08-02 - so the route went in over a tunnel that then
     # carried nothing and took the LAN's internet with it.
     monkeypatch.setattr(a, "_packet_datapath_delivering", lambda: False)
     assert a._nexthops() == [], "route installed over a tunnel delivering nothing"
@@ -589,7 +589,7 @@ def test_links_dial_an_address_never_a_hostname(tmp_path, monkeypatch):
 
     `_home_ip` was declared and never assigned, so every link was handed the
     raw hostname as its remote - and `socket.sendto` resolves a hostname on
-    EVERY CALL. Measured on suzu 2026-08-02: 0.569ms/send to a hostname vs
+    EVERY CALL. Measured on the travel router 2026-08-02: 0.569ms/send to a hostname vs
     0.040ms to an address, paid per datagram, with a warm cache, inside the
     single-threaded packet loop.
 
@@ -793,7 +793,7 @@ class _DeliverT:
 def test_a_handshake_alone_does_not_earn_the_route(tmp_path):
     """THE ONE THAT TOOK THE INTERNET DOWN. The old gate accepted a recent
     handshake plus any receive, and a handshake RESPONSE alone makes WireGuard's
-    rx counter non-zero - 188 bytes on suzu 2026-08-02. A tunnel that had merely
+    rx counter non-zero - 188 bytes on the travel router 2026-08-02. A tunnel that had merely
     said hello was judged fit to carry every client on the LAN."""
     a = _agent(tmp_path)
     a._transport = _DeliverT(delivered=0)
@@ -875,9 +875,9 @@ def test_no_transport_means_no_route(tmp_path):
     assert a._packet_datapath_delivering() is False
 
 
-# The RTTs below are the REAL ones sampled off suzu's hotspot leg on
+# The RTTs below are the REAL ones sampled off the travel router's hotspot leg on
 # 2026-08-04, not invented jitter.
-_SUZU_HOTSPOT_RTTS = [57, 303, 238, 262, 129, 278, 99, 311, 109, 267,
+_HOTSPOT_RTTS = [57, 303, 238, 262, 129, 278, 99, 311, 109, 267,
                       150, 280, 113, 272, 190, 260, 121, 268]
 
 
@@ -885,7 +885,7 @@ def test_a_jittery_leg_does_not_flap_between_up_and_degraded(tmp_path):
     """MEASURED LIVE: the hotspot leg changed state 14 times in 90 seconds.
 
     Its RTT swings 57-311ms - ordinary cellular jitter - and straddles
-    degraded_rtt_ms (250 on suzu). Classifying on the RAW per-probe RTT turns
+    degraded_rtt_ms (250 on the travel router). Classifying on the RAW per-probe RTT turns
     that jitter into a state flip every few seconds, and DEGRADED divides the
     weight by three (policy.effective_weight), so the bond's share of traffic
     lurched 8 -> 32 -> 48 -> 16 -> 64 all night.
@@ -898,12 +898,12 @@ def test_a_jittery_leg_does_not_flap_between_up_and_degraded(tmp_path):
     Classify on the same smoothed RTT the weighting uses.
     """
     a = _packet_agent(tmp_path, age=0.2, rtt=100.0)
-    a.config.policy.degraded_rtt_ms = 250.0    # suzu live values, not defaults
+    a.config.policy.degraded_rtt_ms = 250.0    # the travel router live values, not defaults
     a.config.policy.failover_rtt_ms = 1500.0
     path = a.paths[0]
 
     states = []
-    for sample in _SUZU_HOTSPOT_RTTS:
+    for sample in _HOTSPOT_RTTS:
         a._transport.rtt = float(sample)
         a._probe_packet_leg(path)
         # What the control loop does every tick, in apply_policy.
@@ -914,7 +914,7 @@ def test_a_jittery_leg_does_not_flap_between_up_and_degraded(tmp_path):
     assert flips <= 1, (
         "leg changed state %d times on ordinary jitter (mean rtt %.0fms, "
         "threshold %.0fms); each flip is a 3x weight lurch: %s"
-        % (flips, sum(_SUZU_HOTSPOT_RTTS) / len(_SUZU_HOTSPOT_RTTS), 250.0,
+        % (flips, sum(_HOTSPOT_RTTS) / len(_HOTSPOT_RTTS), 250.0,
            [s.value for s in states])
     )
 
@@ -923,7 +923,7 @@ def test_a_leg_that_genuinely_degrades_still_degrades(tmp_path):
     """The smoothing must not become blindness. A leg that really does go bad
     and STAYS bad has to be demoted, or the anti-flap fix is just a mute."""
     a = _packet_agent(tmp_path, age=0.2, rtt=40.0)
-    a.config.policy.degraded_rtt_ms = 250.0    # suzu live values, not defaults
+    a.config.policy.degraded_rtt_ms = 250.0    # the travel router live values, not defaults
     a.config.policy.failover_rtt_ms = 1500.0
     path = a.paths[0]
 
@@ -945,7 +945,7 @@ def test_a_leg_that_genuinely_degrades_still_degrades(tmp_path):
 # Sampled off the SAME leg 2026-08-04 after the smoothing fix went in. Mean
 # ~228ms against a 250ms threshold: a distribution centred on the boundary,
 # which smoothing alone cannot settle because the AVERAGE itself drifts across.
-_SUZU_HOTSPOT_RTTS_NEAR_THRESHOLD = [280, 98, 100, 257, 181, 326, 344, 239,
+_HOTSPOT_RTTS_NEAR_THRESHOLD = [280, 98, 100, 257, 181, 326, 344, 239,
                                      212, 268, 195, 301, 224, 249, 271, 188]
 
 
@@ -967,7 +967,7 @@ def test_a_leg_whose_average_sits_on_the_threshold_still_does_not_flap(tmp_path)
     path = a.paths[0]
 
     states = []
-    for sample in _SUZU_HOTSPOT_RTTS_NEAR_THRESHOLD * 2:
+    for sample in _HOTSPOT_RTTS_NEAR_THRESHOLD * 2:
         a._transport.rtt = float(sample)
         a._probe_packet_leg(path)
         policy.update_rtt_ewma(path, a.config.policy)
@@ -978,7 +978,7 @@ def test_a_leg_whose_average_sits_on_the_threshold_still_does_not_flap(tmp_path)
         "leg changed state %d times with an average (%.0fms) sitting near the "
         "threshold (250ms); hysteresis is what stops boundary chatter: %s"
         % (flips,
-           sum(_SUZU_HOTSPOT_RTTS_NEAR_THRESHOLD) / len(_SUZU_HOTSPOT_RTTS_NEAR_THRESHOLD),
+           sum(_HOTSPOT_RTTS_NEAR_THRESHOLD) / len(_HOTSPOT_RTTS_NEAR_THRESHOLD),
            [s.value for s in states])
     )
 
@@ -1005,7 +1005,7 @@ def test_a_companion_leg_dials_the_phone_not_the_home_endpoint(tmp_path):
     """
     a = _packet_agent(tmp_path, age=0.2, rtt=40.0)
     phone = a.paths[1]
-    phone.config.relay_endpoint = "10.20.0.55:51999"
+    phone.config.relay_endpoint = "10.99.0.55:51999"
     phone.interface = "br-lan"
 
     sent = {}
@@ -1019,7 +1019,7 @@ def test_a_companion_leg_dials_the_phone_not_the_home_endpoint(tmp_path):
 
     pid = a._transport_ids[phone.name]
     assert pid in sent, "the companion leg was never added to the transport"
-    assert sent[pid].remote == ("10.20.0.55", 51999), (
+    assert sent[pid].remote == ("10.99.0.55", 51999), (
         "companion leg dialled %r; it must dial the PHONE, which is the hop "
         "that owns the cellular" % (sent[pid].remote,)
     )
@@ -1061,14 +1061,14 @@ def test_a_relay_endpoint_is_read_from_the_config_file(tmp_path):
         'endpoint = "home.example:51902"\n'
         '[[paths]]\n'
         'name = "companion-iphone"\n'
-        'relay_endpoint = "10.20.0.55:51999"\n'
+        'relay_endpoint = "10.99.0.55:51999"\n'
         '[paths.match]\n'
         'type = "interface"\n'
         'interface = "br-lan"\n'
     )
     loaded = load_config(str(cfg))
     path = [p for p in loaded.paths if p.name == "companion-iphone"][0]
-    assert path.relay_endpoint == "10.20.0.55:51999", (
+    assert path.relay_endpoint == "10.99.0.55:51999", (
         "relay_endpoint never reached the loaded config; setting it in "
         "zippie.toml would silently do nothing"
     )
@@ -1076,7 +1076,7 @@ def test_a_relay_endpoint_is_read_from_the_config_file(tmp_path):
 
 def test_packet_mode_masquerades_the_packet_interface(tmp_path):
     """LAN CLIENTS HAD NO INTERNET IN PACKET MODE. Found live 2026-08-04 with a
-    phone on suzu's wifi showing "no internet connection".
+    phone on the travel router's wifi showing "no internet connection".
 
     ensure_firewall() is fed the list of tunnel interfaces to masquerade, and
     that list was built from p.wg_iface - which packet mode sets to None for
@@ -1085,8 +1085,8 @@ def test_packet_mode_masquerades_the_packet_interface(tmp_path):
     every pass, forever.
 
     The router itself was fine (its own traffic sources from pbz0's address),
-    which is exactly why this hid - `ping 1.1.1.1` from suzu worked while every
-    LAN client's packets left with an unroutable 10.20.0.x source and died at
+    which is exactly why this hid - `ping 1.1.1.1` from the travel router worked while every
+    LAN client's packets left with an unroutable 10.99.0.x source and died at
     home. That is verbatim the failure ensure_firewall's own docstring exists
     to prevent, reintroduced through the packet-mode door.
 
@@ -1175,7 +1175,7 @@ def test_two_phones_can_both_relay_over_the_same_lan_bridge(tmp_path, monkeypatc
     monkeypatch.setattr(net, "list_links", lambda: [_L("br-lan")])
     monkeypatch.setattr(net, "wan_gateways", lambda: {})
 
-    a = _relay_agent(tmp_path, ["10.20.0.151:51999", "10.20.0.152:51999"])
+    a = _relay_agent(tmp_path, ["10.99.0.151:51999", "10.99.0.152:51999"])
     a.match_interfaces()
 
     matched = [p.name for p in a.paths if p.interface == "br-lan"]
@@ -1240,7 +1240,7 @@ def test_two_legs_cannot_point_at_the_same_phone(tmp_path, monkeypatch):
     monkeypatch.setattr(net, "list_links", lambda: [_L("br-lan")])
     monkeypatch.setattr(net, "wan_gateways", lambda: {})
 
-    a = _relay_agent(tmp_path, ["10.20.0.151:51999", "10.20.0.151:51999"])
+    a = _relay_agent(tmp_path, ["10.99.0.151:51999", "10.99.0.151:51999"])
     # A leg only records last_error when it is not already DOWN, so start them
     # UP - which is also the real case: a working leg gets a duplicate added.
     for p in a.paths:
@@ -1271,12 +1271,12 @@ def test_a_silent_companion_leg_names_the_relay_not_the_leg(tmp_path):
     """
     a = _packet_agent(tmp_path, age=PACKET_LINK_STALE_S + 1, rtt=None)
     path = a.paths[0]
-    path.config.relay_endpoint = "10.20.0.151:51999"
+    path.config.relay_endpoint = "10.99.0.151:51999"
 
     a._probe_packet_leg(path)
 
     assert path.state is PathState.DOWN
-    assert "10.20.0.151:51999" in (path.last_error or ""), (
+    assert "10.99.0.151:51999" in (path.last_error or ""), (
         "a silent companion leg reported %r - it must name the relay that "
         "stopped answering, because the usual cause is the phone leaving the "
         "network rather than anything wrong with the bond" % (path.last_error,)

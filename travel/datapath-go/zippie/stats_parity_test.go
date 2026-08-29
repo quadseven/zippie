@@ -11,7 +11,7 @@ import (
 // afford to be blind.
 //
 // These key names are copied from the LIVE `python3 -m zippie status` output on
-// suzu, not from reading classify.py. The Go counters are spelled Sprayed and
+// the travel router, not from reading classify.py. The Go counters are spelled Sprayed and
 // Duplicated; the wire names are `spray` and `duplicate`. That mismatch is the
 // whole reason this test exists.
 

@@ -1,6 +1,6 @@
 """A bufferbloated leg must leave the bond, even though it loses nothing.
 
-MEASURED, NOT IMAGINED (#81). On 2026-08-09 suzu's ethernet WAN bufferbloated
+MEASURED, NOT IMAGINED (#81). On 2026-08-09 the travel router's ethernet WAN bufferbloated
 while the operator's laptop sat behind it. Latency went from a steady ~83 ms to
 1297 ms with ZERO packet loss; the hotspot leg stayed flat at ~55 ms throughout.
 The bond kept the bad leg carrying, retransmits tripled, and the operator's

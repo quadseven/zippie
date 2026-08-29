@@ -98,7 +98,7 @@ def _agent(tmp_path: Path) -> BondAgent:
 
 def _join(agent: BondAgent, name: str) -> None:
     """A phone announces itself, exactly as the companion app does."""
-    agent.dynamic.announce(name=name, host="10.20.0.151", port=51999,
+    agent.dynamic.announce(name=name, host="10.99.0.151", port=51999,
                            label=name, tier=None)
     agent.reconcile_dynamic_legs()
     for p in agent.paths:

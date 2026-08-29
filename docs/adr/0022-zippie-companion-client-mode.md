@@ -7,15 +7,15 @@ Accepted 2026-08-05. Supersedes the scope of backlog issue #2077.
 ## Context
 
 The companion app today does exactly one thing: CONTRIBUTE the phone's
-cellular to suzu's bond while the phone sits on suzu's wifi (ADR 0020,
+cellular to the travel router's bond while the phone sits on the travel router's wifi (ADR 0020,
 phases 1-2). Three real-world pressures broke that framing in one week:
 
-1. **The app is useless off suzu's wifi.** Away from the router, the phone
+1. **The app is useless off the travel router's wifi.** Away from the router, the phone
    has wifi + cellular of its own and no way to bond them. The shape this
    needs is well understood: capture the phone's traffic, bond ITS links,
    exit at a chosen point - for us, the home lab.
 2. **Wireless CarPlay eats the wifi radio.** In the 2024 Outback, the
-   CarPlay phone joins the CAR's 5 GHz AP and cannot also join suzu. That
+   CarPlay phone joins the CAR's 5 GHz AP and cannot also join the travel router. That
    phone can neither contribute nor consume the bond over wifi.
 3. **Per-person DNS.** Both users want their own NextDNS profile with their
    own device names, wherever the phone is - not the router's shared
@@ -34,12 +34,12 @@ to the home transport. The Go port (#2171) is what makes this possible at
 all; CPython was never going to run on a phone.
 
 WireGuard stays the crypto layer: wireguard-go runs in the extension under
-the datapath, exactly as kernel wg sits under it on suzu. The WireGuard iOS
+the datapath, exactly as kernel wg sits under it on the travel router. The WireGuard iOS
 app proves this fits the extension memory ceiling.
 
 ### One app, two modes, switched automatically by SSID
 
-On suzu's SSID the app CONTRIBUTES to the router's bond (today's
+On the travel router's SSID the app CONTRIBUTES to the router's bond (today's
 behavior); anywhere else it runs CLIENT mode, bonding the phone's own
 cellular + whatever wifi it is on. The user does not pick a mode; the
 network does. The UI's only job is to say plainly which way traffic is
@@ -48,7 +48,7 @@ flowing right now.
 ### Exit is the home LAN, and that constrains Tailscale
 
 Client-mode traffic emerges inside the k8s LAN and exits the internet on
-the home Fios residential address. HARD CONSTRAINT: iOS runs ONE packet
+the home residential address. HARD CONSTRAINT: iOS runs ONE packet
 tunnel at a time, so zippie client mode and the Tailscale app can never be
 up together on the phone. The two sections below close that gap
 server-side, so the phone rarely has a reason to toggle.
@@ -85,8 +85,10 @@ heavy and duplicative). Instead HOME IS THE POLICY ENFORCEMENT POINT:
   trail is lost. Accepted cost, recorded here so it is built, not
   discovered.
 - CGNAT collision, handled by construction: carrier cellular addresses
-  live in the SAME 100.64.0.0/10 the tailnet uses (the phone's own
-  cellular IP was 100.93.210.210 in the 2026-08-05 survey). The underlay
+  live in the SAME 100.64.0.0/10 the tailnet uses - the 2026-08-05 survey
+  found the phone's own carrier-assigned cellular address inside that
+  range, which is what makes the overlap real rather than theoretical.
+  The underlay
   leg sockets are interface-bound (`requiredInterfaceType`), so they never
   consult the tunnel's routes and the overlap is harmless - but any future
   "bind by route" refactor would break this silently.
@@ -98,7 +100,7 @@ heavy and duplicative). Instead HOME IS THE POLICY ENFORCEMENT POINT:
 ### Multi-client home is the prerequisite, and it rides #2172
 
 The home transport is SINGLE-CLIENT today: one peer identity, one stream,
-one epoch, roam-to-last-sender. Two phones plus suzu bonding home
+one epoch, roam-to-last-sender. Two phones plus the travel router bonding home
 simultaneously requires home to tell clients apart. Client identity goes in
 the authenticated header being designed for #2172 - authentication and
 multi-tenancy are the same header change, done once.
@@ -112,7 +114,7 @@ natively. Kotlin UI over the identical Go engine. One datapath, two shells.
 
 iOS: `NEDNSSettingsManager` with
 `https://dns.nextdns.io/<profile>/<device>` - works everywhere the phone
-goes, not only on suzu. The `dns-settings` entitlement is ALREADY in both
+goes, not only on the travel router. The `dns-settings` entitlement is ALREADY in both
 provisioning profiles minted 2026-08-05; this is app code only.
 Android: deep-link to Private DNS (`<profile>.dns.nextdns.io`); the OS does
 not allow setting it silently.
@@ -129,7 +131,7 @@ magnitude in every scenario examined.
 Tested in the actual car 2026-08-05: plugging in does not move CarPlay off
 the wifi radio on this head unit, so the zero-code answer is dead. The
 answer for the CarPlay phone is therefore hardware: USB-C ethernet + PD
-passthrough into a suzu LAN port (data + charge while wifi stays on
+passthrough into a travel router LAN port (data + charge while wifi stays on
 CarPlay; iOS prefers ethernet over wifi for routing, and the relay's
 listener binds any interface, so the phone can consume AND contribute over
 the cable). Client mode later gives a second path: cellular-only bonding
@@ -154,7 +156,7 @@ Skip, with reasons:
 - **App-level firewall.** NextDNS already owns blocking, per-person.
 - **Bypass / split tunnel.** Corrected 2026-08-05: a bypass list is needed
   when the exit servers are DATACENTER IPs that services flag as VPN.
-  Zippie exits on the home lab's residential Fios address - services see an
+  Zippie exits on the home lab's residential address - services see an
   ordinary home connection, so there is nothing to bypass.
   `excludedRoutes` remains available if a specific service ever needs it.
 - **MOS scoring.** rtt/loss/jitter already drive the scheduler; a star

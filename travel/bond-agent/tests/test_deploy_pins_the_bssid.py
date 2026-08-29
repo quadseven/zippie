@@ -3,7 +3,7 @@
 THE OUTAGE THIS CLOSES (zippie#293). The GL-MT3000 shipped with
 `random_bssid=1`, so it took a new BSSID on every boot while keeping the SSID -
 a stable name over an unstable radio identity. Both relay phones sat on cellular
-for eight hours beside a working "Suzu" beacon they had joined the day before,
+for eight hours beside a working "TravelRouter" beacon they had joined the day before,
 and the household had no internet for all of it.
 
 Android keys connection and validation history per BSSID in `WifiScoreCard`, so

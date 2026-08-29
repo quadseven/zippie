@@ -1,6 +1,6 @@
 """A duplicated packet must cost the same whether the bond has 2 legs or 8 (#51).
 
-THE COST THIS COMES FROM. Measured on suzu 2026-08-08, minutes before the #49
+THE COST THIS COMES FROM. Measured on the travel router 2026-08-08, minutes before the #49
 deploy:
 
     classifier: {'single': 1, 'spray': 199858, 'duplicate': 195732,
