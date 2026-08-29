@@ -166,62 +166,169 @@ with open(sys.argv[1], "rb") as fh:
     tomllib.load(fh)
 PY
 # ---------------------------------------------------------------------------
-# RENDER SECRETS THE REPO DELIBERATELY DOES NOT CARRY.
+# RENDER THE IDENTITY THE REPO DELIBERATELY DOES NOT CARRY, AND REFUSE THE REST.
 #
-# `travel/gl-mt3000/zippie.toml` ships `server_public_key = "<server-public-key>"`
-# on purpose - the real key must not be in a repo that is going public. Nothing
-# ever substituted it back in, so this script shipped the literal placeholder,
-# `wg setconf` rejected it ("Key is not the correct length or format"), the bond
-# never came up, and because zippie owns the router's only default route the box
-# fell off the network entirely. Cost a manual recovery on 2026-08-29.
+# `travel/gl-mt3000/zippie.toml` is a PUBLIC file describing a PRIVATE router, so
+# every value that names this estate is scrubbed out of it. On 2026-08-29 one of
+# those scrubbed values reached the router: `server_public_key` arrived as the
+# literal `<server-public-key>`, `wg setconf` rejected it, the bond never came
+# up, and because zippie owns the router's only default route the box left the
+# network. Recovery took physical access.
 #
-# The TOML validation above did NOT catch it: "<server-public-key>" is perfectly
-# valid TOML. It checks that the config PARSES, not that it is USABLE.
+# THE FIX FOR THAT CAUGHT ONE FIELD, AND THE SAME BUG WAS STILL ARMED ONE FIELD
+# OVER. Found 2026-08-29 by dry-running this script against suzu: the repo also
+# ships `endpoint = "dns-e.example-home.invalid"` and a `lan_endpoints` block on
+# 192.0.2.0/24. `.invalid` is a reserved TLD that can never resolve (RFC 2606)
+# and 192.0.2.0/24 is documentation space (RFC 5737) - so a deploy would have
+# pointed the bond at a name with no answer. Identical outage, different field,
+# and `deploy.suzu.yml` runs this on every push to main that touches travel/.
 #
-# We do not fetch the key into CI. We take the one the ROUTER already has, which
-# means the secret never enters git, a GitHub secret, or a runner's memory. That
-# is also the shape muster will take over later (per-device `app-config` over
-# mTLS) - so this does not have to be unwound when it does.
+# The previous guard could not have caught it, because it looked for the SHAPE
+# of one placeholder - `= "<...>"` - and `"dns-e.example-home.invalid"` is not
+# that shape. It is not a placeholder at all. It is a scrub.
+#
+# So there are two mechanisms here and they are deliberately different:
+#
+#   RENDER, by name. For each field the repo scrubs, take the value the ROUTER
+#   already has. The real value never enters git, a GitHub secret, or a runner's
+#   memory - the same argument as before, now applied to every such field rather
+#   than to the one that happened to bite. Where the router has no value either,
+#   the field is REMOVED rather than shipped scrubbed: dropping an optional
+#   block restores exactly today's behaviour, and shipping documentation
+#   addresses configures something wrong while looking configured.
+#
+#   REFUSE, by value, over the parsed TOML. A closed list of names is a list
+#   somebody will forget to extend, so the last word belongs to a check that
+#   knows nothing about which fields exist: walk every string in the rendered
+#   config and refuse any reserved-for-documentation value that survived. It
+#   reads VALUES, not text, so the RFC addresses in this file's own comments are
+#   not findings.
+#
+# This is what muster takes over (see docs/adr/0023): a device fetching its own
+# identity over its own credential, rather than a deploy pipeline splicing it in.
 RENDERED_CONFIG="$(mktemp)"
-trap 'rm -f "${RENDERED_CONFIG}"' EXIT
-cp "${CONFIG_SRC}" "${RENDERED_CONFIG}"
+LIVE_CONFIG="$(mktemp)"
+trap 'rm -f "${RENDERED_CONFIG}" "${LIVE_CONFIG}"' EXIT
 
-if grep -qE '^[[:space:]]*server_public_key[[:space:]]*=[[:space:]]*"<' "${RENDERED_CONFIG}"; then
-  say "server_public_key is a placeholder - preserving the key already on the router"
-  LIVE_KEY="$(ssh_run "sed -n 's/^[[:space:]]*server_public_key[[:space:]]*=[[:space:]]*\"\\(.*\\)\"[[:space:]]*$/\\1/p' ${REMOTE_CONFIG} 2>/dev/null | head -1")"
-  # A wg public key is 44 chars of base64 ending in '='. Anything else - empty,
-  # truncated, or another placeholder - must stop the deploy BEFORE the router
-  # is touched, because the failure mode is the router leaving the network.
-  if ! printf '%s' "${LIVE_KEY}" | grep -qE '^[A-Za-z0-9+/]{43}=$'; then
-    die "the repo ships a placeholder server_public_key and the router has no valid
-    one to preserve (got ${#LIVE_KEY} chars). NOTHING was sent - the router is
-    untouched. Restore a good key on the router, or teach this script where to
-    fetch one, before deploying."
-  fi
-  python3 - "${RENDERED_CONFIG}" "${LIVE_KEY}" <<'RENDER'
-import re, sys
-path, key = sys.argv[1], sys.argv[2]
-src = open(path).read()
-out, n = re.subn(
-    r'(^[ \t]*server_public_key[ \t]*=[ \t]*)"<[^"]*>"',
-    lambda m: m.group(1) + '"' + key + '"',
-    src, count=1, flags=re.M,
+# What the router is running now, which is the only place the real values exist.
+# An empty file is legitimate - a router that has never had a config - and the
+# renderer below says so per field rather than guessing.
+ssh_run "cat ${REMOTE_CONFIG} 2>/dev/null" > "${LIVE_CONFIG}" || true
+
+say "rendering the router's own identity into the config"
+python3 - "${CONFIG_SRC}" "${LIVE_CONFIG}" "${RENDERED_CONFIG}" <<'RENDER'
+import re
+import sys
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
+
+repo_path, live_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
+repo = open(repo_path).read()
+live = open(live_path).read()
+
+# RESERVED BY RFC, WHICH IS WHY THIS LIST IS NOT ARBITRARY. Every one of these
+# is guaranteed by standard never to be a real, resolvable, routable value, so
+# any of them in a live config is a scrub that was never substituted - never a
+# deliberate choice somebody made.
+RESERVED = re.compile(
+    r"""
+    # RFC 2606 / RFC 6761 reserved TLDs. ANCHORED TO THE END OF A LABEL, and
+    # that lookahead is load-bearing: `\.example\b` also matches the perfectly
+    # real `host.example-home.net`, because a hyphen is a word boundary. A guard
+    # that refuses real hostnames is a guard somebody switches off.
+    \.(?:invalid|example|test|localhost)(?![A-Za-z0-9-])
+  | \bexample\.(?:com|net|org)(?![A-Za-z0-9-])             # RFC 2606
+  | \b192\.0\.2\. | \b198\.51\.100\. | \b203\.0\.113\.     # RFC 5737
+  | \b2001:0?db8                                           # RFC 3849
+  | ^<.*>$                                                 # the 2026-08-29 shape
+    """,
+    re.VERBOSE | re.IGNORECASE,
 )
-if n != 1:
-    sys.exit("could not substitute server_public_key")
-open(path, "w").write(out)
-RENDER
-  [[ $? -eq 0 ]] || die "failed to render server_public_key into the config"
-fi
 
-# NOTHING WITH AN UNSUBSTITUTED PLACEHOLDER MAY REACH THE ROUTER. This catches
-# every future scrubbed value, not just the one that bit us - a scrub that adds
-# a new `<placeholder>` fails here, loudly, on the runner.
-if grep -nE '=[[:space:]]*"<[^"]*>"' "${RENDERED_CONFIG}"; then
-  die "the rendered config still contains an unsubstituted <placeholder> (shown
-    above). NOTHING was sent - the router is untouched and still running its
-    previous config."
-fi
+# Scalar string fields the repo scrubs, in the order a human would read them.
+# NAMED, because a rename is a thing a reviewer should have to see.
+SCALARS = ("server_public_key", "endpoint")
+
+
+def scalar(text, field):
+    """The value of `field = "..."`, or None if it is not there."""
+    found = re.search(rf'^[ \t]*{field}[ \t]*=[ \t]*"([^"]*)"[ \t]*$', text, re.M)
+    return found.group(1) if found else None
+
+
+for field in SCALARS:
+    mine = scalar(repo, field)
+    if mine is None or not RESERVED.search(mine):
+        continue
+    theirs = scalar(live, field)
+    if theirs is None or RESERVED.search(theirs) or not theirs.strip():
+        sys.exit(
+            f"the repo scrubs `{field}` and the router has no real value to "
+            f"preserve (found {theirs!r}). NOTHING was sent - the router is "
+            "untouched. Put a real value on the router, or teach this script "
+            "where to fetch one, before deploying."
+        )
+    repo, count = re.subn(
+        rf'(^[ \t]*{field}[ \t]*=[ \t]*)"[^"]*"[ \t]*$',
+        lambda m: m.group(1) + '"' + theirs + '"',
+        repo, count=1, flags=re.M,
+    )
+    if count != 1:
+        sys.exit(f"could not substitute {field}")
+    print(f"  {field}: preserved the router's value")
+
+# `lan_endpoints` is an ARRAY OVER SEVERAL LINES, so it gets its own handling
+# rather than being bent into the scalar case. It is also OPTIONAL, which is
+# what makes removal the right answer when the router has none: the "home over
+# the wire" shortcut simply does not apply, which is exactly the router's
+# behaviour today. Shipping 192.0.2.0/24 instead would leave a matcher that
+# matches nothing while reading, to anybody looking, as configured.
+BLOCK_RE = re.compile(r"^[ \t]*lan_endpoints[ \t]*=[ \t]*\[.*?^[ \t]*\][ \t]*$\n?",
+                      re.M | re.S)
+mine_block = BLOCK_RE.search(repo)
+if mine_block and RESERVED.search(mine_block.group(0)):
+    theirs_block = BLOCK_RE.search(live)
+    if theirs_block and not RESERVED.search(theirs_block.group(0)):
+        repo = BLOCK_RE.sub(lambda _m: theirs_block.group(0), repo, count=1)
+        print("  lan_endpoints: preserved the router's block")
+    else:
+        repo = BLOCK_RE.sub("", repo, count=1)
+        print("  lan_endpoints: removed (the router has none, and the repo's is "
+              "documentation space)")
+
+open(out_path, "w").write(repo)
+
+# THE LAST WORD, AND IT KNOWS NO FIELD NAMES. Everything above is a list a
+# future scrub can fall outside of. This walks the PARSED config, so it sees
+# values and not comments, and it is what makes "the next scrubbed value" a
+# failed deploy on a runner rather than a router in a hotel with no uplink.
+with open(out_path, "rb") as handle:
+    parsed = tomllib.load(handle)
+
+def walk(node, path=""):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield from walk(value, f"{path}.{key}" if path else key)
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from walk(value, f"{path}[{index}]")
+    elif isinstance(node, str):
+        yield path, node
+
+offenders = [f"{where} = {what!r}" for where, what in walk(parsed) if RESERVED.search(what)]
+if offenders:
+    sys.exit(
+        "the rendered config still holds values reserved for documentation, "
+        "which can never be real:\n    " + "\n    ".join(offenders) +
+        "\n  NOTHING was sent - the router is untouched and still running its "
+        "previous config. This is the 2026-08-29 outage class: a scrubbed value "
+        "that parses perfectly and cannot work."
+    )
+RENDER
+[[ $? -eq 0 ]] || die "the config could not be rendered for this router. NOTHING was sent."
 
 CONFIG_SRC="${RENDERED_CONFIG}"
 # ---------------------------------------------------------------------------
