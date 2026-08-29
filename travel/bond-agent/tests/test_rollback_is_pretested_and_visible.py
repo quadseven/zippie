@@ -413,3 +413,99 @@ def test_the_crontab_count_is_read_without_a_local_fallback(deploy):
     assert code.count("grep -c deploy-rollback") == 1, (
         "a second hand-rolled count is a second chance to make the same mistake"
     )
+
+
+# --------------------------------------------------------------------------
+# The failure the rollback exists to catch, fixed at its cause.
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def restart_once() -> str:
+    return (REPO_ROOT / "travel" / "gl-mt3000" / "restart-once.sh").read_text()
+
+
+def test_the_agent_is_not_restarted_over_the_link_it_tears_down(deploy):
+    """THE CAUSE OF BOTH OUTAGES, and it took two of them to be read.
+
+    `/etc/init.d/zippie stop` removes pbz0. pbz0 carries the default route. The
+    default route carries the tailnet. The tailnet carries the ssh session that
+    just sent `stop`. So the command that stops the agent destroys the transport
+    for the command that would start it again.
+
+    2026-08-24: a CI deploy sent `stop`, `start` never arrived, 45 minutes
+    stopped, recovered by a human power-cycling the box. 2026-08-29 at 06:58:28:
+    the same thing, reproduced by this script, with `zippie-stop: removed
+    tunnel(s): pbz0` in logread and then nothing from the agent until the armed
+    rollback fired at 07:10:00.
+    """
+    code = _code(deploy)
+    assert 'ssh_run "/etc/init.d/zippie start"' not in code, (
+        "the agent is started over an ssh session that the preceding stop has "
+        "already destroyed - this is the 2026-08-24 and 2026-08-29 outage"
+    )
+
+
+def test_the_restart_is_handed_to_cron_and_read_back(deploy):
+    """The same primitive the rollback uses, because it is the only launch that
+    works here: `setsid` and `nohup &` do not survive on this box, and busybox
+    cron accepts a malformed entry silently and never fires it."""
+    code = _code(deploy)
+    assert "restart-once.sh" in code, "nothing schedules a detached restart"
+    assert "RESTART_ARMED=" in code, (
+        "the restart line is not read back, and it is now the ONLY thing that "
+        "will start the agent"
+    )
+    armed = code.split("RESTART_ARMED=", 1)[1].split("esac", 1)[0]
+    assert "die " in armed, "a malformed restart line does not abort the deploy"
+
+
+def test_the_restart_script_is_installed_before_anything_stops(deploy):
+    """It is launched by cron after the ssh session is gone, so it has to
+    already be on the router - exactly like the rollback."""
+    code = _code(deploy)
+    install = code.index("restart-once.sh")
+    schedule = code.index("RESTART_WHEN=")
+    assert install < schedule
+
+
+def test_the_restart_script_disarms_itself_first(restart_once):
+    """A slow start must not be begun a second time by the next minute's tick -
+    the same rule deploy-rollback.sh follows."""
+    code = _code(restart_once)
+    disarm = code.index("grep -v 'restart-once'")
+    start = code.index("/etc/init.d/zippie stop")
+    assert disarm < start
+
+
+def test_the_restart_says_out_loud_that_it_ran(restart_once):
+    """Same lesson as zippie#5: a cron job nobody can see is a cron job that
+    gets diagnosed as one that never ran. And it reports the ROUTE, because
+    "the script finished" and "the router has a way out again" are different
+    claims."""
+    code = _code(restart_once)
+    assert "logger -t" in code
+    assert "ip route show default" in code
+
+
+def test_the_verification_window_outlasts_a_measured_recovery(deploy):
+    """MEASURED, NOT GUESSED. The window was 30s.
+
+    On 2026-08-29 this router took between 36 and 56 seconds to answer again
+    after an agent restart - the phone legs re-announce on a 45s lease and the
+    tailnet only returns once the bond does. Add up to 60s for cron to reach the
+    restart minute at all and 30s could never have been enough; it simply was
+    not the thing that failed first.
+    """
+    code = _code(deploy)
+    loop = re.search(r"for _attempt in \$\(seq 1 (\d+)\); do", code)
+    assert loop, "the running-agent verification loop is gone or no longer bounded by seq"
+    attempts = int(loop.group(1))
+    sleep = re.search(r"\[\[ -n \"\$\{RUNNING_FP\}\" \]\] && break\s*\n\s*sleep (\d+)", code)
+    assert sleep, "the verification loop no longer sleeps between attempts"
+    budget = attempts * int(sleep.group(1))
+    # 60s of cron latency plus a 56s worst-case recovery, with room to spare.
+    assert budget >= 180, (
+        f"the verification window is {budget}s; a cron-scheduled restart can "
+        "take 60s to begin and this router took up to 56s to answer afterwards"
+    )

@@ -444,8 +444,11 @@ snapshot_for_rollback
 # is what is on suzu today. Nothing on this router runs as 1001, so it is not an
 # exploit; it is a file that is supposed to be the last line of defence and is
 # writable by something that is not root.
-tar -C "${REPO_ROOT}/travel/gl-mt3000" -cf - deploy-rollback.sh \
-  | ssh_run "tar -C /etc/zippie -xf - && chmod +x /etc/zippie/deploy-rollback.sh && chown root:root /etc/zippie/deploy-rollback.sh" \
+# restart-once.sh ships alongside it and for the same reason: both have to be
+# on the router BEFORE anything is stopped, because both are launched by cron
+# after the ssh session is already gone.
+tar -C "${REPO_ROOT}/travel/gl-mt3000" -cf - deploy-rollback.sh restart-once.sh \
+  | ssh_run "tar -C /etc/zippie -xf - && chmod +x /etc/zippie/deploy-rollback.sh /etc/zippie/restart-once.sh && chown root:root /etc/zippie/deploy-rollback.sh /etc/zippie/restart-once.sh" \
   || die "could not install the rollback script. NOTHING has been changed."
 
 # ------------------------------------------------------ PRE-TEST THE ROLLBACK
@@ -672,17 +675,63 @@ printf '{"commit":"%s","deployed_at":"%s","fingerprint":"%s","modules":%s,"confi
   | ssh_run "cat > ${STAMP} && chmod 0644 ${STAMP}"
 
 # ---------------------------------------------------------------- restart it
-say "restarting agent"
-ssh_run "/etc/init.d/zippie stop" || true
-ssh_run "/etc/init.d/zippie start"
+# THE RESTART IS HANDED TO CRON, NOT SENT OVER SSH - and this is the fix for
+# the failure that made the rollback necessary in the first place.
+#
+# `stop` removes pbz0; pbz0 carries the default route; the default route carries
+# the tailnet; the tailnet carries THIS SSH SESSION. So `stop` destroys the
+# transport for the `start` that has to follow it.
+#
+#   2026-08-24  a CI deploy sent `stop`; `start` never arrived. 45 minutes
+#               stopped, recovered by a human power-cycling the box.
+#   2026-08-29  the same thing at 06:58:28 - `zippie-stop: removed tunnel(s):
+#               pbz0`, then nothing from the agent at all until the armed
+#               rollback fired at 07:10:00. Reproduced by THIS script, with the
+#               rollback catching it, which is how the cause finally got read.
+#
+# One ssh call holding the session open across the gap does not work either: the
+# remote shell dies with the connection. `setsid` and `nohup &` do not survive
+# on this box (2026-08-01), so cron it is - the primitive the rollback already
+# proves works here.
+say "restarting agent (from the router's cron - an ssh-driven restart cannot survive its own tunnel teardown)"
+
+RESTART_WHEN="$(ssh_run "python3 -c 'import time; t=time.localtime(time.time()+70); print(\"%d %d\" % (t.tm_min, t.tm_hour))'" || true)"
+case "${RESTART_WHEN}" in
+  [0-9]*\ [0-9]*) : ;;
+  *) die "could not compute a restart time on the router (got '${RESTART_WHEN}'). The
+  new package and config are on disk but the agent has NOT been restarted, so it
+  is still running the previous build. The armed rollback will restore it." ;;
+esac
+
+ssh_run "crontab -l 2>/dev/null | grep -v restart-once > /tmp/ct.\$\$; \
+         echo '${RESTART_WHEN} * * * /etc/zippie/restart-once.sh' >> /tmp/ct.\$\$; \
+         crontab /tmp/ct.\$\$; rm -f /tmp/ct.\$\$; /etc/init.d/cron reload"
+
+# READ IT BACK, for the same reason the rollback line is read back: busybox cron
+# accepts a malformed entry silently and never fires it, and this one is now the
+# only thing that will start the agent.
+RESTART_ARMED="$(ssh_run "crontab -l 2>/dev/null | grep restart-once" || true)"
+case "${RESTART_ARMED}" in
+  [0-9]*\ [0-9]*\ \*\ \*\ \*\ /etc/zippie/restart-once.sh) : ;;
+  *) die "the restart line did not read back as a valid crontab entry (got '${RESTART_ARMED}').
+  The agent has NOT been restarted and is still running the previous build; the
+  armed rollback will restore the previous package and config." ;;
+esac
+echo "  scheduled: ${RESTART_ARMED}"
 
 # ------------------------------------------- prove the RUNNING agent is this one
 # The file check above proves what is ON DISK. This proves what is IN MEMORY,
 # which is the question that actually matters and the one nothing has ever
 # answered for this router.
-say "verifying running agent"
+# MEASURED, NOT GUESSED. The old window was 30s, and on 2026-08-29 the router
+# took between 36 and 56 seconds to answer again after an agent restart - the
+# phone legs re-announce on a 45s lease and the tailnet only comes back once the
+# bond does. Add up to 60s for cron to reach the restart minute at all, and 30s
+# was never going to be enough; it just happened not to be the thing that failed
+# first. 4 minutes, against a rollback armed for ten.
+say "verifying running agent (the restart is on the router's clock; this can take a few minutes)"
 RUNNING_FP=""
-for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+for _attempt in $(seq 1 80); do
   RUNNING_FP="$(ssh_run "wget -q -O - ${STATUS_URL} 2>/dev/null" \
     | python3 -c 'import json,sys
 try:
@@ -694,7 +743,7 @@ except Exception:
 done
 
 if [[ -z "${RUNNING_FP}" ]]; then
-  die "the agent did not serve a build fingerprint within 30s. It may be
+  die "the agent did not serve a build fingerprint within 4 minutes. It may be
   running an older build with no build module, or it may not have come back at
   all. Check: ssh root@${HOST} '/etc/init.d/zippie status; logread | tail -40'"
 fi
