@@ -506,12 +506,24 @@ class TestAPeerRestartIsHandledEndToEnd:
         transport is what has to tell it, on the same epoch change that resets
         the reassembler. Marks only move forward, so one left behind sits above
         every sequence of the new stream for the rest of the session."""
-        r = Receiver(reorder_deadline_ms=250, nack_delay_ms=60)
+        # THE TAKEOVER WINDOW IS SHORTENED, not removed. A frame bearing a new
+        # epoch may only replace a live stream once that stream has gone quiet
+        # (transport.EPOCH_TAKEOVER_IDLE_S), or one spoofed datagram could
+        # reset the stream at will. The hand-cranked clock advances 1 ms per
+        # step, so the real 5 s default would need 5000 steps of silence to
+        # express what 60 steps express here.
+        r = Receiver(reorder_deadline_ms=250, nack_delay_ms=60,
+                     epoch_takeover_idle_s=0.05)
         for i in range(400):
             r.arrive(2 * i, FAST)
             r.arrive(2 * i + 1, SLOW)
             r.step()
         assert r.t.reassembler.stats.delivered == 800
+
+        # The agent is down: nothing arrives at all. This is what makes the
+        # restart below believable rather than a stranger's claim.
+        for _ in range(60):
+            r.step()
 
         restart = r.ms
         r.first_nack.clear()

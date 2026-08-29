@@ -3128,8 +3128,25 @@ class BondAgent:
         """
         if self.config.policy.datapath is not Datapath.PACKET:
             return
+        from zippie.auth import build_identity, parse_auth_level
         from zippie.classify import ClassifierConfig
         from zippie.transport import Transport
+
+        # THE HEADER-MAC RUNG, read from zippie.toml and actually passed. A
+        # knob that stops at PolicyConfig is a knob nobody can turn (#50), and
+        # for a security control that is worse than not having it - the config
+        # would say the bond was authenticated while the wire said otherwise.
+        #
+        # build_identity RAISES on a level/key-file mismatch or a key file
+        # readable by others. Letting that stop the agent is deliberate: the
+        # alternative is falling back to unauthenticated, which is precisely
+        # the state the operator was trying to leave.
+        auth_level = parse_auth_level(self.config.policy.auth_level)
+        identity = build_identity(
+            auth_level,
+            self.config.policy.auth_key_file,
+            self.config.policy.auth_peer_id,
+        )
 
         # THE CLASSIFIER CONFIG IS PASSED HERE, and until 2026-08-08 it was
         # not. Transport has taken a `classifier` argument since it was
@@ -3150,6 +3167,8 @@ class BondAgent:
             # finally is - a knob that stops at PolicyConfig is a knob nobody
             # can turn (#50).
             duplicate_fanout=self.config.policy.duplicate_fanout,
+            auth_level=auth_level,
+            identity=identity,
         )
         self._transport_thread = threading.Thread(
             target=self._transport.run, name="zippie-transport", daemon=True

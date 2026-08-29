@@ -217,8 +217,16 @@ def test_a_restarted_travel_agent_still_gets_through():
     on the device.
     """
     home_listen, home_local, wg_server_port = _free_port(), _free_port(), _free_port()
+    # epoch_takeover_idle_s is shortened from its 5 s default so this test does
+    # not have to sleep through it. A restarted agent is believed only once the
+    # PREVIOUS stream has been quiet that long - see the epoch gate in
+    # Transport._on_link_data, which exists so one spoofed datagram cannot
+    # claim a restart and reset a live stream. The gap between the two sessions
+    # below is that silence; at the default this test would take five seconds
+    # longer and assert exactly the same thing.
     home = Transport(("127.0.0.1", home_local), reorder_deadline_ms=50, roam=True,
-                     wg_peer=("127.0.0.1", wg_server_port))
+                     wg_peer=("127.0.0.1", wg_server_port),
+                     epoch_takeover_idle_s=0.2)
     home.add_link(LinkEndpoint(path_id=0, name="wan", device=None,
                                remote=("127.0.0.1", 1), weight=100,
                                listen=("127.0.0.1", home_listen)))

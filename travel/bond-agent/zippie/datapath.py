@@ -117,6 +117,17 @@ class Frame:
     # few seconds. The epoch is unambiguous and acts on the FIRST frame -
     # including a keepalive, so a restart is detected before any data flows.
     epoch: int = 0
+    # WHICH PEER SIGNED THIS FRAME, on wire v3 only (auth.py). Zero on v2,
+    # which is every frame this module itself packs and parses - `pack` and
+    # `unpack` below are the v2 codec and deliberately do not know the field
+    # exists. It is set only by auth.unpack_as, and read only to be compared
+    # against the identity that was expected.
+    #
+    # A FIELD ON THE SHARED FRAME rather than a separate v3 type, because
+    # everything downstream of parsing - the reassembler, the NACK tracker,
+    # the retransmit buffer - handles the two versions identically and must
+    # not grow a second code path that can drift from the first.
+    client_id: int = 0
 
     @property
     def is_duplicate(self) -> bool:
@@ -359,19 +370,27 @@ class Scheduler:
         return [p.path_id for p in ranked[:self.duplicate_fanout]]
 
     def build(self, payload: bytes, mode: SendMode,
-              epoch: int = 0) -> tuple[list[int], list[bytes]]:
+              epoch: int = 0, pack=None) -> tuple[list[int], list[bytes]]:
         """Returns (path_ids, wire_frames) sharing ONE sequence number.
 
         Duplicates share a seq deliberately: that is how the receiver knows
         they are the same packet and can drop whichever copy loses the race.
+
+        `pack` serialises one Frame, defaulting to the v2 codec. Transport
+        passes a signing packer once its auth rung emits v3 (auth.py). It is a
+        CALLABLE rather than an identity argument so that datapath.py, which is
+        the hot path and knows nothing about credentials, does not grow an
+        import of the auth module - and so that the default really is the
+        method it has always called.
         """
         targets = self.select(mode)
         if not targets:
             return [], []
         seq = self.next_seq()
         flags = FLAG_DUPLICATE if len(targets) > 1 else 0
-        frames = [Frame(seq=seq, path_id=pid, payload=payload, flags=flags,
-                        epoch=epoch).pack()
+        pack = pack if pack is not None else Frame.pack
+        frames = [pack(Frame(seq=seq, path_id=pid, payload=payload, flags=flags,
+                             epoch=epoch))
                   for pid in targets]
         return targets, frames
 
