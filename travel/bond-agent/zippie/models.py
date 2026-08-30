@@ -131,6 +131,19 @@ class PathConfig:
     # relay is the hop that owns the cellular. The relay forwards opaque bytes,
     # so the home end cannot tell this leg from any other and needs no changes.
     relay_endpoint: str = ""
+    # SSIDs this leg's radio may associate to that are known, by the operator,
+    # to be genuinely free (#25) - a house AP, a hotel network, anything not
+    # metered. `cost_class` above is what the leg costs when nothing here
+    # matches; it is a STATIC property of the config file, but the actual cost
+    # is a property of what the radio is joined to right now, and the same
+    # physical radio is a free house AP at one stop and a metered phone
+    # hotspot at the next. Deliberately a small, explicit, operator-owned list
+    # rather than a heuristic - nothing about an SSID string says whether it is
+    # metered, so guessing would be as wrong as the static default it replaces.
+    # Empty means "never derive `free`", which is the previous behaviour
+    # exactly, so an existing config is unaffected until an operator opts a
+    # leg in. See agent.py's apply_auto_cost_class for how this is read.
+    free_ssids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -603,6 +616,21 @@ class PathRuntime:
     # override, or the configured default) exactly as it did before this
     # field existed.
     auto_label: str | None = None
+    # THE LIVE, COMPUTED cost class for a repeater leg (#25) - owned entirely
+    # by agent.apply_auto_cost_class and re-derived every tick from whatever
+    # `ssid` iwinfo reports right now, exactly the same shape as auto_label
+    # above and for the same reason: config.cost_class already has an owner
+    # (apply_leg_overrides, restoring the zippie.toml value every tick an
+    # operator override is absent), and a second writer racing it there is
+    # #80's bug again. A second field sidesteps the fight.
+    #
+    # None whenever there is nothing to derive - not a station radio, not
+    # currently associated, the live SSID is not in this leg's
+    # `config.free_ssids`, or an operator has typed their own `cost_class` in
+    # legs.json. Read through `effective_cost_class`, never directly: that is
+    # what keeps every cost-ranking and accounting call site correct without
+    # each one re-deriving the same precedence.
+    auto_cost_class: CostClass | None = None
     # Usage estimate (GB) for the CURRENT billing period; loaded from state /
     # counters. It used to be "since the counter was first written", because
     # nothing ever rolled it over - and since over_soft_limit feeds the cost
@@ -616,6 +644,20 @@ class PathRuntime:
     # that outlives the counter being zeroed.
     usage_period_start: str = ""
     previous_usage_gb: float = 0.0
+
+    @property
+    def effective_cost_class(self) -> CostClass:
+        """The cost class every policy and accounting call site must use.
+
+        `auto_cost_class` - derived every tick from the live SSID against this
+        leg's own `config.free_ssids` - outranks the static config value the
+        same way `auto_label` outranks `config.label`, and for the same
+        reason: the radio's real cost is a property of what it is joined to
+        right now, not of the file the agent booted with (#25). None means
+        nothing was derived (or an operator override already won), so the
+        configured/overridden value passes straight through unchanged.
+        """
+        return self.auto_cost_class or self.config.cost_class
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -652,7 +694,12 @@ class PathRuntime:
             "label": self.auto_label or self.config.label or self.config.name,
             "tier": self.config.tier,
             "priority": self.config.priority,
-            "cost_class": self.config.cost_class.value,
+            "cost_class": self.effective_cost_class.value,
+            # DERIVED, NOT TYPED - distinguishable from the config/override
+            # value the same way "overridden" already exposes a legs.json
+            # override elsewhere (#25 acceptance: the operator can tell which
+            # one they are looking at).
+            "cost_class_auto": self.auto_cost_class is not None,
             "monthly_cap_gb": self.config.monthly_cap_gb,
             # The deliberate ceiling, so a dashboard can say "capped at 500
             # kbit/s" instead of leaving a slow leg looking broken.

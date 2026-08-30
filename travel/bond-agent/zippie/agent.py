@@ -976,6 +976,67 @@ class BondAgent:
             return None
         return f"Wi-Fi Repeater - {info.ssid}"
 
+    def apply_auto_cost_class(self) -> None:
+        """Repeater legs cost themselves from the live SSID (#25).
+
+        The same shape as apply_auto_labels, and RUN in the same tick, right
+        after it: `hotspot` in zippie.toml is `cost_class = "metered"` - true
+        when the radio is associated to a phone hotspot, and wrong for as long
+        as it is actually sitting on a free house or venue AP. A static value
+        in the config file is wrong half the time whichever way it is set,
+        because the leg's real cost is a property of what it is joined to
+        right now, not of the file the agent booted with.
+
+        WRITES path.auto_cost_class, NEVER path.config.cost_class - for
+        exactly the reason apply_auto_labels never writes path.config.label.
+        config.cost_class already has an owner (apply_leg_overrides, which
+        restores the zippie.toml value every tick an operator override is
+        absent), and a second writer racing it there reproduces #80's shape:
+        one side derives `free` from the SSID, the other puts `metered` back,
+        forever, once a tick. Every cost-ranking and accounting call site
+        reads PathRuntime.effective_cost_class, never config.cost_class
+        directly, so this field actually takes effect rather than being
+        display-only trivia (unlike auto_label, cost_class is not cosmetic -
+        it feeds weighting and usage accounting, so the derivation has to
+        reach those, not just the console).
+
+        THE OPERATOR ALWAYS WINS, checked directly against legs.json rather
+        than against the leg's current config.cost_class - see
+        apply_auto_labels's docstring for why comparing values instead would
+        be one coincidence away from silently overriding a deliberate
+        override. This is the trap #25 names explicitly: an auto-derived
+        value must never be written into legs.json, or it wins forever and
+        the derivation can never correct it again.
+
+        SCOPED to interface-matched legs, currently a station radio, AND
+        currently associated to one of THIS leg's own `config.free_ssids` -
+        an explicit, small, operator-typed allowlist rather than a heuristic,
+        because nothing about an SSID string says whether it is metered.
+        auto_cost_class is None for everything else, including a leg that WAS
+        on a known-free network a moment ago and has since roamed off it -
+        the same "recomputed every tick, never left stale" rule auto_label
+        already follows, and for the same reason: a value that lingers past
+        the association that justified it is worse than no value.
+        """
+        overrides = self._leg_store.load()
+        for path in self.paths:
+            path.auto_cost_class = self._compute_auto_cost_class(path, overrides)
+
+    @staticmethod
+    def _compute_auto_cost_class(path: PathRuntime, overrides: dict) -> CostClass | None:
+        if path.config.match.type != "interface" or not path.interface:
+            return None
+        if "cost_class" in (overrides.get(path.name) or {}):
+            return None
+        if not path.config.free_ssids:
+            return None
+        info = wifi_uci.station_info(path.interface)
+        if info is None or not info.is_station or not info.ssid:
+            return None
+        if info.ssid not in path.config.free_ssids:
+            return None
+        return CostClass.FREE
+
     def _wg_iface(self, path: PathRuntime) -> str:
         return f"{self.config.interface_prefix}{self.paths.index(path)}"
 
@@ -3001,7 +3062,13 @@ class BondAgent:
         metered_cost_classes = {CostClass.METERED, CostClass.EXPENSIVE}
         metered_legs = 0
         for path in self.paths:
-            if path.config.cost_class not in metered_cost_classes:
+            # effective_cost_class, NOT config.cost_class (#25): a repeater
+            # leg sitting on a known-free network derives `free` every tick,
+            # and reading the static config value here is exactly how 2.7 GB
+            # of genuinely-free traffic got attributed to metered usage while
+            # the leg carried the majority of an hour's streaming on an
+            # unmetered AP.
+            if path.effective_cost_class not in metered_cost_classes:
                 continue
             pid = self._transport_ids.get(path.name)
             if pid is None or pid not in self._transport_links:
@@ -3734,6 +3801,10 @@ class BondAgent:
         # computed independently of apply_leg_overrides (#153, see
         # apply_auto_labels's docstring) and nothing else re-derives it here.
         self.apply_auto_labels()
+        # Same reasoning, same shape, for cost_class (#25): typing a
+        # cost_class override (or clearing one) must win or hand control back
+        # to the derivation immediately, not after the next tick.
+        self.apply_auto_cost_class()
         return entry
 
     def start_dashboard(self) -> None:
@@ -4021,6 +4092,12 @@ class BondAgent:
         # once, on change) is what makes a repeater's label follow the live
         # association without an agent restart (#153).
         self.apply_auto_labels()
+        # Same tick, same reason (#25): a repeater's cost has to follow the
+        # live association exactly as promptly as its label does, and BEFORE
+        # ensure_tunnels/apply_policy/sample_counters so the weighting they
+        # compute and the usage they attribute this pass both see the
+        # derived class rather than lagging it by one tick.
+        self.apply_auto_cost_class()
         self.ensure_tunnels()
         self.probe_paths()
         self.sample_counters()
