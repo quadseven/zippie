@@ -80,7 +80,7 @@ spec:
       # The LAN worker by name. It is where Caddy already runs and where the
       # tailnet route to the travel router is direct rather than relayed.
       nodeSelector:
-        kubernetes.io/hostname: k8s-oke-lan-srv-unraid-worker-01
+        zippie.dev/home-exit: "true"
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true

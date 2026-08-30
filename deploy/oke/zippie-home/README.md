@@ -11,12 +11,12 @@ workflow or adding a manifest - it has the prerequisites and the reason this
 directory was applied by nothing for a fortnight after the repo split
 (infra#2266).
 
-Runs as a **hostNetwork pod pinned to `k8s-oke-lan-srv-unraid-worker-01`**,
+Runs as a **hostNetwork pod pinned to the node labelled `zippie.dev/home-exit`**,
 chosen over the alternatives for concrete reasons:
 
 | candidate | why not |
 |---|---|
-| srv-unraid HOST | no `apt`, no `systemd`, no `python3` - `install-home.sh` cannot run |
+| the home-exit HOST | no `apt`, no `systemd`, no `python3` - `install-home.sh` cannot run |
 | srv-rpi4-01 | the only host that satisfies the installer, and it is being retired (#1987 Phase 2) |
 | the Macs | macOS WireGuard is userspace; installer is apt-based |
 | **k8s hostNetwork pod** | **kernel WireGuard confirmed on the node; reuses the deploy path already in git** |
