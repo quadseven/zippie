@@ -360,9 +360,9 @@ def test_the_deploy_workflow_leaves_time_for_the_pretest():
     the wait have to be changed together or the first slow deploy reproduces the
     outage the pre-test exists to prevent.
     """
-    workflow = (REPO_ROOT / ".github" / "workflows" / "deploy.suzu.yml").read_text()
+    workflow = (REPO_ROOT / ".github" / "workflows" / "deploy.travel-router.yml").read_text()
     budget = re.search(r"^\s*timeout-minutes:\s*(\d+)", workflow, re.MULTILINE)
-    assert budget, "deploy.suzu.yml has no timeout"
+    assert budget, "deploy.travel-router.yml has no timeout"
     default_wait = int(
         re.search(
             r"PRETEST_MIN=\"\$\{ZIPPIE_ROLLBACK_PRETEST_MINUTES:-(\d+)\}\"",
@@ -373,7 +373,7 @@ def test_the_deploy_workflow_leaves_time_for_the_pretest():
     # for the rest of a deploy. Ten minutes of headroom is not generous: the
     # copy, the two fingerprint proofs, opkg and the restart all sit after this.
     assert int(budget.group(1)) >= (default_wait + 2) * 2 + 10, (
-        f"deploy.suzu.yml allows {budget.group(1)} minutes; the pre-test alone "
+        f"deploy.travel-router.yml allows {budget.group(1)} minutes; the pre-test alone "
         f"can wait {default_wait + 2}"
     )
 

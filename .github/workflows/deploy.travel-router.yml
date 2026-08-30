@@ -1,8 +1,8 @@
-name: deploy - suzu
+name: deploy - travel router
 
 # WHY THIS EXISTS (#187). `scripts/deploy-openwrt.sh` was only ever run by hand,
 # so merging to main changed the repo and left the router untouched. That is not
-# theoretical: a corrected `any_leg_carrying` was applied to suzu directly and
+# theoretical: a corrected `any_leg_carrying` was applied to the router directly and
 # never committed, the two copies disagreed for hours, and the next hand-run
 # deploy would have reinstalled the broken version over the working one.
 #
@@ -29,7 +29,7 @@ concurrency:
   # agent; two of those interleaved would leave the router in a state neither run
   # believes it created, and the fingerprint proof would then be checking the
   # wrong deploy's work.
-  group: deploy-suzu
+  group: deploy-travel-router
   cancel-in-progress: false
 
 jobs:
@@ -59,8 +59,8 @@ jobs:
 
       - name: Load the deploy key
         env:
-          KEY_B64: ${{ secrets.SUZU_DEPLOY_SSH_KEY_B64 }}
-          SUZU_HOST: ${{ secrets.SUZU_DEPLOY_TARGET }}
+          KEY_B64: ${{ secrets.ROUTER_DEPLOY_SSH_KEY_B64 }}
+          ROUTER_HOST: ${{ secrets.ROUTER_DEPLOY_TARGET }}
         # AN AGENT, NOT A FILE ON DISK. deploy-openwrt.sh invokes bare
         # `ssh root@$HOST` with no -i, so the identity has to arrive through the
         # environment. An agent also dies with the job, where a key written to
@@ -68,7 +68,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${KEY_B64:-}" ]; then
-            echo "::error::SUZU_DEPLOY_SSH_KEY_B64 is not set. Seed it from SSM /infra/zippie/suzu_deploy_ssh_key_b64."
+            echo "::error::ROUTER_DEPLOY_SSH_KEY_B64 is not set. Seed it from SSM /infra/zippie/router_deploy_ssh_key_b64."
             exit 1
           fi
           eval "$(ssh-agent -s)" >/dev/null
@@ -79,13 +79,13 @@ jobs:
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           # The router's host key, pinned on first contact rather than disabled.
           # StrictHostKeyChecking=no would accept any host answering that address.
-          ssh-keyscan -T 10 -H "$SUZU_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -T 10 -H "$ROUTER_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Is the router even there?
         id: reach
         env:
-          SUZU_HOST: ${{ secrets.SUZU_DEPLOY_TARGET }}
-        # AN ABSENT ROUTER IS NOT A BROKEN MERGE. suzu is a travel router; it
+          ROUTER_HOST: ${{ secrets.ROUTER_DEPLOY_TARGET }}
+        # AN ABSENT ROUTER IS NOT A BROKEN MERGE. This is a travel router; it
         # will be powered off, in a car, or on somebody else's network. Failing
         # main for that would train everybody to ignore this workflow, and the
         # drift check on the router is what keeps the estate honest when a deploy
@@ -96,20 +96,20 @@ jobs:
           # BARE HOST, because deploy-openwrt.sh prepends root@ itself - passing
           # it a user@host produces root@root@... and every ssh silently fails.
           # Found by the script's own --dry-run before this ever ran for real.
-          HOST="$SUZU_HOST"
+          HOST="$ROUTER_HOST"
           if timeout 20 ssh -o BatchMode=yes -o ConnectTimeout=10 \
                -o StrictHostKeyChecking=accept-new "root@$HOST" 'exit 0' 2>/dev/null; then
             echo "reachable=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::suzu answered at $HOST"
+            echo "::notice::the router answered at $HOST"
           else
             echo "reachable=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::suzu did not answer at $HOST, so nothing was deployed. This is not a failure - the router is portable and is often off. travel/gl-mt3000/drift-check.sh runs ON the router and will report the resulting drift to Datadog the moment it comes back."
+            echo "::warning::the router did not answer at $HOST, so nothing was deployed. This is not a failure - the router is portable and is often off. travel/gl-mt3000/drift-check.sh runs ON the router and will report the resulting drift to Datadog the moment it comes back."
           fi
 
       - name: Deploy, and let the script prove it
         if: steps.reach.outputs.reachable == 'true'
         env:
-          SUZU_HOST: ${{ secrets.SUZU_DEPLOY_TARGET }}
+          ROUTER_HOST: ${{ secrets.ROUTER_DEPLOY_TARGET }}
         # NO --dry-run, NO --prune. Pruning removes modules the repo no longer
         # has, which is a destructive default on a box that is sometimes the only
         # uplink; it stays a deliberate hand-run flag.
@@ -121,4 +121,4 @@ jobs:
         # would be a second answer to a question that already has one.
         run: |
           set -euo pipefail
-          scripts/deploy-openwrt.sh "$SUZU_HOST"
+          scripts/deploy-openwrt.sh "$ROUTER_HOST"

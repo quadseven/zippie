@@ -10,7 +10,7 @@ and was found by dry-running the deploy against the router on the same day: the
 repo also ships `endpoint = "dns-e.example-home.invalid"` and a `lan_endpoints`
 block on 192.0.2.0/24. `.invalid` can never resolve (RFC 2606) and 192.0.2.0/24
 is documentation space (RFC 5737), so a deploy would have pointed the bond at a
-name with no answer - the identical outage, and `deploy.suzu.yml` runs on every
+name with no answer - the identical outage, and `deploy.travel-router.yml` runs on every
 push to main that touches `travel/`.
 
 The previous guard could not have caught it. It looked for the SHAPE of one
