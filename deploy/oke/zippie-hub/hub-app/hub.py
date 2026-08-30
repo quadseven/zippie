@@ -50,6 +50,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from urllib.parse import parse_qs, unquote, urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -537,6 +538,12 @@ METRIC_PREFIX = "custom.zippie.hub"
 METRIC_REACHABLE = f"{METRIC_PREFIX}.router.reachable"
 METRIC_ANSWERING = f"{METRIC_PREFIX}.router.answering"
 METRIC_CARRYING_LEGS = f"{METRIC_PREFIX}.router.carrying_legs"
+# A FOURTH GAUGE, ADDED FOR #17. The three above all describe the ROUTER; this
+# one describes the HUB - whether its own configuration could even be tried
+# this cycle. Folding it into `reachable=0` would recreate the exact bug this
+# closes: a scrubbed placeholder and an islanded router both timing out and
+# reading identically. Explicit and always emitted, same rule as the rest.
+METRIC_CONFIG_ERROR = f"{METRIC_PREFIX}.router.config_error"
 
 # Small for the same reason TRACE_QUEUE_MAX is: a hub with a 192Mi limit should
 # drop readings rather than grow a backlog describing a minute that has passed.
@@ -669,11 +676,11 @@ def statsd_line(metric: str, value: float, tags: list[str]) -> str:
     return f"{line}|#{','.join(tags)}" if tags else line
 
 
-def router_samples(name: str, status: dict | None,
-                   reachable: bool) -> list[tuple[str, float, list[str]]]:
+def router_samples(name: str, status: dict | None, reachable: bool,
+                   config_error: bool = False) -> list[tuple[str, float, list[str]]]:
     """One poll cycle's readings for one router: (metric, value, tags).
 
-    ALL THREE ARE ALWAYS RETURNED. There is no branch here that returns fewer
+    ALL FOUR ARE ALWAYS RETURNED. There is no branch here that returns fewer
     samples and there must never be: the moment a failure produces less data
     than a success, the failure reads as the hub having stopped, and the whole
     point of taking the reading from outside is lost.
@@ -691,6 +698,11 @@ def router_samples(name: str, status: dict | None,
         # correctly parked router produces just as readily. `answering` beside
         # it is what says which of those it is.
         (METRIC_CARRYING_LEGS, float(carrying_legs(legs)), tags),
+        # #17. 1 means the hub never had a usable address to poll THIS cycle -
+        # a fact about the hub's own configuration, not about the router. A
+        # monitor built on `reachable` alone cannot separate this from a box
+        # that is genuinely gone; this gauge is what lets it.
+        (METRIC_CONFIG_ERROR, 1.0 if config_error else 0.0, tags),
     ]
 
 
@@ -840,24 +852,24 @@ class Metrics:
         return self._sender is not None
 
     def observe_router(self, name: str, status: dict | None,
-                       reachable: bool) -> None:
+                       reachable: bool, config_error: bool = False) -> None:
         """Record one poll cycle's reading for one router. ON THE POLL LOOP.
 
         Does no I/O and cannot raise: the caller is the loop that keeps every
         router's state current, and the hub must keep answering whether or not
         anything is listening for metrics.
 
-        THE THREE SAMPLES ARE ENQUEUED AS ONE ITEM so a full queue drops a
-        whole cycle rather than part of one. Two of the three arriving is worse
-        than none: it would pair a fresh `reachable` with a stale
+        THE FOUR SAMPLES ARE ENQUEUED AS ONE ITEM so a full queue drops a
+        whole cycle rather than part of one. Some of the four arriving is
+        worse than none: it would pair a fresh `reachable` with a stale
         `carrying_legs` and read as a router that is gone but still carrying.
         """
         if self._sender is None:
             return
         try:
             lines = [statsd_line(metric, value, tags + self._extra_tags)
-                     for metric, value, tags in router_samples(name, status,
-                                                               reachable)]
+                     for metric, value, tags in router_samples(
+                         name, status, reachable, config_error)]
             self._q.put_nowait(lines)
             with self._lock:
                 self.submitted += len(lines)
@@ -977,26 +989,52 @@ class Registry:
         self._router_state: dict[str, dict] = {}
         self._clients: dict[str, dict] = {}
 
-    def note_router(self, name: str, status: dict | None) -> None:
+    def note_router(self, name: str, status: dict | None, *,
+                    reachable: bool | None = None,
+                    config_error: str | None = None) -> None:
+        """Record one poll cycle's outcome for one router.
+
+        `reachable` DEFAULTS FROM `status`, not from a bare False, so every
+        existing caller that only ever passed a status keeps its old meaning
+        exactly: a document means something answered, None means nothing was
+        confirmed. Callers added for #17 pass it explicitly, because a
+        config-error cycle has a status of None for a reason unrelated to
+        whether anything on the wire ever refused or timed out.
+        """
+        if reachable is None:
+            reachable = status is not None
         with self._lock:
-            self._router_state[name] = {"status": status, "at": time.time()}
+            self._router_state[name] = {
+                "status": status, "at": time.time(),
+                "reachable": reachable, "config_error": config_error,
+            }
 
-    def router_sample(self, name: str) -> tuple[dict | None, float | None]:
-        """The poller's last word on one router: (status, when it was checked).
+    def router_sample(self, name: str) -> tuple[dict | None, float | None,
+                                                 bool | None, str | None]:
+        """The poller's last word on one router:
+        (status, when it was checked, reachable, config_error).
 
-        THREE OUTCOMES, AND THEY ARE NOT THE SAME FACT:
-          (None, None)   never polled - the hub has not asked yet
-          (None, at)     polled at `at` and it FAILED - the router is not there
-          (status, at)   polled at `at` and it answered
+        FOUR OUTCOMES NOW, NOT THREE, AND THEY ARE NOT THE SAME FACT:
+          (None, None, None, None)     never polled - the hub has not asked yet
+          (None, at, False, reason)    the hub's OWN config is unusable (#17) -
+                                        nothing was dialled this cycle at all
+          (None, at, reachable, None)  polled at `at` and it FAILED; `reachable`
+                                        says whether anything answered even to
+                                        refuse - see host_answered
+          (status, at, True, None)     polled at `at` and it answered
 
         Collapsing the first two into "no data" is exactly how a hub that has
-        been up for two seconds reports a healthy router as dead.
+        been up for two seconds reports a healthy router as dead. Collapsing
+        the second and third is exactly #17: a bad address and a genuinely
+        gone router both produce a failed poll, and only `config_error` says
+        which.
         """
         with self._lock:
             seen = self._router_state.get(name)
         if seen is None:
-            return None, None
-        return seen["status"], seen["at"]
+            return None, None, None, None
+        return (seen["status"], seen["at"],
+                seen.get("reachable"), seen.get("config_error"))
 
     def note_client(self, name: str, payload: dict) -> None:
         with self._lock:
@@ -1039,9 +1077,26 @@ class Registry:
         if not seen or seen.get("status") is None:
             # UNREACHABLE IS A STATE, not an absence. Omitting the node would
             # make a dead router look like a router nobody added.
+            #
+            # staleMs IS NOT ALWAYS None HERE (#17). It used to be, always -
+            # which is its own small dishonesty: a router the poller has been
+            # checking every five seconds for an hour read exactly the same as
+            # one that has NEVER been asked, both as "never". If the poller has
+            # actually run, `seen` carries WHEN, and that is what a reader
+            # should see; "never" is now reserved for the case that is
+            # literally true - nothing has been asked yet.
             return {"name": name, "label": label, "kind": kind,
                     "unreachable": True, "legs": [], "carrying": 0,
-                    "degraded": False, "staleMs": None}
+                    "degraded": False,
+                    "staleMs": None if not seen else int((now - seen["at"]) * 1000),
+                    # EXPLICIT, NEVER INFERRED - the same rule #272 applies to
+                    # the Datadog gauges beside these, applied to the page a
+                    # human actually reads. `reachable` says whether anything
+                    # ever answered, even a refusal; `configError` says the hub
+                    # never had an address worth trying. Both default honestly
+                    # when `seen` is entirely absent: nothing is known yet.
+                    "reachable": bool(seen.get("reachable")) if seen else False,
+                    "configError": (seen or {}).get("config_error")}
         status = seen["status"]
         # SHARED WITH THE METRIC, not restated here. What the page calls
         # carrying and what the alarm calls carrying_legs have to be the same
@@ -1054,7 +1109,104 @@ class Registry:
             "legs": legs, "carrying": carrying,
             "degraded": any(p.get("state") == "degraded" for p in legs),
             "staleMs": int((now - seen["at"]) * 1000),
+            "reachable": bool(seen.get("reachable", True)),
+            "configError": seen.get("config_error"),
         }
+
+
+# ---------------------------------------------------------------------------
+# WHERE THE ROUTER'S ADDRESS COMES FROM, AND HOW A BAD ONE IS TOLD APART FROM
+# A GENUINELY DEAD ROUTER (#17).
+#
+# THE INCIDENT. hub.json shipped `"status_url": "http://192.0.2.30:8787/..."`.
+# 192.0.2.0/24 is RFC 5737 documentation space - it is guaranteed by standard
+# to never answer - so every poll timed out, /api/nodes read "not answering /
+# never" forever, and the operator's own phone was proving the router fine over
+# the same tailnet the hub could have used. This is the THIRD time a scrub has
+# replaced a real runtime value with a reserved-range placeholder that fails
+# silently: first a WireGuard key, then the home endpoint (`.invalid`, which
+# would have killed the bond the moment the router left the house), now this.
+# `scripts/deploy-openwrt.sh` refuses reserved values reaching the router's own
+# config; nothing did the same for the hub's.
+#
+# THE ADDRESS IS LEARNED, NOT COMMITTED. The router is portable - its address
+# changes every time it moves - so a literal in this public manifest is wrong
+# on two counts: it can never be current, and it would have to be scrubbed
+# before commit, reintroducing exactly the class of bug above. This file's own
+# design already states the right source: "a router sits on the tailnet at a
+# known name" (see the module docstring). zippie-hub.yaml therefore ships a
+# `${VAR}` reference, never a value - resolved here, per process, from an
+# environment variable populated from a Secret the operator sets out of band,
+# the same pattern ZIPPIE_HUB_TOKEN already uses. DNS over the tailnet is
+# re-resolved on every poll (urllib resolves the hostname fresh each request),
+# so the router moving never requires a redeploy - only MagicDNS has to know
+# where it is, which is the whole point of a tailnet.
+#
+# THE SECOND FAILURE IS THE ONE THAT MATTERS MORE. Even with a learned address,
+# a hub that only ever reports "not answering" cannot tell "this router is
+# gone" from "I was never able to ask it a real question" - a bad substitution,
+# an unset Secret, a typo that happens to parse as a URL. Both looked
+# identical. So the check below runs BEFORE any network attempt, on the
+# CONFIGURATION alone, and its answer is carried as its own explicit field
+# everywhere a poll outcome is - the Registry, /api/nodes, /api/status, and a
+# fourth Datadog gauge beside the three #272 added - rather than folded into
+# the same "unreachable" bucket a truly silent router produces.
+
+_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def expand_env_refs(text: str) -> tuple[str, str | None]:
+    """Substitute every `${VAR}` in `text` from the environment.
+
+    ALL OR NOTHING. A URL half-built from a missing variable - the literal
+    string `http://${TRAVEL_ROUTER_HOST}:8787/...` dialled as-is - fails a DNS
+    lookup exactly like a genuinely absent router, which is the same
+    indistinguishable failure this whole section exists to end. So a missing or
+    blank variable is refused here, with a reason, rather than handed to
+    urllib to fail less legibly two functions later.
+    """
+    names = sorted({m.group(1) for m in _ENV_REF.finditer(text)})
+    missing = [n for n in names if not os.environ.get(n, "").strip()]
+    if missing:
+        return text, f"environment variable(s) not set: {', '.join(missing)}"
+    return _ENV_REF.sub(lambda m: os.environ[m.group(1)], text), None
+
+
+# RESERVED BY RFC, WHICH IS WHY THIS LIST IS NOT ARBITRARY - the identical
+# principle scripts/deploy-openwrt.sh applies to the router's own config,
+# applied here to the hub's. Every one of these is guaranteed by standard to
+# never be a real, resolvable, dialable value, so finding one in a fully
+# expanded status_url is proof of a scrub that was never substituted, not
+# evidence of a router that happens to be unreachable today.
+_RESERVED_HOST = re.compile(
+    r"""
+    \.(?:invalid|example|test|localhost)(?![A-Za-z0-9-])   # RFC 2606 / 6761
+  | \b192\.0\.2\.|\b198\.51\.100\.|\b203\.0\.113\.          # RFC 5737 TEST-NET
+  | \b2001:0?db8                                            # RFC 3849
+    """, re.VERBOSE | re.IGNORECASE)
+
+
+def router_config_error(status_url: str) -> str | None:
+    """Why the hub can never usably poll `status_url`, or None if it might.
+
+    CHECKED FROM CONFIGURATION, NEVER FROM A POLL OUTCOME. This is the one
+    fact a five-second poll timeout cannot produce on its own: a reserved or
+    unresolved address is *provably* dead before a single packet is sent, so
+    saying so does not have to wait on the network - and must not, because the
+    network's answer to a doomed address is a timeout, which is the exact
+    shape a genuinely islanded router also produces.
+    """
+    if not status_url or not status_url.strip():
+        return "status_url is empty"
+    expanded, env_error = expand_env_refs(status_url)
+    if env_error:
+        return env_error
+    if not urlsplit(expanded).hostname:
+        return f"status_url has no host: {status_url!r}"
+    if _RESERVED_HOST.search(expanded):
+        return f"status_url is reserved for documentation and can never resolve: {expanded!r}"
+    return None
+# ---------------------------------------------------------------------------
 
 
 def fetch_router_status(name: str, url: str) -> tuple[dict | None, bool]:
@@ -1106,14 +1258,43 @@ def poll_routers(reg: Registry, routers: list[dict], stop: threading.Event,
 
     `metrics` defaults to a disabled emitter so every existing caller - the
     tests included - keeps working unchanged and starts no thread.
+
+    CONFIGURATION IS CHECKED ONCE, HERE, NOT PER CYCLE (#17). `status_url`
+    comes from a ConfigMap and does not change without a pod restart, so
+    resolving `${VAR}` references and screening for a reserved address is done
+    before the first poll rather than four times a minute for the life of the
+    process. A router whose config is unusable is never dialled at all - no
+    packet, no timeout to wait out - and its Registry entry and metrics still
+    update every cycle, so its "checked" time stays current instead of frozen
+    at startup while everything else about it says broken.
     """
     metrics = metrics if metrics is not None else Metrics(None)
+    config_errors: dict[str, str | None] = {}
+    for r in routers:
+        error = router_config_error(r.get("status_url", ""))
+        config_errors[r["name"]] = error
+        if error is None:
+            # Expanded ONCE, so the poller dials the resolved host every
+            # cycle rather than re-parsing an unchanging template forever.
+            r["status_url"], _ = expand_env_refs(r["status_url"])
+        else:
+            # LOUD, ONCE, AT STARTUP. This is the failure #17 was filed for:
+            # a config that never works must say so where somebody looks
+            # first, not only inside a metric nobody is paged on until #272's
+            # gauges are wired into a monitor for it too.
+            log.error("router %s: status_url is unusable, will not be "
+                     "polled: %s", r["name"], error)
     while not stop.is_set():
         for r in routers:
+            error = config_errors[r["name"]]
+            if error is not None:
+                reg.note_router(r["name"], None, reachable=False, config_error=error)
+                metrics.observe_router(r["name"], None, False, config_error=True)
+                continue
             status, reachable = fetch_router_status(r["name"], r["status_url"])
             # A failed fetch is recorded as unreachable rather than left at its
             # last good value. See the module docstring.
-            reg.note_router(r["name"], status)
+            reg.note_router(r["name"], status, reachable=reachable)
             metrics.observe_router(r["name"], status, reachable)
         stop.wait(POLL_INTERVAL_S)
 
@@ -1151,21 +1332,34 @@ def wants_live_read(request_path: str) -> bool:
                for v in parse_qs(query).get("live", []))
 
 
+def _iso(ts: float) -> str:
+    """An epoch second as an unambiguous UTC timestamp.
+
+    Named `fetched_at` rather than `fetched_at_ms`, so it is written as a
+    self-describing string rather than a bare number a client has to already
+    know is milliseconds. `checked_at_ms` below keeps the old numeric shape
+    for whatever already reads it.
+    """
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
+
 def cached_status(reg: Registry, name: str, max_age_s: float) -> tuple[int, bytes]:
     """One router's status from the poller's snapshot: (http status, body).
 
     Every non-200 here is the hub declining to pass off something it cannot
     stand behind as the router's current state, and each one says which case it
-    is - "never asked", "asked and it did not answer" and "stopped asking" are
-    three different faults with three different fixes.
+    is - "never asked", "the hub could not even try", "asked and it did not
+    answer" and "stopped asking" are four different faults with four different
+    fixes, and #17 was filed because the second and third used to be one.
     """
-    status, at = reg.router_sample(name)
+    status, at, reachable, config_error = reg.router_sample(name)
     if at is None:
         # NOT "not answering": nothing has been asked yet. poll_routers fetches
         # on its first pass, so this is the second or two after a restart, and
         # calling the router dead there would be a claim with no evidence.
         return 503, b'{"error":"hub has no sample yet"}'
     age_s = max(time.time() - at, 0.0)
+    stale = age_s > max_age_s
     # snake_case, where /api/nodes is camelCase, because this object is merged
     # into the ROUTER's document and has to read like the keys beside it rather
     # than like the hub's own fleet view.
@@ -1175,14 +1369,31 @@ def cached_status(reg: Registry, name: str, max_age_s: float) -> tuple[int, byte
         "checked_at_ms": int(at * 1000),
         "poll_interval_ms": int(POLL_INTERVAL_S * 1000),
         "max_age_ms": int(max_age_s * 1000),
+        # NAMED FIELDS, NOT TWO NUMBERS A CLIENT HAS TO SUBTRACT ITSELF. Every
+        # consumer of this document used to have to compare age_ms to
+        # max_age_ms by hand to learn what the hub already knew - and had no
+        # way at all to learn whether the router had ever actually answered,
+        # since that fact was computed in fetch_router_status and thrown away
+        # before it reached anything but Datadog. See the module note on #17.
+        "reachable": bool(reachable),
+        "stale": stale,
+        "fetched_at": _iso(at),
     }
+    if config_error:
+        # THE FOURTH CASE. Distinct from "router not answering": that is the
+        # network's verdict on a plausible address, and this is the hub never
+        # having had one to try. 500, not 502 - the fault is the hub's own
+        # configuration, not anything upstream of it.
+        meta["config_error"] = config_error
+        return 500, json.dumps({"error": "hub is not configured to reach this router",
+                                "hub": meta}).encode()
     if status is None:
         # poll_routers stores a failed fetch as None precisely so this stays
         # honest: a router that has gone away is reported unreachable, not
         # served from its last good sample until somebody notices.
         return 502, json.dumps({"error": "router not answering",
                                 "hub": meta}).encode()
-    if age_s > max_age_s:
+    if stale:
         return 504, json.dumps({"error": "router status is stale",
                                 "hub": meta}).encode()
     body = dict(status)

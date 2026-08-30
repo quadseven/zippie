@@ -244,6 +244,28 @@ def test_the_answer_says_how_old_it_is(router, hub_at):
     assert meta["max_age_ms"] == int(hub.status_max_age_s(1) * 1000)
 
 
+def test_the_answer_names_reachable_stale_and_fetched_at_explicitly(router, hub_at):
+    """#17: a consumer used to have to derive freshness by comparing two
+    millisecond counts, and had no way at all to learn whether the router had
+    ever actually answered - that fact was computed in fetch_router_status and
+    thrown away before it reached anything but Datadog. Named, typed fields
+    now carry both, alongside the numeric ones existing readers already use.
+    """
+    hostport, reg = hub_at([router.config])
+    reg.note_router("travel-router", ROUTER_STATUS, reachable=True)
+
+    status, headers, body = _get(hostport, "/api/status")
+    assert status == 200
+    meta = _json_body(body, headers)["hub"]
+
+    assert meta["reachable"] is True
+    assert meta["stale"] is False
+    # ISO-8601 with an explicit UTC offset - unambiguous without a "_ms" in
+    # the field name for a client to already know to apply.
+    assert isinstance(meta["fetched_at"], str)
+    assert meta["fetched_at"].endswith("+00:00")
+
+
 # ---------------------------------------------------------------------------
 # What the cache must refuse to answer
 # ---------------------------------------------------------------------------
@@ -269,6 +291,34 @@ def test_a_router_that_stopped_answering_is_reported_unreachable(router, hub_at)
     assert payload["hub"]["age_ms"] >= 0
     # The fake router is UP. A handler that fell back to a live fetch here would
     # answer 200 and hide the fact that polling is failing.
+    assert router.hits == []
+
+
+def test_a_misconfigured_router_is_told_apart_from_a_dead_one(router, hub_at):
+    """THE TEST #17 EXISTS FOR.
+
+    A reserved-range status_url and a genuinely gone router both fail every
+    poll identically - both are None, both are a closed door. Before this fix
+    both served the same 502 "router not answering". The hub's own broken
+    configuration now gets a distinct 500 and says so by name, and a client
+    can tell the two apart from the response alone without guessing from an
+    error string that happens to differ.
+    """
+    hostport, reg = hub_at([router.config])
+    reg.note_router(
+        "travel-router", None, reachable=False,
+        config_error="status_url is reserved for documentation and can "
+                     "never resolve: 'http://192.0.2.30:8787/api/status'")
+
+    status, headers, body = _get(hostport, "/api/status")
+
+    assert status == 500, "the fault is the hub's own config, not the router"
+    payload = _json_body(body, headers)
+    assert payload["error"] == "hub is not configured to reach this router"
+    assert "paths" not in payload
+    assert payload["hub"]["reachable"] is False
+    assert "192.0.2.30" in payload["hub"]["config_error"]
+    # The fake router was never touched - the hub had nothing to try.
     assert router.hits == []
 
 

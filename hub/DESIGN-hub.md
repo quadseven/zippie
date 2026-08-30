@@ -88,6 +88,7 @@ it now says what it sees, per router, on every cycle:
 | `custom.zippie.hub.router.reachable` | anything answered at the router's address at all |
 | `custom.zippie.hub.router.answering` | the agent returned a usable status document |
 | `custom.zippie.hub.router.carrying_legs` | how many legs are carrying |
+| `custom.zippie.hub.router.config_error` | the hub had no usable address to poll THIS cycle |
 
 **The values are always explicit, and zero is a measurement.** A metric that
 merely stops arriving cannot be told from a hub that is itself down or a router
@@ -102,3 +103,34 @@ is on the network with nothing listening, while an islanded one produces no
 evidence anybody is there at all. Same rule as the page: a router that is quiet
 because it is home and a router that is quiet because it is gone are not the
 same node, and they must never be shown, or alarmed on, as though they were.
+
+## A fourth state nobody had a name for (#17)
+
+The four states above still miss one thing, and it bit: `zippie-hub.yaml`
+shipped `status_url` pointed at 192.0.2.30, RFC 5737 documentation space that
+is guaranteed by standard to never answer. Every poll timed out. `reachable`
+read 0, exactly as it does for a router that is genuinely gone - because from
+the wire, a doomed address and an islanded router are the same event. The
+fleet page said "not answering / never" while the operator's own phone was
+proving the router fine over the tailnet the hub could have used instead.
+
+The distinction `reachable` cannot make, `config_error` can, because it is not
+a fact about the network at all - it is a fact about the hub's own
+configuration, checked before any packet is sent. A reserved-for-documentation
+address, or an environment variable the address depends on being unset, is
+provably unusable; saying so does not require waiting on a timeout. A router in
+this state is never dialled - there is nothing to learn from trying - and every
+surface that would otherwise say "not answering" says "hub misconfigured"
+instead, because the fault is here, not at the router.
+
+This is also why the router's address is no longer a literal in the manifest
+at all. A committed value is wrong the moment the router moves, and fixing a
+wrong value with another value would only delay the next occurrence - see
+AGENTS.md, this is the third reserved-placeholder incident in this estate.
+`status_url` now carries `${TRAVEL_ROUTER_HOST}`, expanded from an environment
+variable sourced from a Secret this repo does not define, the same pattern
+`ZIPPIE_HUB_TOKEN` already uses. The value the operator sets there is the
+router's tailnet name - "a router sits on the tailnet at a known name" is
+already this file's own premise for how polling routers works at all - so it
+stays current as the router moves without a redeploy, and it never has to be
+scrubbed before a commit because it never reaches one.
