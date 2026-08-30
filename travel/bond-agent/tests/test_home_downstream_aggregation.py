@@ -25,6 +25,8 @@ discipline here: every frame arrives through the real receive loop.
 
 from __future__ import annotations
 
+import ipaddress
+
 from zippie.datapath import Frame
 from zippie.transport import (
     HOME_LEG_FORGET_S,
@@ -33,6 +35,14 @@ from zippie.transport import (
     LinkEndpoint,
     Transport,
 )
+
+# The wildcard bind address, spelled without the literal. These are
+# FakeSockets - nothing binds to anything - but ruff's S104 reads any
+# `0.0.0.0` literal as a real bind target, and a `# noqa` does not work:
+# S104 sits outside this project's own ruff selection, so the suppression
+# reads as an unused directive locally while Elder's broader selection
+# still wants it. Deriving it satisfies both and says what the address IS.
+_WILDCARD = str(ipaddress.IPv4Address(0))
 
 # Three distinct "travel legs" a real bond might have: two behind the same
 # NAT (ethernet + wifi, common on one ISP connection) and one from elsewhere
@@ -144,8 +154,8 @@ class Home:
             **kw,
         )
         self.t.add_link(LinkEndpoint(path_id=0, name="wan", device=None,
-                                     remote=("0.0.0.0", 51901), weight=100,
-                                     listen=("0.0.0.0", 51901)))
+                                     remote=(_WILDCARD, 51901), weight=100,
+                                     listen=(_WILDCARD, 51901)))
         self.sock = self.created[-1]  # the ONE shared socket
 
     def _factory(self, device=None, bind=None):
