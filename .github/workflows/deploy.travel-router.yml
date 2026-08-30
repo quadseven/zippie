@@ -38,7 +38,7 @@ jobs:
     # NOT ON A FORK. This holds a credential to a live router; a fork's push
     # must never reach it. `no-hosted-runners` is standing, and the runner also
     # has to be able to reach the tailnet - measured 2026-08-24 from
-    # k8s-oke-lan-sp7p-worker-01, which is where arc-zippie sits.
+    # the LAN worker where arc-zippie sits.
     if: github.repository == 'quadseven/zippie'
     runs-on: arc-zippie
     # RAISED FROM 15 FOR THE ROLLBACK PRE-TEST. The deploy now fires the

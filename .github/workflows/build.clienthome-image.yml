@@ -239,7 +239,7 @@ jobs:
           echo "will build $image:sha-${sha:0:12} (publish=$publish)"
 
       - name: Guard - native amd64 CPU, no QEMU
-        # The Deployment pins to k8s-oke-lan-srv-unraid-worker-01, an amd64
+        # The Deployment pins to the home-exit node, an amd64
         # node. An arm64 image would schedule there and never start. Building
         # on a foreign-arch runner would either fall back to emulation or fail
         # deep in the build; this fails first, and says why.
