@@ -37,13 +37,19 @@ class BondLegsTest {
     /**
      * The divergence from iOS, and the reason for it: dongle4g is on a gated
      * tier AND has no interface at all. Calling that "held in reserve" would
-     * promise a fallback that cannot be called on.
+     * promise a fallback that cannot be called on - so it is not RESERVE.
+     *
+     * It is also not plain DOWN (#26 follow-up). "no interface matched" is
+     * true and reads exactly like a fault next to a leg that actually failed
+     * to carry - the operator flagged precisely this shape live, next to
+     * hotspot-2ghz reading identically for an unassociated station radio.
+     * A configured leg with nothing to bind to is an absence, not a fault.
      */
     @Test
-    fun `a down leg is down even when its tier is gated`() {
+    fun `a leg with no interface at all reads as absent, not down`() {
         val dongle = row("dongle4g")
-        assertEquals(LegState.DOWN, dongle.state)
-        assertEquals("no interface matched", dongle.note)
+        assertEquals(LegState.ABSENT, dongle.state)
+        assertEquals("Not connected right now - nothing to bind to.", dongle.note)
     }
 
     @Test
@@ -255,5 +261,41 @@ class BondLegsTest {
         val leg = fallback.single()
         assertEquals(LegState.DOWN, leg.state)
         assertFalse(leg.isCarrying)
+    }
+
+    /**
+     * THE ONE THAT MATTERS for #26's follow-up: absence must not swallow a
+     * real fault. A leg that HAS an interface and is still down - it bound
+     * to something and that something stopped working - is exactly the row
+     * a reader needs painted red. Only the leg with no interface at all
+     * reads as absent.
+     */
+    @Test
+    fun `a down leg with a bound interface still reads as a real fault`() {
+        val status = BondStatus.decode(
+            """{"paths":[
+                {"name":"absent","state":"down","interface":null,
+                 "last_error":"no matching uplink interface","in_bond":false},
+                {"name":"faulted","state":"down","interface":"eth0",
+                 "last_error":"tunnel down: no reply and no bytes received",
+                 "in_bond":false}
+            ]}""",
+        )
+        val rows = BondLegs.rows(status, 51999, null)
+        val absent = rows.first { it.id == "absent" }
+        val faulted = rows.first { it.id == "faulted" }
+
+        assertEquals(LegState.ABSENT, absent.state)
+        assertEquals(
+            "Not connected right now - nothing to bind to.",
+            absent.note,
+        )
+
+        assertEquals(LegState.DOWN, faulted.state)
+        assertEquals(
+            "the router's own fault text must still reach a leg that actually failed",
+            "tunnel down: no reply and no bytes received",
+            faulted.note,
+        )
     }
 }

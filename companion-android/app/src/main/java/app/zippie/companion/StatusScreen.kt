@@ -369,6 +369,9 @@ private fun barTint(state: LegState): Color = when (state) {
     // drawing it like a fault is the failure this screen exists to avoid.
     LegState.RESERVE -> Ink.tertiary
     LegState.IDLE -> Ink.tertiary
+    // Same ink as RESERVE and IDLE, and for the same reason: an absent leg
+    // is not news either.
+    LegState.ABSENT -> Ink.tertiary
 }
 
 /**
