@@ -327,7 +327,7 @@ def _render_interface(meta: dict[str, Any]) -> str:
     read-only, so it dies with
         sysctl: error setting key 'net.ipv4.ip_forward': Read-only file system
     On a k8s node the value is ALREADY 1 (pod networking requires it -
-    verified on k8s-oke-lan-srv-unraid-worker-01), so the write is redundant
+    verified on the home-exit node), so the write is redundant
     there; on a bare host install it still succeeds. Tolerating the failure
     covers both without escalating the pod to privileged just to set a bit
     that is already set.

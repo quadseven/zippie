@@ -81,7 +81,7 @@ spec:
       # amd64 node that ever joins, including a future cloud one, where
       # hostNetwork would expose it to a very different neighbourhood.
       nodeSelector:
-        kubernetes.io/hostname: k8s-oke-lan-srv-unraid-worker-01
+        zippie.dev/home-exit: "true"
       # hostNetwork because the phone's frames arrive from the internet at the
       # house on a fixed port; a pod IP would need a hairpin for every packet.
       # It is the reason every other permission here is scoped as tightly as

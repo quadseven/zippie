@@ -8,7 +8,7 @@
 #     MASQUERADE` and `sysctl -w net.ipv4.ip_forward=1`. In a pod netns that
 #     NATs the wrong interface and sets a sysctl nobody reads.
 #
-# Pinned to k8s-oke-lan-srv-unraid-worker-01: kernel WireGuard is confirmed
+# Pinned via zippie.dev/home-exit: kernel WireGuard is confirmed
 # working there (6.12 UEK, module loaded, `ip link add type wireguard` succeeds,
 # verified 2026-07-27). Do NOT let this reschedule - a different node means a
 # different WAN interface, a different public path, and orphaned state.
@@ -108,7 +108,7 @@ spec:
       dnsPolicy: ClusterFirstWithHostNet
       automountServiceAccountToken: false
       nodeSelector:
-        kubernetes.io/hostname: k8s-oke-lan-srv-unraid-worker-01
+        zippie.dev/home-exit: "true"
       containers:
         - name: bond-server
           image: alpine:3.20
@@ -265,6 +265,33 @@ spec:
               command: ["/bin/sh", "-c", "test -e /sys/class/net/pb-home0"]
             initialDelaySeconds: 60
             periodSeconds: 60
+            failureThreshold: 3
+          readinessProbe:
+            # A ROLLOUT THAT CANNOT FAIL IS NOT A ROLLOUT. Without this the
+            # Deployment reported success the moment the pod was Running, so a
+            # pod that came up and bound nothing was indistinguishable from a
+            # working one - and `kubectl rollout status` said "successfully
+            # rolled out" either way. That is what made a bad rollout invisible
+            # and a hand-rolled deadman necessary.
+            #
+            # NOT the same check as liveness. Liveness asks whether the WireGuard
+            # interface exists, which survives the transport dying; this asks
+            # whether the transport actually BOUND ITS PUBLIC PORT, which is the
+            # one thing that has to be true for a travel router to reach home.
+            # Verified both directions against the live pod before shipping:
+            # rc=0 for :51931, rc=1 for a port nothing binds - a probe that
+            # cannot fail would be worse than none.
+            #
+            # `Recreate` + hostNetwork means there is no surge and no blue/green
+            # here: one host UDP port, and a Reassembler holding per-instance
+            # ordered-stream state, so two pods cannot share the traffic. This
+            # cannot make the rollout overlap - it makes its FAILURE VISIBLE, so
+            # progressDeadlineSeconds can end it and a human or a controller can
+            # undo it.
+            exec:
+              command: ["/bin/sh", "-c", "ss -lun | grep -q '0.0.0.0:51931'"]
+            initialDelaySeconds: 15
+            periodSeconds: 20
             failureThreshold: 3
       volumes:
         - name: scripts
