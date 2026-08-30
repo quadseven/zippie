@@ -166,6 +166,16 @@ check('degraded but carrying is NOT urgent', worry(node('x', { degraded: true })
 check('quiet and fine sorts last', worry(node('x')), 9);
 check('unreachable beats stale', worry(node('x', { unreachable: true, staleMs: 60_000 })), 0);
 
+// #17: a misconfigured hub and a genuinely dead router used to be one banner.
+check('a config error sorts with the rest of "cannot be seen"',
+      worry(node('x', { configError: 'status_url is reserved for documentation' })), 0);
+check('a config error gets its own word, not the router\'s',
+      stateWord(node('x', { configError: 'bad address', unreachable: true })),
+      'hub misconfigured');
+check('no config error falls through to the router-not-answering word',
+      stateWord(node('x', { configError: null, unreachable: true })),
+      'not answering');
+
 render([node('quiet'), node('dead', { unreachable: true }), node('degraded', { degraded: true })]);
 await settle();
 check('the headline counts only what needs attention',

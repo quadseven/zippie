@@ -16,13 +16,42 @@ metadata:
   name: zippie-hub-config
   namespace: zippie
 data:
+  # NO ADDRESS LIVES HERE (#17). It used to: `192.0.2.30`, RFC 5737
+  # documentation space, guaranteed by standard to never answer - so every
+  # poll timed out and the fleet page read "not answering / never" forever,
+  # while the operator's own phone was proving the router fine over the same
+  # tailnet the hub could have dialled instead. This is the third time a
+  # scrub has left a reserved-range placeholder where a real runtime value
+  # belonged (see AGENTS.md); the fix here is to stop committing the value at
+  # all, not to replace it with a better-looking placeholder that still has
+  # to be a literal.
+  #
+  # THE ROUTER IS PORTABLE, SO A COMMITTED ADDRESS IS ALREADY WRONG THE
+  # MOMENT IT SHIPS. hub.py's own design states the source that is actually
+  # current: "a router sits on the tailnet at a known name" - the same name
+  # the operator already uses by hand (docs/tailnet-home.md, docs/
+  # state-of-play.md). `${TRAVEL_ROUTER_HOST}` is expanded by hub.py at
+  # process start from the TRAVEL_ROUTER_HOST env var below, which is sourced
+  # from a Secret this repo does not define - the same out-of-band pattern
+  # ZIPPIE_HUB_TOKEN already uses, so the real value never enters git, a
+  # GitHub secret, or this file's history. DNS is re-resolved on every poll,
+  # so the router moving networks never requires a redeploy here - only
+  # MagicDNS has to know where it is, which is the whole point of a tailnet.
+  #
+  # A MISSING OR RESERVED VALUE IS REFUSED, LOUDLY, NOT DIALLED. hub.py
+  # screens the expanded status_url before ever touching the network -
+  # `router_config_error` in hub.py, the same RESERVED-range principle
+  # scripts/deploy-openwrt.sh already applies to the router's own config -
+  # and a router that fails this check is never polled and is reported with
+  # its own distinct state everywhere a poll outcome surfaces, rather than
+  # read as "not answering" identically to a genuinely dead router.
   hub.json: |
     {
       "routers": [
         {
           "name": "travel-router",
           "label": "the travel router (GL-MT3000)",
-          "status_url": "http://192.0.2.30:8787/api/status"
+          "status_url": "http://${TRAVEL_ROUTER_HOST}:8787/api/status"
         }
       ]
     }
@@ -101,6 +130,29 @@ spec:
             - name: ZIPPIE_HUB_TOKEN
               valueFrom:
                 secretKeyRef: {name: zippie-hub-token, key: token}
+            # THE ROUTER'S ADDRESS (#17). Expanded into hub.json's
+            # `${TRAVEL_ROUTER_HOST}` above at process start. Sourced from a
+            # Secret this repo does not define - same as zippie-hub-token
+            # above - because the value is the router's current tailnet host,
+            # and the router is portable: a literal here would already be
+            # wrong the moment it shipped, and would have to be scrubbed
+            # before commit, which is exactly the failure class this fixes.
+            # Missing or reserved-for-documentation values are refused by
+            # hub.py's own guard rather than dialled - see router_config_error.
+            #
+            # optional: true IS LOAD-BEARING, NOT A DEFAULT LEFT IN PLACE. A
+            # required secretKeyRef against a Secret that does not exist yet
+            # blocks the POD, not just the router: CreateContainerConfigError,
+            # and /api/nodes, /livez and every other route this same container
+            # serves go down with it. That is a worse outage than the one
+            # this fix closes. Optional means an unset Secret simply leaves
+            # the env var unset, hub.py's own guard reports the router as
+            # config_error rather than crash-looping the pod, and the hub -
+            # whose entire design point is staying up while everything it
+            # monitors is broken - keeps doing exactly that.
+            - name: TRAVEL_ROUTER_HOST
+              valueFrom:
+                secretKeyRef: {name: zippie-hub-router, key: host, optional: true}
             # APM. hub.py builds and posts spans by hand - there is no ddtrace
             # here and there must not be; the reasons are in the long comment
             # at the top of hub.py, and the short version is that ddtrace has

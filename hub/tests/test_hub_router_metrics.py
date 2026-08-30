@@ -429,12 +429,13 @@ def test_every_router_is_observed_on_every_cycle(dsd, metrics, run_poller,
     looking smaller rather than sicker.
     """
     url, _ = answering_router
+    # 2 routers x 4 gauges (#17 added a fourth) x 2 full cycles.
     run_poller([router("travel-router", url), router("kuro", gone_router)],
-               metrics, expect_lines=12, dsd=dsd)
+               metrics, expect_lines=16, dsd=dsd)
 
     for name in ("travel-router", "kuro"):
         for metric in (hub.METRIC_REACHABLE, hub.METRIC_ANSWERING,
-                       hub.METRIC_CARRYING_LEGS):
+                       hub.METRIC_CARRYING_LEGS, hub.METRIC_CONFIG_ERROR):
             got = [s for s in dsd.samples(metric) if f"router:{name}" in s["tags"]]
             assert len(got) >= 2, f"{name} {metric} was observed {len(got)} times"
 
@@ -570,6 +571,7 @@ def test_the_metric_names_are_pinned():
     assert hub.METRIC_REACHABLE == "custom.zippie.hub.router.reachable"
     assert hub.METRIC_ANSWERING == "custom.zippie.hub.router.answering"
     assert hub.METRIC_CARRYING_LEGS == "custom.zippie.hub.router.carrying_legs"
+    assert hub.METRIC_CONFIG_ERROR == "custom.zippie.hub.router.config_error"
 
 
 def test_every_sample_is_a_gauge():
@@ -650,7 +652,7 @@ def test_a_send_failure_is_counted_and_never_reaches_the_poll_loop(
 
 
 def test_a_full_queue_drops_whole_cycles_not_halves_of_them():
-    """Two of the three samples arriving is worse than none: it would pair a
+    """Some of the four samples arriving is worse than none: it would pair a
     fresh `reachable` with a stale `carrying_legs` and read as a router that is
     gone but still carrying."""
     sent: list[list[str]] = []
@@ -665,7 +667,7 @@ def test_a_full_queue_drops_whole_cycles_not_halves_of_them():
         for _ in range(20):
             metrics.observe_router("travel-router", None, False)
         assert metrics.dropped > 0, "the queue never filled; test proves nothing"
-        assert metrics.submitted % 3 == 0
+        assert metrics.submitted % 4 == 0
     finally:
         blocked.set()
         metrics.close()
