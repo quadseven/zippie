@@ -17,11 +17,17 @@ Provisioning (keys, peers) stays in zippie_home.py; carrying packets is here.
 
 THE THREE THINGS THAT MAKE HOME ROLE DIFFERENT FROM TRAVEL
 ----------------------------------------------------------
-1. ONE listening link on a FIXED port. Travel dials out on ephemeral ports;
-   home must listen on the port the travel router sprays to (default 51901),
-   because the travel router cannot know an ephemeral home port.
-2. roam=True. The travel router moves between ISPs, so each frame can arrive
-   from a different source; the link's reply target follows the last source.
+1. ONE listening socket on a FIXED port. Travel dials out on ephemeral ports,
+   one per leg; home must listen on the port the travel router sprays to
+   (default 51901), because the travel router cannot know an ephemeral home
+   port - and hostNetwork gives it exactly one host UDP port to do it on.
+2. roam=True, PER LEG (#24). The travel router moves between ISPs and can run
+   several legs at once; each leg's frames can arrive from a different
+   source, so the transport learns one endpoint per path_id from the frames
+   it receives and each one's reply target follows only ITS OWN latest
+   source - never a different leg's, and never a stranger's. All of them
+   share the one socket above; see transport.py's module docstring and
+   Transport._roam_or_learn_link.
 3. wg_peer PRESET. The real wg server never speaks until it receives a
    handshake, and the transport cannot deliver that handshake without already
    knowing where the server is. Travel learns this from its wg client's first
@@ -39,6 +45,7 @@ import threading
 from dataclasses import dataclass
 
 from zippie.auth import AuthLevel, build_identity, parse_auth_level
+from zippie.classify import ClassifierConfig
 from zippie.transport import LinkEndpoint, Transport
 
 log = logging.getLogger("zippie.home_transport")
@@ -78,6 +85,29 @@ class HomeTransportConfig:
     # auth_peer_id or every frame fails to verify, with the same single error
     # as a bad MAC.
     auth_peer_id: int = 1
+    # WHICH PACKETS GET DUPLICATED DOWNSTREAM (#24), NOT COPIED FROM UPSTREAM
+    # UNEXAMINED.
+    #
+    # None keeps classify.py's own default: duplicate under 250 bytes, spray
+    # the rest. That default was tuned against an UPSTREAM mix (measured byte
+    # overhead 1.09) and the issue this transport exists to fix is explicit
+    # that downstream is a different mix and must be justified separately,
+    # not inherited.
+    #
+    # It is kept here rather than replaced because the reasoning is
+    # direction-agnostic, not because it was left alone: the 250-byte split
+    # protects small, latency- or retransmit-sensitive packets (a lost TCP ACK
+    # costs a retransmit AND a congestion-window backoff) wherever they flow,
+    # and for the traffic shape #24 was filed against - a bulk download -
+    # downstream is overwhelmingly large data packets, which the split already
+    # sprays rather than duplicates. So the same rule costs little there and
+    # still protects downstream voice/video/ACK traffic the way it already
+    # protects upstream's. What has NOT been done is measuring the downstream
+    # byte-overhead ratio live the way 1.09 was measured upstream - this field
+    # exists so that measurement can retune duplicate_max_bytes (or disable
+    # duplication) for the home pod alone, without touching classify.py or the
+    # travel side.
+    classifier: ClassifierConfig | None = None
 
 
 def build_home_transport(
@@ -95,6 +125,8 @@ def build_home_transport(
         "reorder_deadline_ms": cfg.reorder_deadline_ms,
         "roam": True,
         "wg_peer": cfg.wg_server,
+        # None means classify.py's own default - see HomeTransportConfig.
+        "classifier": cfg.classifier,
         # Raises rather than falling back to unauthenticated if the level and
         # the key file disagree, or the key file is group/world readable. A
         # home end that silently dropped to `off` because its key was
@@ -110,9 +142,14 @@ def build_home_transport(
         kwargs["selector_factory"] = selector_factory
 
     t = Transport(cfg.local_addr, **kwargs)
-    # ONE link, bound to the public listen port, roaming to the travel source.
-    # The initial remote is a placeholder the first inbound frame corrects; it
-    # is never used to send before then because replies only follow inbound.
+    # THE socket (#24): hostNetwork and one host UDP port, so every travel
+    # leg's frames land here no matter how many the bond is running. This
+    # link (path_id 0) is what OPENS that socket and binds it to the public
+    # listen port; every other leg the transport hears from is LEARNED onto
+    # this exact same socket by Transport._roam_or_learn_link, distinguished
+    # only by its own remote. Path_id 0 is not special beyond going first -
+    # its own remote is a placeholder the first frame carrying path_id 0
+    # corrects, exactly like any other learned leg's.
     t.add_link(
         LinkEndpoint(
             path_id=0,
@@ -124,7 +161,8 @@ def build_home_transport(
         )
     )
     log.info(
-        "home transport built: listen %s -> wg server %s (roam on, one link)",
+        "home transport built: listen %s -> wg server %s "
+        "(roam on, links learned per leg)",
         cfg.listen_addr, cfg.wg_server,
     )
     return t
