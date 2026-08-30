@@ -154,4 +154,106 @@ class BondLegsTest {
             BondLegs.subhead(rows),
         )
     }
+
+    // MARK: - legsHeading
+
+    /**
+     * "one out of two" was the question BondModel.swift's own comment names.
+     * Answered in the heading rather than left for someone to count rows -
+     * against the live fixture, which has exactly one leg (hotspot) carrying
+     * out of five configured.
+     */
+    @Test
+    fun `legsHeading counts carrying legs out of the whole bond when the router answers`() {
+        assertEquals(
+            "Connections - 1 of 5 carrying",
+            BondLegs.legsHeading(rows(), bondReachable = true),
+        )
+    }
+
+    /**
+     * MUST TELL THE TRUTH ABOUT SCOPE. When the router cannot be reached, the
+     * rows on screen are at most this phone's own fallback leg, and a heading
+     * that still claimed to count "connections" would be a claim about the
+     * whole bond nothing here measured - the exact failure BondModel.swift's
+     * `legsHeading` was written to avoid.
+     */
+    @Test
+    fun `legsHeading admits it can only speak for this phone when the bond is unreachable`() {
+        assertEquals(
+            "What this phone carried",
+            BondLegs.legsHeading(rows(), bondReachable = false),
+        )
+        assertEquals(
+            "What this phone carried",
+            BondLegs.legsHeading(emptyList(), bondReachable = false),
+        )
+    }
+
+    // MARK: - thisPhoneFallback
+
+    @Test
+    fun `no report draws no fallback row`() {
+        assertEquals(emptyList<Leg>(), BondLegs.thisPhoneFallback(null, nowMs = 1_000L))
+    }
+
+    /**
+     * A stale report is a corpse's counters, not current spending - the same
+     * rule BondModel.swift's `budget` enforces on iOS. Drawing a row from it
+     * would present a stopped relay's last count as if the phone were still
+     * reporting.
+     */
+    @Test
+    fun `a stale report draws no fallback row`() {
+        val stats = RelayStats(listening = true, cellularReady = true, upDatagrams = 1, upBytes = 500)
+        val now = 1_000_000L
+        val stale = RelayReport(stats, updatedAtMs = now - RelayReport.STALENESS_MS - 1)
+        assertEquals(emptyList<Leg>(), BondLegs.thisPhoneFallback(stale, now))
+    }
+
+    @Test
+    fun `a carrying relay draws one carrying row named This phone`() {
+        val now = 1_000_000L
+        val stats = RelayStats(
+            listening = true,
+            cellularReady = true,
+            upDatagrams = 40,
+            upBytes = 4_000,
+            downBytes = 1_000,
+            lastRouterInboundAtMs = now - 1_000,
+        )
+        val fallback = BondLegs.thisPhoneFallback(RelayReport(stats, now), now)
+        assertEquals(1, fallback.size)
+        val leg = fallback.single()
+        assertEquals("This phone", leg.name)
+        assertEquals(LegState.CARRYING, leg.state)
+        assertTrue(leg.isCarrying)
+        assertEquals(4_000L, leg.upBytes)
+        assertEquals(1_000L, leg.downBytes)
+        assertFalse("the fallback row is not matched by endpoint, so it must never claim isYou", leg.isYou)
+    }
+
+    /** Off - no report - draws nothing (covered above); everything short of
+     *  Carrying draws DOWN or IDLE, never a false CARRYING, because this row is
+     *  the one place on the Status tab a router-unreachable phone can still be
+     *  mistaken for helping. */
+    @Test
+    fun `a relay that has heard nothing from the router draws idle, not carrying`() {
+        val now = 1_000_000L
+        val stats = RelayStats(listening = true, cellularReady = true)
+        val fallback = BondLegs.thisPhoneFallback(RelayReport(stats, now), now)
+        val leg = fallback.single()
+        assertEquals(LegState.IDLE, leg.state)
+        assertFalse(leg.isCarrying)
+    }
+
+    @Test
+    fun `a relay with no cellular draws down`() {
+        val now = 1_000_000L
+        val stats = RelayStats(listening = true, cellularReady = false, lastError = "cellular unavailable")
+        val fallback = BondLegs.thisPhoneFallback(RelayReport(stats, now), now)
+        val leg = fallback.single()
+        assertEquals(LegState.DOWN, leg.state)
+        assertFalse(leg.isCarrying)
+    }
 }

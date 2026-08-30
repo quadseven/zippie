@@ -15,24 +15,21 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.zippie.companion.design.Hairline as Rule
@@ -55,15 +52,21 @@ private val SplitGap = 2.dp
  * A big number cannot say whether a leg is held in reserve or broken, and those
  * are the two states this system keeps confusing. The hero here is a sentence,
  * because the answer is a sentence.
+ *
+ * NARROWED TO WHAT THE OPERATOR ACTUALLY OPENS THIS SCREEN FOR, matching
+ * BondScreen.swift's scope. Until now this file also carried the relay
+ * start/stop control, the announce token editor and the client-mode fallback -
+ * everything the app can do, in declaration order, on one scroll. That is the
+ * exact shape RelayScreen.swift's own header comment rejects for the SAME
+ * reason: the thing someone opens this screen to check was three sections down
+ * a page that also asked them to think about a router write token. Those
+ * controls now live on their own destination - see RelayScreen.kt - and this
+ * file is left with the sentence, the chart, the legs, and what it cost.
  */
 @Composable
 fun StatusScreen(
     state: BondUiState,
-    onStartRelay: () -> Unit,
-    onStopRelay: () -> Unit,
-    onStartClient: () -> Unit,
     onRefresh: () -> Unit,
-    onSaveToken: (String) -> Unit,
     onOpenDiagnostics: () -> Unit = {},
 ) {
     Column(
@@ -73,19 +76,19 @@ fun StatusScreen(
     ) {
         // TOP RIGHT, on the screen people already open. A diagnostics screen
         // behind a tab nobody visits does not exist at the moment it is needed,
-        // which is when the phone has gone quiet.
-        // The mode used to be stamped above the headline in uppercase -
-        // "CONTRIBUTING" - which is a kicker, and a kicker is an ornament that
-        // exists to announce a heading that can announce itself. Theme.swift
-        // rejects the same habit for section headers in as many words. The mode
-        // is already said properly in decision.summary two lines down, so
-        // deleting it loses nothing and the sentence gets to lead.
+        // which is when the phone has gone quiet. AN ICON, not a text button -
+        // BondScreen.swift reaches for the same top-right icon-only chrome for
+        // the same reason: the words belong to the sentence below, not to the
+        // row above it.
         Row(Modifier.fillMaxWidth()) {
             Spacer(Modifier.weight(1f))
-            TextButton(
-                onClick = onOpenDiagnostics,
-                colors = ButtonDefaults.textButtonColors(contentColor = Ink.live),
-            ) { Text("Diagnostics", style = Kind.label) }
+            IconButton(onClick = onOpenDiagnostics) {
+                Icon(
+                    Icons.Filled.Info,
+                    contentDescription = "Diagnostics",
+                    tint = Ink.live,
+                )
+            }
         }
         Text(state.headline, style = Kind.display, color = Ink.primary)
         Spacer(Modifier.height(Space.tight))
@@ -108,8 +111,12 @@ fun StatusScreen(
             BondThroughputChart(state.throughput)
         }
 
+        // THE HEADING TELLS THE TRUTH ABOUT SCOPE, pre-computed by
+        // BondLegs.legsHeading so this screen never has to guess: "Connections
+        // - 2 of 4 carrying" when the router answers, "What this phone
+        // carried" when only this phone's own counters are knowable.
         Spacer(Modifier.height(Space.section))
-        SectionTitle(if (state.legs.isEmpty()) "Links" else "Links in the bond")
+        SectionTitle(state.legsHeading)
 
         if (state.legs.isEmpty()) {
             Text(
@@ -128,24 +135,12 @@ fun StatusScreen(
             }
         }
 
-        Spacer(Modifier.height(Space.section))
-        SectionTitle("This phone")
-        RelaySection(state, onStartRelay, onStopRelay, onSaveToken)
-
-        Spacer(Modifier.height(Space.section))
-        SectionTitle("Client mode")
-        Text(
-            // Said plainly rather than hidden behind a disabled button: the
-            // tunnel comes up and carries NOTHING until the gomobile datapath
-            // exists (#2246), and a button that looks ready would be a lie.
-            "Bonding this phone's own links back home needs the gomobile datapath, " +
-                "which is not in this build yet (#2246). The tunnel will establish and " +
-                "carry nothing.",
-            style = Kind.caption,
-            color = Ink.secondary,
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedButton(onClick = onStartClient, colors = ButtonDefaults.outlinedButtonColors(contentColor = Ink.live)) { Text("Establish the tunnel anyway") }
+        // WHAT IT COST. A distinct headline stat, matching BondScreen.swift's
+        // "Session total" - not folded into the byte counts on the Relay tab,
+        // which answer a different question (day/month spend against a cap).
+        // This one answers "how much has THIS run carried", and it is the last
+        // thing on the page before the footer, same as iOS.
+        SessionTotal(state)
 
         Spacer(Modifier.height(Space.section))
         Rule()
@@ -161,6 +156,31 @@ fun StatusScreen(
         }
         Spacer(Modifier.height(12.dp))
         OutlinedButton(onClick = onRefresh, colors = ButtonDefaults.outlinedButtonColors(contentColor = Ink.live)) { Text("Refresh now") }
+    }
+}
+
+/**
+ * What this run has actually relayed, matching BondScreen.swift's "Session
+ * total". Shown only while the relay report is live and CURRENT - a corpse's
+ * byte count under a fresh Connections list would read as today's spending
+ * when it is whatever the relay had counted before it stopped, the same trap
+ * [RelayStats.sessionBytes]'s doc warns about.
+ */
+@Composable
+private fun SessionTotal(state: BondUiState) {
+    val report = state.relay ?: return
+    if (report.isStale(state.nowMs)) return
+    Spacer(Modifier.height(Space.section))
+    SectionTitle("Session total")
+    Row(verticalAlignment = Alignment.Bottom) {
+        Text(Fmt.bytes(report.stats.sessionBytes), style = Kind.figure(17, FontWeight.Medium), color = Ink.primary)
+        Spacer(Modifier.width(Space.tight))
+        Text("of cellular relayed", style = Kind.body, color = Ink.secondary)
+    }
+    // Not an error colour: the budget working as designed is not a fault, the
+    // same reasoning RelaySection gives it on the Relay tab.
+    report.stats.budgetExhausted?.let {
+        Text(it, style = Kind.caption, color = Ink.degraded)
     }
 }
 
@@ -332,206 +352,6 @@ private fun TrafficBar(reading: TrafficReading, state: LegState) {
     }
 }
 
-@Composable
-private fun RelaySection(
-    state: BondUiState,
-    onStartRelay: () -> Unit,
-    onStopRelay: () -> Unit,
-    onSaveToken: (String) -> Unit,
-) {
-    val report = state.relay
-    val stats = report?.stats
-    // THE ONE SENTENCE, evidence-gated (RelayVerdict.kt, ported from
-    // ZippieCompanionKit/RelayVerdict.swift and quadseven/zippie#44): a claim
-    // about the ROUTER is made only once something has actually arrived from
-    // it, decided from a TIMESTAMP rather than a datagram count.
-    // upDatagrams/downDatagrams never go down, so a count-based rule reads
-    // "Carrying" forever after a single packet, including long after the
-    // router stopped dialling this phone - that was the defect here.
-    // AND the router's half, when this screen already holds it. The leg the
-    // console publishes for THIS phone carries `never_handshaked`, and until
-    // #281 that fact was rendered in the leg row below while the headline above
-    // it said "Carrying" - the same screen contradicting itself for hours
-    // during an outage. `isYou` is matched by relay endpoint, not by name, so a
-    // relabelled leg still resolves.
-    val routerSeesNothing = state.legs.any { it.isYou && it.neverAnswered }
-    val verdict = RelayVerdict.evaluate(report, state.nowMs, routerSeesNothing = routerSeesNothing)
-
-    // A carrier name is something iOS cannot report at all, so it is stated
-    // here rather than inferred from the router's hand-written leg label.
-    Text(
-        state.carrier?.summary?.let { "Carrier: $it" } ?: "Carrier: not reported by the radio",
-        style = Kind.caption,
-        color = Ink.secondary,
-    )
-    Text(
-        state.localIp?.let { "Wifi address: $it, listening on ${state.listenPort}" }
-            ?: "No wifi address, so no leg can be matched to this phone",
-        style = Kind.caption,
-        color = Ink.secondary,
-    )
-    Spacer(Modifier.height(8.dp))
-
-    val alarmed = verdict is RelayVerdict.NotReporting
-    Text(
-        verdict.headline,
-        style = Kind.body,
-        color = if (alarmed) Ink.down else Ink.primary,
-    )
-    Text(
-        // Not yet named on Android - see the note on RelayVerdict.detail(router:)
-        // for why there is no display-name source here to pass.
-        verdict.detail(),
-        style = Kind.caption,
-        color = if (alarmed) Ink.down else Ink.secondary,
-    )
-
-    // Raw measurements, shown only while the report is live and current - a
-    // corpse's byte counts sitting under "not reporting" would look like more
-    // evidence when they are the opposite.
-    if (stats != null && verdict !is RelayVerdict.Off && verdict !is RelayVerdict.NotReporting) {
-        Text(
-            "${Fmt.bytes(stats.upBytes)} up in ${stats.upDatagrams} datagrams, " +
-                "${Fmt.bytes(stats.downBytes)} down in ${stats.downDatagrams}.",
-            style = Kind.caption,
-            color = Ink.secondary,
-        )
-        Text(
-            if (stats.budget.isConfigured) {
-                "Budget: ${Fmt.bytes(stats.dayUsedBytes)} today, " +
-                    "${Fmt.bytes(stats.monthUsedBytes)} this month."
-            } else {
-                "No data cap set, so the relay will spend whatever the bond asks for."
-            },
-            style = Kind.caption,
-            color = Ink.secondary,
-        )
-        if (stats.rejectedSources > 0) {
-            Text(
-                "Refused ${stats.rejectedSources} datagrams from senders that were not the router.",
-                style = Kind.caption,
-                color = Ink.secondary,
-            )
-        }
-        stats.budgetExhausted?.let {
-            // Not an error colour: the budget working as designed is not a
-            // fault, and colouring it red would train the reader to fix it.
-            Text("$it (${stats.budgetBlocked} datagrams refused)",
-                style = Kind.caption)
-        }
-        stats.announce?.let {
-            // NOT an error colour by default. "No token set" is a configuration
-            // fact, and a refusal is the router's answer - only the second is
-            // worth alarming about.
-            Text(
-                it,
-                style = Kind.caption,
-                color = Ink.secondary,
-            )
-        }
-        stats.lastError?.let {
-            Text(it, style = Kind.caption, color = Ink.down)
-        }
-    }
-
-    Spacer(Modifier.height(Space.base))
-    // ONE CONTROL, decided by the verdict already computed above.
-    //
-    // Both buttons used to render unconditionally, so a phone that was actively
-    // carrying still offered "Start contributing" - which reads as "this is not
-    // running" on the one screen whose entire job is saying whether it is. The
-    // operator reported exactly that. RelayScreen.swift has said `if running`
-    // since it was written; this is Android catching up.
-    //
-    // Off is the only verdict meaning no relay exists (RelayVerdict.Off: "no
-    // report exists ... never been started, or just stopped"). Every other
-    // verdict - including NotReporting, where the service is alive but wedged -
-    // is a state you leave by stopping, so Stop is the honest control there.
-    if (verdict is RelayVerdict.Off) {
-        Button(
-            onClick = onStartRelay,
-            colors = ButtonDefaults.buttonColors(containerColor = Ink.live, contentColor = Ink.ground),
-        ) { Text("Start contributing", style = Kind.label) }
-    } else {
-        OutlinedButton(
-            onClick = onStopRelay,
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = Ink.live),
-        ) { Text("Stop contributing", style = Kind.label) }
-    }
-
-    AnnounceSettings(state, onSaveToken)
-}
-
-/**
- * The one thing this phone needs from a person before it can join the bond.
- *
- * WHY IT IS ON THIS SCREEN AT ALL. Announcing is authenticated - the router
- * answers 401 without the token - and there is no settings screen to put it on.
- * A build with no way to enter the token would be an announce path that can
- * never run, which is worse than not having one: it looks finished.
- *
- * Masked, never echoed back, and never logged. The field starts empty even when
- * a token IS stored, because reading one back onto a screen is how a token ends
- * up in a screenshot of a bug report.
- */
-@Composable
-private fun AnnounceSettings(state: BondUiState, onSaveToken: (String) -> Unit) {
-    var typed by remember { mutableStateOf("") }
-
-    Spacer(Modifier.height(16.dp))
-    Text(
-        state.legName?.let { "This phone announces itself as \"$it\"." }
-            ?: "This phone has not chosen a leg name yet.",
-        style = Kind.caption,
-        color = Ink.secondary,
-    )
-    Text(
-        if (state.hasAnnounceToken) {
-            "A console write token is stored, so this phone can announce itself. " +
-                "A token saved while the relay is running takes effect when it is " +
-                "next started."
-        } else {
-            "No console write token, so the router will refuse to add this phone " +
-                "as a leg. It is the router's /var/lib/zippie/console_token."
-        },
-        style = Kind.caption,
-        color = Ink.secondary,
-    )
-    Spacer(Modifier.height(8.dp))
-    OutlinedTextField(
-        value = typed,
-        onValueChange = { typed = it },
-        label = { Text("Console write token") },
-        singleLine = true,
-        visualTransformation = PasswordVisualTransformation(),
-        modifier = Modifier.fillMaxWidth(),
-        textStyle = Kind.body,
-        // The caret and the focus ring ship as Material defaults and belong to
-        // no design system until they are named.
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = Ink.live,
-            unfocusedBorderColor = Ink.rule,
-            cursorColor = Ink.live,
-            focusedLabelColor = Ink.live,
-            unfocusedLabelColor = Ink.secondary,
-            focusedTextColor = Ink.primary,
-            unfocusedTextColor = Ink.primary,
-        ),
-    )
-    Spacer(Modifier.height(8.dp))
-    OutlinedButton(
-        onClick = {
-            onSaveToken(typed)
-            typed = ""
-        },
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = Ink.live),
-    ) {
-        // Saving an empty field is how a token is REMOVED, which is the only
-        // way to stop a phone announcing without uninstalling the app.
-        Text(if (typed.isBlank()) "Clear the stored token" else "Save the token")
-    }
-}
-
 /**
  * The bar's tint says HEALTH, while the state word above it says membership.
  * See the note on LegRow for why those are deliberately two different colours
@@ -551,8 +371,13 @@ private fun barTint(state: LegState): Color = when (state) {
     LegState.IDLE -> Ink.tertiary
 }
 
+/**
+ * A section heading with the rhythm the page expects - more air above than
+ * below, matching Controls.swift's SectionHead. Not private: RelayScreen.kt
+ * shares this rather than growing its own copy.
+ */
 @Composable
-private fun SectionTitle(text: String, note: String? = null) {
+fun SectionTitle(text: String, note: String? = null) {
     // COLOUR STATED. Without it the Text inherits LocalContentColor, which on a
     // Surface painted with a token colour Material does not recognise resolves
     // to a near-black - so "Links", "This phone" and "Client mode" were all but
@@ -565,8 +390,9 @@ private fun SectionTitle(text: String, note: String? = null) {
     Spacer(Modifier.height(Space.tight))
 }
 
+/** Not private for the same reason as [SectionTitle]. */
 @Composable
-private fun Footnote(text: String, color: Color = Ink.secondary) {
+fun Footnote(text: String, color: Color = Ink.secondary) {
     Text(text, style = Kind.caption, color = color)
 }
 

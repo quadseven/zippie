@@ -86,8 +86,15 @@ data class WidgetContent(
 
         /** Exhaustive on purpose - `when` over a sealed class with no `else`
          *  means a new verdict is a COMPILE error here rather than a silent
-         *  fallback to whichever tone seemed safest. */
-        private fun toneOf(verdict: RelayVerdict): Tone = when (verdict) {
+         *  fallback to whichever tone seemed safest.
+         *
+         *  NOT PRIVATE. StatusScreen's this-phone fallback row - the single
+         *  leg it draws when the router's console cannot be reached, matching
+         *  BondModel.swift's `rebuild()` - needs the exact same judgement.
+         *  Re-deriving it there would be a second switch that could drift from
+         *  this one, which is how #267 happened to [Leg.isCarrying] in the
+         *  first place. */
+        fun toneOf(verdict: RelayVerdict): Tone = when (verdict) {
             RelayVerdict.Carrying -> Tone.LIVE
             // Listening and RouterQuiet are not faults. The phone is doing its
             // job and has heard nothing; drawing that red would be crying wolf,
