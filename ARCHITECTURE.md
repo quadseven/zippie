@@ -557,16 +557,9 @@ every client fails to handshake against a config that pins the old one - which
 looks like a network problem, not a storage one.
 
 **The home transport** is the other end of the datapath: it reassembles, answers
-keepalives, and answers NACKs. It has one physical socket (`hostNetwork`, one
-host UDP port) but learns one endpoint per travel leg from the frames it
-receives, keyed by the `path_id` each leg stamps on its own frames, and shares
-that one socket across all of them - there is no second port to give a leg of
-its own (#24). Roaming is per leg: an endpoint's reply target updates only on a
-frame carrying its own `path_id`, so downstream sprays across every leg the
-bond has instead of following whichever one spoke most recently. Before #24
-this was a single link that roamed to the whole bond's most recent sender,
-which meant the travel router sprayed upstream across every leg while home
-replied downstream down one at a time.
+keepalives, and answers NACKs. Its endpoint roams - it has one physical link and
+hears the same client from several source addresses, so it replies to whoever
+spoke most recently on that leg.
 
 **The fleet hub** polls every router every five seconds from home, on mains
 power and wired internet. It exists because of a structural blind spot: the

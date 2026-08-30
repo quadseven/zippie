@@ -31,23 +31,6 @@ A single link failing is the NORMAL case, not an error. Every per-socket
 operation is individually guarded: a send that fails marks that link and moves
 on to the next, and the loop keeps running. The only thing that stops the loop
 is being told to stop.
-
-ONE SOCKET, MANY LEGS: HOME-ROLE LEARNING (#24)
-------------------------------------------------
-The travel side dials out on its own socket per leg, so a leg's identity and
-its socket are the same thing there. Home cannot do that: hostNetwork and one
-host UDP port mean every travel leg's frames land on the SAME socket, and
-until #24 that was modelled as ONE link that roamed to whichever source sent
-last - so the travel router sprayed UPSTREAM across every leg while home
-replied DOWNSTREAM down one leg at a time, no matter how many the bond had.
-
-Each travel leg already stamps its OWN path_id on every frame it sends (the
-wire always carried this). A roaming (`roam=True`) transport now believes
-THAT over the socket it arrived on, and learns one link per path_id the first
-time it is heard from - `_roam_or_learn_link`. Every learned link shares the
-one socket there is to share; only the `remote` each is sent to differs. A
-dialling (`roam=False`, travel) transport is unaffected: it already has one
-socket per leg and keeps trusting that, never the frame.
 """
 
 from __future__ import annotations
@@ -163,56 +146,6 @@ MAX_GAP_SCAN = NackTracker.MAX_PENDING
 # that shortens the reorder deadline below the NACK delay degrades to exactly
 # the pre-#108 behaviour rather than to something worse than it.
 NACK_MAX_DELAY_FRACTION = 0.6
-
-
-# HOW LONG A LEARNED HOME LEG MAY GO WITHOUT A FRAME before it is judged DOWN
-# and taken out of the downstream carrying set (#24: downstream used to be a
-# single roaming link, so there was nothing per-leg to judge).
-#
-# Mirrors agent.py's PACKET_LINK_STALE_S (6.0s), which makes exactly this call
-# for the UPSTREAM direction - "leg silent for Ns" past this many seconds
-# means DOWN, not merely slow. NOT IMPORTED: agent.py is travel-only and is
-# not one of the modules shipped into the home pod (see the
-# configMapGenerator in deploy/oke/zippie-home/kustomization.yaml), so the
-# number is kept equal by hand and by this comment, the same way
-# EPOCH_TAKEOVER_IDLE_S above is kept equal to the Go port's.
-HOME_LEG_STALE_S = 6.0
-
-# HOW LONG A LEARNED HOME LEG MAY STAY SILENT before its entry is forgotten
-# outright rather than merely marked unhealthy (#24).
-#
-# path_id is the WIRE's identity for a leg, and the travel side RECYCLES it
-# (MAX_PATH_ID, and agent.py's allocator) rather than retiring it forever - a
-# phone that leaves and a different phone that joins later can be handed the
-# SAME id. HOME_LEG_STALE_S already takes a silent leg out of the carrying set
-# well before this fires, so this bound is not what stops a dead leg being
-# used; it is what stops a leg that is truly gone from sitting in the link
-# table forever reporting a frozen remote and RTT, and from handing a NEW
-# owner of the same id a stranger's history - the same hazard forget_link
-# exists to close for the travel side's own re-adoption cycle (#163).
-HOME_LEG_FORGET_S = 120.0
-
-# HOW MANY LEGS ONE HOME TRANSPORT WILL LEARN (#24). MAX_PATH_ID (255) is the
-# wire's own ceiling; this is a much tighter practical one. A real bond runs a
-# handful of physical uplinks plus a few phones (CONTEXT.md's tiers and
-# reserves), so anything near this number is already a peer spraying path ids
-# that make no operational sense. A defensive floor under a misbehaving or
-# spoofing peer, not protection against memory pressure in the ordinary case -
-# each entry costs one PathState and a few dict slots.
-HOME_MAX_LEARNED_LINKS = 16
-
-# STARTING WEIGHT FOR A LEG HOME HAS JUST LEARNED (#24).
-#
-# The same default LinkEndpoint itself ships with, so a freshly learned leg
-# starts on the same footing as any link added anywhere else in this
-# codebase - no special-casing. Weighting downstream by the health home
-# already observes upstream (RTT, loss, tier) is real future work,
-# deliberately NOT built here - see the module docstring. Equal weight is not
-# a placeholder that does nothing: weighted round robin across N healthy
-# learned legs, even at equal weight, is already the aggregation #24 is
-# about. It is the RELATIVE weighting between legs that is deferred, not
-# aggregation itself.
-HOME_LEARNED_WEIGHT = 100
 
 
 # How many unanswered probes one leg may have outstanding. Eight is ~4 s at the
@@ -523,13 +456,6 @@ class Transport:
 
         self._links: dict[int, LinkEndpoint] = {}
         self._socks: dict[int, socket.socket] = {}
-        # THE ONE SOCKET A HOME-ROLE TRANSPORT HAS (#24). Set by add_link the
-        # first time a `listen`-bound link opens, and reused by
-        # _roam_or_learn_link for every leg learned afterwards - hostNetwork
-        # and one host UDP port mean there is no second socket to give them.
-        # Always None on a dialling (travel) transport, which opens its own
-        # socket per leg and never learns one.
-        self._shared_sock: socket.socket | None = None
         # One token bucket per capped link. Absent means uncapped, which is
         # most links - so the send path pays one dict lookup and no arithmetic.
         self._buckets: dict[int, _TokenBucket] = {}
@@ -608,13 +534,6 @@ class Transport:
             return
         self._links[link.path_id] = link
         self._socks[link.path_id] = sock
-        if self._roam and link.listen is not None and self._shared_sock is None:
-            # THE shared socket (#24): home's one listen-bound link opens the
-            # one port hostNetwork gives it, and every leg learned later
-            # reuses this exact socket object rather than opening one of its
-            # own. First one wins - home only ever adds one listen-bound link
-            # in production (home_transport.build_home_transport).
-            self._shared_sock = sock
         # Rebuilt on every add so a cap change takes effect on the next link
         # rebuild rather than surviving as a stale bucket from an old config.
         self._buckets.pop(link.path_id, None)
@@ -642,13 +561,7 @@ class Transport:
 
     def remove_link(self, path_id: int) -> None:
         sock = self._socks.pop(path_id, None)
-        # THE SHARED SOCKET (#24) MUST OUTLIVE ANY ONE LEG'S ENTRY. A learned
-        # leg's socket IS the shared listening socket every other leg (and
-        # the bootstrap entry) also uses; closing it because ONE leg's entry
-        # was removed would take every other leg, and the home transport's
-        # own ability to hear a new one, off the air with it. close() closes
-        # it exactly once, when the whole transport is torn down.
-        if sock is not None and sock is not self._shared_sock:
+        if sock is not None:
             try:
                 self._sel.unregister(sock)
             except (KeyError, ValueError):
@@ -973,18 +886,6 @@ class Transport:
 
         self.stats.received += 1
 
-        # THE LEG THIS FRAME ACTUALLY BELONGS TO (#24).
-        #
-        # Home listens on ONE socket (hostNetwork, one host UDP port) and
-        # every travel leg sprays to it, so `path_id` - the socket this
-        # arrived on - says "wan" for all of them; it cannot tell two travel
-        # legs apart. The frame's OWN path_id can, because each travel leg
-        # stamps its own on every frame it sends. So a roaming (home-role)
-        # transport believes the FRAME over the socket; a dialling
-        # (travel-role) transport already has one socket per leg and keeps
-        # trusting THAT, exactly as before - see _roam_or_learn_link.
-        origin = frame.path_id if self._roam else path_id
-
         # NOTHING BELOW THIS POINT IS AUTHENTICATED AT THE OFF AND OBSERVE
         # RUNGS, so be careful what a stranger's packet is allowed to do. At
         # the require rung it is: `authed` is true for every frame that reaches
@@ -1038,27 +939,25 @@ class Transport:
                 return []
         self._last_good_frame = self._clock()
 
-        # FOLLOW THE TRAVEL ROUTER AS IT MOVES BETWEEN ISPs, and learn a new
-        # leg's endpoint the first time it is heard from - but only now, on
-        # the far side of the gate. Roaming used to happen in run_once BEFORE
-        # the frame was parsed at all, so one unauthenticated 17-byte
-        # datagram repointed every reply at whoever sent it; see
-        # _roam_or_learn_link for the per-leg version of that same rule (#24).
-        if self._roam and addr is not None and origin is not None:
-            self._roam_or_learn_link(origin, addr)
+        # FOLLOW THE TRAVEL ROUTER AS IT MOVES BETWEEN ISPs - but only now, on
+        # the far side of the gate. This used to happen in run_once BEFORE the
+        # frame was parsed at all, so one unauthenticated 17-byte datagram
+        # repointed every reply at whoever sent it.
+        if self._roam and addr is not None and path_id is not None:
+            self._roam_link(path_id, addr)
 
         # Credit the leg BEFORE inspecting the frame type. Any well-formed
         # frame proves the leg round-trips, whether it is a keepalive answer or
         # ordinary tunnel data - and on a busy bond real data is the more
         # common proof. Judging liveness on keepalives alone would call a leg
         # dead while it was carrying traffic.
-        if origin is not None:
-            self._link_rx[origin] = self._clock()
+        if path_id is not None:
+            self._link_rx[path_id] = self._clock()
             # Estimated bytes the metered IP link carried. The socket exposes
             # UDP payload only, so add its fixed IPv4+UDP headers; the payload
             # after reassembly would also miss every zippie header and duplicate.
-            self._link_rx_bytes[origin] = (
-                self._link_rx_bytes.get(origin, 0)
+            self._link_rx_bytes[path_id] = (
+                self._link_rx_bytes.get(path_id, 0)
                 + len(raw) + _IPV4_UDP_HEADER_BYTES
             )
             # RECEIVING IS PROOF, so it must be able to UNDO a demotion.
@@ -1076,7 +975,7 @@ class Transport:
             # frame silently dropped, while the wg server was visibly replying
             # on loopback. The bond looked alive from both ends and moved
             # nothing.
-            self.scheduler.set_healthy(origin, True)
+            self.scheduler.set_healthy(path_id, True)
 
         if frame.flags & FLAG_NACK:
             self.stats.nacks_received += 1
@@ -1084,12 +983,12 @@ class Transport:
             return []
         if frame.is_keepalive:
             if frame.is_keepalive_reply:
-                outstanding = (self._ka_sent.get(origin)
-                               if origin is not None else None)
+                outstanding = (self._ka_sent.get(path_id)
+                               if path_id is not None else None)
                 sent = outstanding.pop(frame.seq, None) if outstanding else None
-                if sent is not None and origin is not None:
-                    self._link_rtt[origin] = (self._clock() - sent) * 1000.0
-                    self._note_ka_outcome(origin, lost=False)
+                if sent is not None and path_id is not None:
+                    self._link_rtt[path_id] = (self._clock() - sent) * 1000.0
+                    self._note_ka_outcome(path_id, lost=False)
                     # Anything older than the probe just answered is LOST, not
                     # merely slow - the far end answers in order on a given
                     # leg. Dropping them stops a stale timestamp being matched
@@ -1097,15 +996,15 @@ class Transport:
                     # counts against this leg's loss window (#115).
                     for older in [p for p in outstanding if p < frame.seq]:
                         outstanding.pop(older, None)
-                        self._note_ka_outcome(origin, lost=True)
-            elif origin is not None:
+                        self._note_ka_outcome(path_id, lost=True)
+            elif path_id is not None:
                 # Answer on the SAME leg it arrived on. Replying over whichever
                 # link the scheduler happens to like would measure that link
                 # instead, and the answer would prove nothing about the leg
                 # being probed.
-                self._send_on(origin, self._pack(Frame(
+                self._send_on(path_id, self._pack(Frame(
                     seq=frame.seq,
-                    path_id=origin,
+                    path_id=path_id,
                     payload=b"",
                     flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
                     epoch=self._epoch,
@@ -1224,104 +1123,18 @@ class Transport:
             return 0
         return self._gap_high_water - nxt
 
-    def _roam_or_learn_link(self, path_id: int, addr: tuple[str, int]) -> None:
-        """Point ONE leg's reply target at the source of its latest frame,
-        learning that leg's entry the first time it is heard from (#24).
+    def _roam_link(self, path_id: int, addr: tuple[str, int]) -> None:
+        """Point a link's reply target at the source of its latest frame.
 
-        Before this, home ran a single link and roamed it to whichever source
-        sent last, so downstream could only ever follow the one travel leg
-        that had most recently spoken while the travel router sprayed
-        upstream across all of them. Each travel leg already stamps its OWN
-        path_id on every frame it sends - the wire always carried this, home
-        just was not keeping one endpoint per id. Now it does: an endpoint
-        updates ONLY on a frame carrying its OWN path_id, so one leg can
-        never be roamed by another leg's traffic, let alone a stranger's.
-        This runs strictly after the epoch/auth gate in `_on_link_data`, the
-        same as the single roam it replaces - see the hijack tests in
-        test_bond_authentication.py, which this must keep passing unchanged.
-
-        Every learned link shares the ONE physical socket home has:
-        hostNetwork and a single host UDP port mean there is no second port
-        to give a learned leg of its own, so `_socks[path_id]` for a learned
-        leg is the exact same socket object the bootstrap link opened,
-        distinguished only by which `remote` each is sent to.
-
-        Only mutates an EXISTING entry on an actual change, so a stable
-        connection costs nothing. The LinkEndpoint is frozen for its identity
-        fields but remote is reassigned wholesale via dataclasses.replace to
-        keep it hashable-safe.
+        Only mutates on an actual change, so a stable connection costs nothing.
+        The LinkEndpoint is frozen for its identity fields but remote is
+        reassigned wholesale via dataclasses.replace to keep it hashable-safe.
         """
         link = self._links.get(path_id)
-        if link is not None:
-            if link.remote != addr:
-                self._links[path_id] = replace(link, remote=addr)
-                log.debug("link %s roamed to %s", link.name, addr)
+        if link is None or link.remote == addr:
             return
-
-        sock = self._shared_sock
-        if sock is None:
-            # roam=True with no listen-bound link ever added: nothing to
-            # share a socket with. Not expected in home role - refuse
-            # quietly rather than open a second port nobody asked for.
-            return
-        if len(self._links) >= HOME_MAX_LEARNED_LINKS:
-            log.warning(
-                "home: not learning leg path_id=%d from %s, at the %d-leg cap",
-                path_id, addr, HOME_MAX_LEARNED_LINKS,
-            )
-            return
-
-        new_link = LinkEndpoint(path_id=path_id, name=f"leg{path_id}",
-                                device=None, remote=addr,
-                                weight=HOME_LEARNED_WEIGHT)
-        self._links[path_id] = new_link
-        self._socks[path_id] = sock
-        self.scheduler.add_path(
-            PathState(path_id, new_link.name, weight=new_link.weight))
-        self._link_rx[path_id] = self._clock()
-        log.info("home learned leg path_id=%d from %s (%d legs now)",
-                 path_id, addr, len(self._links))
-
-    def _sweep_learned_links(self) -> None:
-        """Judge every home leg by the SAME silence rule agent.py applies
-        upstream, so a leg dying downstream degrades the bond rather than
-        quietly keeping a dead destination in the spray rotation (#24).
-
-        Called from `tick()` for roam-mode transports only. A leg silent past
-        HOME_LEG_STALE_S is marked unhealthy - out of the carrying set, still
-        in the link table, still eligible to come back the moment anything
-        arrives on it again. A leg silent past HOME_LEG_FORGET_S is forgotten
-        outright, because its path_id may since have been handed to a
-        different physical leg (see HOME_LEG_FORGET_S). Both bounds read
-        link_rx_age_s, the only honest liveness packet mode has: a frame
-        actually came back.
-        """
-        for path_id in list(self._links):
-            age = self.link_rx_age_s(path_id)
-            if age is None:
-                continue
-            if age >= HOME_LEG_FORGET_S:
-                self._retire_learned_link(path_id)
-            elif age >= HOME_LEG_STALE_S:
-                self.scheduler.set_healthy(path_id, False)
-
-    def _retire_learned_link(self, path_id: int) -> None:
-        """Forget a home leg that has been silent long enough that its
-        path_id may now belong to a different physical leg (#24).
-
-        `remove_link` alone is not enough: it deliberately KEEPS `_ka_loss`
-        (#115) so a leg cycling the tier gate does not lose its loss history
-        on every withdraw/re-adopt. That retention assumes what its own
-        comment states - path_id is stable for a leg's whole life - which no
-        longer holds once a leg has been silent this long. `forget_link` is
-        the other half of that same assumption (#163): calling both means a
-        NEW owner of this id starts from "no evidence yet" instead of a
-        stranger's numbers.
-        """
-        self.remove_link(path_id)
-        self.forget_link(path_id)
-        log.info("home: leg path_id=%d forgotten after %.0fs of silence",
-                 path_id, HOME_LEG_FORGET_S)
+        self._links[path_id] = replace(link, remote=addr)
+        log.debug("link %s roamed to %s", link.name, addr)
 
     def _deliver_to_wireguard(self, payloads: list[bytes]) -> None:
         if not self._wg_peer:
@@ -1343,11 +1156,7 @@ class Transport:
     # ---- the loop --------------------------------------------------------
 
     def tick(self) -> None:
-        """Time-driven work: release stalled reorder gaps, send due NACKs,
-        and - for a roaming (home-role) transport - judge learned legs on the
-        same silence rule the travel-side agent applies upstream (#24)."""
-        if self._roam:
-            self._sweep_learned_links()
+        """Time-driven work: release stalled reorder gaps, send due NACKs."""
         self._deliver_to_wireguard(self.reassembler.tick())
         for seq in self.nacks.due():
             self._send_nack(seq)
@@ -1415,16 +1224,6 @@ class Transport:
         self.stop()
         for path_id in list(self._socks):
             self.remove_link(path_id)
-        if self._shared_sock is not None:
-            # remove_link skipped closing this for every leg above - see its
-            # own comment - because they all share it. Close it exactly once,
-            # here, now that nothing else needs it.
-            try:
-                self._sel.unregister(self._shared_sock)
-            except (KeyError, ValueError):
-                pass
-            self._shared_sock.close()
-            self._shared_sock = None
         try:
             self._sel.unregister(self._local)
         except (KeyError, ValueError):
