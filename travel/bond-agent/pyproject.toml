@@ -58,3 +58,17 @@ line-length = 100
 # config.py's tomllib/tomli version guard as "outdated" when that guard is the
 # only reason the agent imports at all on the target device.
 target-version = "py39"
+
+[tool.ruff.lint]
+# S310 ONLY, not the whole flake8-bandit set.
+#
+# `urlopen` and `Request` happily accept `file:` and any custom scheme, and this
+# repo now has a module that takes a URL from configuration and posts this
+# device's certificate and a signed nonce to it. That is exactly the case S310
+# exists for, and it was found by the review bot's stricter ruff rather than by
+# this one - which meant the suppression the fix needs would have been dead
+# weight here and flagged by RUF100.
+#
+# Enabling the single rule makes the suppression legitimate in both places and
+# means the next `urlopen` gets caught locally instead of in review.
+extend-select = ["S310"]
