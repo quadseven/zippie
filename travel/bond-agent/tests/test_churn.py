@@ -219,11 +219,48 @@ def test_a_leg_that_has_answered_keeps_the_healthy_wording(tmp_path):
     p = a.paths[0]
     p.state = PathState.UP
     p.effective_weight = 10
-    p.rtt_ms = 42.0                 # it has replied
+    p.rtt_ms = 42.0                 # it has replied, this sample
+    p.has_ever_answered = True      # ...and the sticky record agrees (#26:
+    # this is the field the gate now reads, not the current sample - see
+    # test_a_stale_current_sample_does_not_undo_a_real_answer below for why).
     a._flapped.add("real")
 
     a._gate_flapped_paths()
     assert "healthy" in (p.last_error or "")
+
+
+def test_a_stale_current_sample_does_not_undo_a_real_answer(tmp_path):
+    """#26 REGRESSION. This gate used to read `p.rtt_ms is not None` as its
+    ever-answered evidence - which is exactly the trap PathRuntime.
+    has_ever_answered was added to avoid: rtt_ms is the CURRENT measurement
+    and goes back to None the instant a leg misses one keepalive, so a leg
+    that worked for hours and just went quiet for one pass would be branded
+    'no reply yet - nothing is answering', which is false and sends the
+    reader hunting a configuration bug that does not exist.
+    """
+    from zippie.agent import BondAgent
+    from zippie.config import parse_config
+    a = BondAgent(parse_config({
+        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path),
+                  "run_dir": str(tmp_path / "run")},
+        "home": {"endpoint": "h:51900", "server_public_key": "c2VydmVy",
+                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
+        "policy": {"datapath": "packet", "join_streak_min": 8},
+        "paths": [{"name": "quiet-but-proven", "interface": "br-lan"}],
+    }))
+    p = a.paths[0]
+    p.state = PathState.UP
+    p.effective_weight = 10
+    p.rtt_ms = None                 # this exact pass missed its reply...
+    p.has_ever_answered = True      # ...but it has definitely answered before
+    a._flapped.add("quiet-but-proven")
+
+    a._gate_flapped_paths()
+    assert "healthy" in (p.last_error or ""), (
+        f"a leg with a real answer on record was called 'no reply' over one "
+        f"missed sample: {p.last_error!r}"
+    )
+    assert "no reply" not in (p.last_error or "")
 
 
 def _gate_agent(tmp_path, names):
