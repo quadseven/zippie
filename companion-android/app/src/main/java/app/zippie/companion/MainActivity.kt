@@ -23,9 +23,19 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
 import app.zippie.companion.design.Ink
 import androidx.compose.ui.Modifier
 import androidx.compose.material3.Surface
@@ -36,6 +46,22 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+
+/**
+ * The two destinations on the shell's bottom bar, matching the Status/Relay
+ * pairing ZippieCompanionApp.swift's own TabView uses.
+ *
+ * ONLY TWO, NOT THREE. iOS also has a Probe tab - a cellular-pin egress check
+ * that opens a socket bound to the cellular network and compares its public
+ * address against the default route's. Android has no equivalent capability
+ * today; building one is new networking code, not a UI rearrangement, so it is
+ * left for its own change rather than stubbed here as a tab that does nothing.
+ *
+ * Diagnostics is not a third destination here any more than it is a third TAB
+ * on iOS - both reach it from an icon on Status, pushed over the bar rather
+ * than beside it.
+ */
+private enum class Destination { STATUS, RELAY }
 
 /**
  * The shell.
@@ -107,6 +133,7 @@ class MainActivity : ComponentActivity() {
                     // the second is a leaf; a navigation library here would be
                     // more moving parts than the thing it navigates.
                     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
+                    var destination by rememberSaveable { mutableStateOf(Destination.STATUS) }
                     var diagnostics by remember { mutableStateOf(Diagnostics()) }
                     var measuring by remember { mutableStateOf(false) }
                     val scope = rememberCoroutineScope()
@@ -146,15 +173,67 @@ class MainActivity : ComponentActivity() {
                             bootLog = bootLog,
                         )
                     } else {
-                        StatusScreen(
-                            state = state,
-                            onStartRelay = ::startContributing,
-                            onStopRelay = ::stopContributing,
-                            onStartClient = ::startClientMode,
-                            onRefresh = model::refresh,
-                            onSaveToken = model::saveAnnounceToken,
-                            onOpenDiagnostics = { showDiagnostics = true },
-                        )
+                        // Colours stated explicitly for the same reason
+                        // SectionTitle in StatusScreen.kt states them:
+                        // Material's own tab-bar defaults do not know about
+                        // `live`, the one accent this language spends on
+                        // "carrying traffic right now" - leaving them out
+                        // would give the bar its own, second opinion about
+                        // what the accent colour is.
+                        Scaffold(
+                            containerColor = Ink.ground,
+                            bottomBar = {
+                                NavigationBar(containerColor = Ink.raised) {
+                                    NavigationBarItem(
+                                        selected = destination == Destination.STATUS,
+                                        onClick = { destination = Destination.STATUS },
+                                        icon = {
+                                            Icon(Icons.Filled.CheckCircle, contentDescription = null)
+                                        },
+                                        label = { Text("Status") },
+                                        colors = NavigationBarItemDefaults.colors(
+                                            selectedIconColor = Ink.live,
+                                            selectedTextColor = Ink.live,
+                                            indicatorColor = Ink.live.copy(alpha = 0.12f),
+                                            unselectedIconColor = Ink.secondary,
+                                            unselectedTextColor = Ink.secondary,
+                                        ),
+                                    )
+                                    NavigationBarItem(
+                                        selected = destination == Destination.RELAY,
+                                        onClick = { destination = Destination.RELAY },
+                                        icon = {
+                                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null)
+                                        },
+                                        label = { Text("Relay") },
+                                        colors = NavigationBarItemDefaults.colors(
+                                            selectedIconColor = Ink.live,
+                                            selectedTextColor = Ink.live,
+                                            indicatorColor = Ink.live.copy(alpha = 0.12f),
+                                            unselectedIconColor = Ink.secondary,
+                                            unselectedTextColor = Ink.secondary,
+                                        ),
+                                    )
+                                }
+                            },
+                        ) { padding ->
+                            Box(Modifier.padding(padding)) {
+                                when (destination) {
+                                    Destination.STATUS -> StatusScreen(
+                                        state = state,
+                                        onRefresh = model::refresh,
+                                        onOpenDiagnostics = { showDiagnostics = true },
+                                    )
+                                    Destination.RELAY -> RelayScreen(
+                                        state = state,
+                                        onStartRelay = ::startContributing,
+                                        onStopRelay = ::stopContributing,
+                                        onStartClient = ::startClientMode,
+                                        onSaveToken = model::saveAnnounceToken,
+                                    )
+                                }
+                            }
+                        }
                         }
                     }
                 }
