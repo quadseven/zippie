@@ -20,6 +20,15 @@ enum class LegState {
      *  and drawing that as a failure trains the reader to ignore the one signal
      *  on this screen that matters. */
     RESERVE,
+
+    /** Configured, but nothing to bind to right now - an unplugged ethernet
+     *  cable, a station radio associated to nothing. The router's own words
+     *  for this ("no matching uplink interface", "no interface matched") are
+     *  accurate and read exactly like a fault next to a leg that actually
+     *  failed to work. It is neither: there is nothing here to be failing.
+     *  Painting an absence the same red as a real fault is how a reader
+     *  learns to stop trusting red. */
+    ABSENT,
 }
 
 /**
@@ -194,6 +203,12 @@ object BondLegs {
         // those three words would send someone looking for a fault that does not
         // exist.
         if (isReserve(p, activeTier)) return LegState.RESERVE
+        // ABSENT BEATS DOWN. A leg with no interface at all - the router's
+        // own "no matching uplink interface"/"no interface matched" for an
+        // unplugged cable or an unassociated station radio - was never going
+        // to carry anything this pass. That is an absence, not the failure
+        // of something that tried and could not (#26 follow-up).
+        if (p.state == "down" && !p.isPresent) return LegState.ABSENT
         return when (p.state) {
             "up" -> if (p.isCarrying) LegState.CARRYING else LegState.IDLE
             "degraded" -> LegState.DEGRADED
@@ -235,6 +250,13 @@ object BondLegs {
             val cap = p.maxKbps
             if (cap != null && cap > 0) why += " Capped at $cap kbit/s."
             return why
+        }
+        // ABSENT gets its own calm sentence rather than the router's raw
+        // wording ("no matching uplink interface", "no interface matched")
+        // passed straight through - accurate, and reads as a fault next to
+        // one that actually is (#26 follow-up).
+        if (p.state == "down" && !p.isPresent) {
+            return "Not connected right now - nothing to bind to."
         }
         // OUTRANKS last_error AND loss, deliberately. The router's own
         // last_error for this leg reads "no reply yet", which is true and

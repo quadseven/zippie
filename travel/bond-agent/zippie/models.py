@@ -535,6 +535,37 @@ class PathRuntime:
     # nine hours reading `degraded` - the same word used for a leg that works
     # and got worse. It had never worked at all.
     never_handshaked: bool = False
+    # CONSECUTIVE control-loop passes this leg has been held out of the bond
+    # by the anti-flap gate (agent._gate_flapped_paths) while it has NEVER
+    # once been answered (#26). Deliberately a separate counter from the
+    # gate's own `join_streak`, which the gate resets to zero on every pass
+    # this leg reads DOWN - a leg that has genuinely never been answered
+    # oscillates between DOWN and DEGRADED precisely because nothing ever
+    # round-trips to hold a state steady, so `join_streak` can sit at a low
+    # number for an entire session without ever crossing its own threshold.
+    # This counter does not reset on that oscillation, so it is the number
+    # that actually bounds how long "no reply YET" is allowed to keep saying
+    # "yet". Reset only when the leg is finally answered or the gate lets it
+    # go.
+    no_reply_probes: int = 0
+    # Wall-clock ms (time.time()*1000) of the first pass this session that
+    # counted toward no_reply_probes above. Held so the console can report
+    # elapsed time once the bound trips, rather than a bare pass count that
+    # means nothing without knowing the probe interval.
+    no_reply_since_ms: int | None = None
+    # TRUE exactly while `last_error` currently holds a message
+    # `_gate_flapped_paths` itself wrote (either wording - "healthy, held out
+    # of bond until proven" or the no-reply variant), so the re-admission
+    # branch can clear it on OWNERSHIP rather than by matching the message's
+    # text (#26 regression). A live leg sat "no reply yet - nothing is
+    # answering at this leg's address" for the rest of the process's life
+    # after it started carrying real traffic (473 MB), because the clear only
+    # matched the substring "held out of bond" - present in the healthy
+    # wording, absent from the no-reply one. Two messages written in one
+    # place and cleared by matching one of their literals breaks again the
+    # moment a third is added or one is reworded; tracking who wrote the
+    # field does not.
+    held_out_message_active: bool = False
     # HOW MANY PASSES AGO each recent weight RISE happened, one entry per rise,
     # dropped once it ages past policy.weight_rise_window_passes. The list IS the
     # rolling window: its length is the budget spent, and ageing it one step per
