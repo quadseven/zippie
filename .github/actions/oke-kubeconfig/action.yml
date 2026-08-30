@@ -1,0 +1,148 @@
+name: "OKE kubeconfig"
+description: |
+  Generate a working kubeconfig for the OKE cluster and export it as $KUBECONFIG. Replaces the retired k8s-ts path
+  (SSM admin kubeconfig + cplane-tailnet-IP server patch) — k8s-ts is destroyed
+  (#1007). The OKE apiserver is a PUBLIC endpoint, so no tailnet patch is needed.
+
+  Auth: renders ~/.oci/config + key from <ssm-prefix>/* (AWS SSM, read via the
+  infra-ssm-reader OIDC role — AWS creds must already be configured by the caller),
+  then `oci ce cluster create-kubeconfig`. The resulting kubeconfig uses an
+  `oci ce cluster generate-token` exec-credential, so the oci CLI (via uvx) MUST
+  stay invokable for every subsequent kubectl call in the job.
+
+inputs:
+  cluster-name:
+    description: "OKE cluster display name to resolve the OCID from."
+    required: false
+    default: "k8s-oke"
+  kubeconfig-path:
+    description: "Where to write the kubeconfig."
+    required: false
+    default: "/tmp/oke-kubeconfig"
+  ssm-prefix:
+    description: |
+      SSM path prefix holding the OCI API credentials - tenancy_ocid,
+      user_ocid, fingerprint, region and private_key_pem live directly
+      under it. REQUIRED and deliberately not defaulted: a default would
+      put a real parameter path in a public repository, which is the
+      whole reason this action was vendored here. Pass it from a secret.
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Render ~/.oci/config + generate OKE kubeconfig"
+      shell: bash
+      env:
+        CLUSTER_NAME: ${{ inputs.cluster-name }}
+        KCFG: ${{ inputs.kubeconfig-path }}
+        SSM_PREFIX: ${{ inputs.ssm-prefix }}
+      run: |
+        set -euo pipefail
+        # uvx (oci-cli runner) is baked into the ARC image but NOT on the
+        # persistent self-hosted runners, where this action
+        # also runs (e.g. sync.unifi-nextdns). Install uv on demand so the
+        # action is self-sufficient on any runner — else: `uvx: command not
+        # found` (exit 127), which broke the k8s-ts→k8s-oke kubeconfig step.
+        if ! command -v uvx >/dev/null 2>&1; then
+          curl -LsSf --max-time 60 --connect-timeout 10 https://astral.sh/uv/install.sh | sh >/dev/null 2>&1
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+        fi
+        mkdir -p "$HOME/.oci"; chmod 700 "$HOME/.oci"
+        # Stage OCID values in a temp dir (avoid leaking them onto the shared
+        # runner via ::add-mask:: rate-limit gaps — same pattern as
+        # check.oci-bastion-inventory.yml step 3).
+        TMP=$(mktemp -d); chmod 700 "$TMP"
+        aws ssm get-parameter --name "$SSM_PREFIX/tenancy_ocid" --with-decryption --query 'Parameter.Value' --output text > "$TMP/tenancy"
+        aws ssm get-parameter --name "$SSM_PREFIX/user_ocid" --with-decryption --query 'Parameter.Value' --output text > "$TMP/user"
+        aws ssm get-parameter --name "$SSM_PREFIX/fingerprint" --with-decryption --query 'Parameter.Value' --output text > "$TMP/fp"
+        aws ssm get-parameter --name "$SSM_PREFIX/region" --with-decryption --query 'Parameter.Value' --output text > "$TMP/region"
+        aws ssm get-parameter --name "$SSM_PREFIX/private_key_pem" --with-decryption --query 'Parameter.Value' --output text > "$HOME/.oci/oci_api_key.pem"
+        chmod 600 "$HOME/.oci/oci_api_key.pem"
+        {
+          echo "[DEFAULT]"
+          echo "user=$(cat "$TMP/user")"
+          echo "fingerprint=$(cat "$TMP/fp")"
+          echo "tenancy=$(cat "$TMP/tenancy")"
+          echo "region=$(cat "$TMP/region")"
+          echo "key_file=$HOME/.oci/oci_api_key.pem"
+        } > "$HOME/.oci/config"
+        chmod 600 "$HOME/.oci/config"
+        TENANCY=$(cat "$TMP/tenancy"); REGION=$(cat "$TMP/region")
+        rm -rf "$TMP"
+        # Resolve the cluster OCID (root compartment == tenancy OCID) + generate
+        # the kubeconfig against the PUBLIC apiserver endpoint.
+        #
+        # DO NOT FILTER ON lifecycle-state ACTIVE (infra#2505). An OKE
+        # CLUSTER_UPDATE can sit IN_PROGRESS for hours - one stuck at
+        # 2026-08-16T16:30Z with zero errors while the apiserver kept serving
+        # v1.36 perfectly - and the cluster then reports UPDATING, not ACTIVE.
+        # Filtering it out returned an empty list, which surfaced as the
+        # misleading "could not resolve OKE cluster OCID" and took down EVERY
+        # workflow that needs a kubeconfig: both reusable deploy paths,
+        # sync.k8s-manifests and sync.unifi-nextdns. The apiserver's health is
+        # independent of Oracle's control-plane METADATA, so the only states
+        # worth excluding are the ones where no apiserver exists to talk to.
+        # Keep the call's exit code and its stderr. Swallowing both with
+        # `2>/dev/null || true` would make an OCI API/auth/throttling failure
+        # indistinguishable from "no such cluster" - which is the exact class of
+        # misleading error this change exists to remove (grug-tribe, PR #2506).
+        ERRF=$(mktemp)
+        set +e
+        CLUSTER_JSON=$(uvx --from oci-cli oci ce cluster list \
+          --compartment-id "$TENANCY" --name "$CLUSTER_NAME" \
+          --query "data[?\"lifecycle-state\"!='DELETED' && \"lifecycle-state\"!='DELETING' && \"lifecycle-state\"!='FAILED'] | [0]" 2>"$ERRF")
+        LIST_RC=$?
+        set -e
+        if [ "$LIST_RC" -ne 0 ]; then
+          echo "::error::oci ce cluster list failed (rc=$LIST_RC) for name=$CLUSTER_NAME - an API, auth or network failure, NOT an absent cluster"
+          head -c 2000 "$ERRF" >&2 || true
+          rm -f "$ERRF"; exit 1
+        fi
+        rm -f "$ERRF"
+        # An empty payload past a rc=0 call is a genuine no-match. `oci --query`
+        # prints nothing when the filter matches nothing, so treat both empty
+        # and literal null the same.
+        CID=$(printf '%s' "$CLUSTER_JSON" | python3 -c 'import sys,json;d=sys.stdin.read().strip();print((json.loads(d) or {}).get("id","") if d else "")' 2>/dev/null || true)
+        STATE=$(printf '%s' "$CLUSTER_JSON" | python3 -c 'import sys,json;d=sys.stdin.read().strip();print((json.loads(d) or {}).get("lifecycle-state","") if d else "")' 2>/dev/null || true)
+        if [ -z "$CID" ] || [ "$CID" = "null" ]; then
+          echo "::error::could not resolve OKE cluster OCID for name=$CLUSTER_NAME - the lookup SUCCEEDED but matched no cluster in a usable lifecycle state (DELETED/DELETING/FAILED are excluded)"; exit 1
+        fi
+        if [ "$STATE" != "ACTIVE" ]; then
+          echo "::warning::OKE cluster $CLUSTER_NAME is in lifecycle state '$STATE', not ACTIVE. Proceeding: the apiserver is independent of Oracle's control-plane metadata. If this persists, the cluster metadata is stuck (infra#2505)."
+        fi
+        uvx --from oci-cli oci ce cluster create-kubeconfig \
+          --cluster-id "$CID" --file "$KCFG" --region "$REGION" \
+          --token-version 2.0.0 --kube-endpoint PUBLIC_ENDPOINT
+        chmod 600 "$KCFG"
+        # Injection-safe write (Datadog IaC "GitHub environment file injection"):
+        # KCFG comes from a caller input, so use a RANDOM per-write heredoc
+        # delimiter -- a fixed one could be matched by an injected value line and
+        # forge additional env vars. /proc/.../uuid is always present on Linux.
+        # 128-bit delimiter from /dev/urandom (always present on Linux; stronger
+        # + more reliable than $RANDOM, which can be 0 at shell start). A random
+        # 32-hex token cannot appear in a single-line kubeconfig path, so it is
+        # both unpredictable and collision-free.
+        _kd="OKE_KCFG_$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')"
+        # printf, not echo: a caller-supplied path like `-n`/`-e` would be
+        # eaten as an echo flag and corrupt the heredoc (CodeRabbit #1885).
+        {
+          printf '%s\n' "KUBECONFIG<<${_kd}"
+          printf '%s\n' "$KCFG"
+          printf '%s\n' "${_kd}"
+        } >> "$GITHUB_ENV"
+        # The generated kubeconfig authenticates via an exec-credential plugin
+        # (`command: oci ce cluster generate-token ...`). EVERY later kubectl
+        # call re-execs that, and the runner image has uvx but NO bare `oci` on
+        # PATH — without this shim the first real kubectl in a later step dies
+        # with "getting credentials: exec: executable oci not found". (Masked
+        # for days by the sync workflow's warn-and-skip no-ops; the first real
+        # apply exposed it.) Shim through uvx — the create-kubeconfig call above
+        # already warmed the uv cache, so the exec resolves fast.
+        SHIM_DIR="$RUNNER_TEMP/oci-shim"
+        mkdir -p "$SHIM_DIR"
+        printf '#!/bin/sh\nexec uvx --from oci-cli oci "$@"\n' > "$SHIM_DIR/oci"
+        chmod +x "$SHIM_DIR/oci"
+        echo "$SHIM_DIR" >> "$GITHUB_PATH"
+        echo "::notice::oke-kubeconfig: KUBECONFIG -> $KCFG (cluster=$CLUSTER_NAME); oci exec-credential shimmed via uvx"

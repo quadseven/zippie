@@ -381,13 +381,27 @@ jobs:
           aws-region: us-east-1
 
       - name: Generate k8s-oke kubeconfig
-        # Cross-repo composite from the private quadseven/infra repo (its
-        # Actions access level is `user`, the same mechanism macchina uses for
-        # load-ssm-secrets). Pinned to the commit that last CHANGED this
-        # action, not to a moving main.
-        uses: quadseven/infra/.github/actions/oke-kubeconfig@07cd409e6891f10ad219b725e231eaeaaf576a0b
+        # VENDORED, not cross-repo. This used to pull the composite from the
+        # private quadseven/infra repo, which worked only while THIS repo was
+        # private too: a public repo cannot resolve an action from a private
+        # one, whatever the private repo's Actions access level says. That
+        # mechanism covers private-to-private consumers only.
+        #
+        # It broke silently the moment this repo went public and stayed
+        # invisible for hours, because this job runs only on a push to main
+        # touching deploy/oke/** - every run in between skipped it and the
+        # workflow reported success for never attempting the broken thing.
+        #
+        # Vendored rather than moved to a public repo: ten workflows in the
+        # private repo share the original, and restructuring a shared action
+        # with ten consumers is a separate, larger change. See zippie#35.
+        uses: ./.github/actions/oke-kubeconfig
         with:
           cluster-name: k8s-oke
+          # The path is a SECRET, not because it is itself dangerous, but
+          # because it names the operator. A default here would have put it
+          # back into a public tree - the exact thing vendoring avoided.
+          ssm-prefix: ${{ secrets.OCI_SSM_PREFIX }}
 
       - name: Plan the targets
         id: plan
