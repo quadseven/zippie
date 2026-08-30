@@ -32,11 +32,14 @@ const expanded = new Set();
  * to look at when something does go wrong.
  */
 function worry(node) {
-  if (node.unreachable) return 0;              // cannot be seen at all
-  if (node.staleMs > STALE_AFTER_MS) return 1; // reporting stopped
-  if (node.carrying === 0) return 2;           // present and carrying nothing
-  if (node.degraded) return 8;                 // holding on - notable, not urgent
-  return 9;                                    // fine, and quiet about it
+  // configError sorts with unreachable, not above it: both mean "this row has
+  // nothing carrying", and the reader needs to see the row before the reason.
+  if (node.configError) return 0;               // the hub never asked - its own bug
+  if (node.unreachable) return 0;               // cannot be seen at all
+  if (node.staleMs > STALE_AFTER_MS) return 1;  // reporting stopped
+  if (node.carrying === 0) return 2;            // present and carrying nothing
+  if (node.degraded) return 8;                  // holding on - notable, not urgent
+  return 9;                                     // fine, and quiet about it
 }
 
 /** What the headline counts. Deliberately narrower than the sort order. */
@@ -45,6 +48,10 @@ const NEEDS_ATTENTION = 3;
 function node_bad(n) { return worry(n) < NEEDS_ATTENTION; }
 
 function stateWord(node) {
+  // #17: a bad hub config and a genuinely dead router used to read as the
+  // identical "not answering" banner. This is a claim about THE HUB, not the
+  // router, so it gets its own word rather than borrowing the router's.
+  if (node.configError) return 'hub misconfigured';
   if (node.unreachable) return 'not answering';
   if (node.staleMs > STALE_AFTER_MS) return 'stopped reporting';
   if (node.carrying === 0) return 'carrying nothing';

@@ -29,7 +29,7 @@ describe are the code and comments in this tree.
 - [Keeping the router alive](#keeping-the-router-alive) - D18 to D22
 - [Phones as infrastructure](#phones-as-infrastructure) - D23 to D27
 - [Telling the truth](#telling-the-truth) - D28 to D31
-- [Boundaries](#boundaries) - D32 to D34
+- [Boundaries](#boundaries) - D32 to D35
 
 ---
 
@@ -1406,6 +1406,91 @@ deploy drops the wifi, which drops the bond, which drops the connection the
 deploy runs over - the exact self-severing shape of D21. A test asserts the
 script contains no reload, because that is the line most likely to be added later
 by someone trying to be helpful.
+
+---
+
+### D35. Learn the router's address rather than commit it, and tell "never answered" apart from "never asked"
+
+**2026-08-30.** Evidence: `hub/hub.py` (`expand_env_refs`, `router_config_error`,
+`METRIC_CONFIG_ERROR`), `deploy/oke/zippie-hub/zippie-hub.yaml`,
+`deploy/oke/tests/test_zippie_hub_router_address.py`. quadseven/zippie#17.
+
+**What went wrong.** `zippie-hub.yaml` shipped `"status_url":
+"http://192.0.2.30:8787/api/status"`. 192.0.2.0/24 is RFC 5737 documentation
+space, guaranteed by standard to never answer. Every poll the hub made timed
+out, and /api/nodes correctly - and uselessly - read "not answering / never"
+forever. The router was fine the whole time: the companion app, reading the
+router's own console directly, showed the bond up and carrying hundreds of
+megabytes. This is the **third** time a scrub has left a reserved-range
+placeholder where a real runtime value belonged. The first two are recorded in
+`scripts/deploy-openwrt.sh` and AGENTS.md rather than here, because they landed
+on the router's own config rather than the hub's: on 2026-08-29
+`server_public_key` reached the router as the literal `<server-public-key>`
+and `wg setconf` rejected it, and the fix for that one field found the same bug
+armed one field over - `endpoint = "dns-e.example-home.invalid"`, RFC
+2606 space that can never resolve, which would have killed the bond the moment
+the router left the house.
+
+**Two separate faults, and both had to be fixed.**
+
+**First: the value was committed at all.** The router is portable - its
+address changes every time it moves - so any literal in this manifest is wrong
+the moment it ships, independent of which literal it is. Replacing 192.0.2.30
+with a real-looking address would only delay the next occurrence: the value
+would still need scrubbing before every commit, which is the exact step that
+produced this incident. **Chosen:** learn it instead. hub.py's own
+design already states the source - "a router sits on the tailnet at a known
+name" - which is also how the operator already reaches the router by hand
+(docs/tailnet-home.md). `status_url` now carries `${TRAVEL_ROUTER_HOST}`,
+expanded from an environment variable sourced from a Secret this repo does not
+define, mirroring `ZIPPIE_HUB_TOKEN`. DNS resolves fresh on every poll, so the
+router moving networks costs nothing here.
+
+Two alternatives were considered and set aside. Querying Datadog for the
+router's last-reported address would add a network dependency, and a runtime
+one, to the one component whose whole design is stdlib-only so it can keep
+answering when everything it monitors is broken (see the APM section of
+hub.py) - and it would depend on the very telemetry pipeline that rides the
+bond, which is unavailable in exactly the scenario being diagnosed. Having the
+router *push* its address, the way a phone announces a leg, would abandon
+"polled, not pushed, for routers" - a deliberate distinction in hub.py's own
+docstring, because a router is a place that answers, not a person that moves
+and reports from outside any network zippie controls.
+
+**Second, and the more important one: a bad address and a dead router produced
+the identical signal.** Even a learned address can be wrong - an unset Secret,
+a typo, a scrub of the new mechanism itself - and the hub had no way to say so.
+`reachable` (D30) answers "did anything answer at the router's address", but a
+reserved or unresolved address and a genuinely islanded router both produce a
+timeout; `reachable=0` either way. **Chosen:** check the configuration itself,
+before any network attempt. `router_config_error` screens the expanded
+`status_url` against the same RFC 5737 / 2606 / 3849 values
+`scripts/deploy-openwrt.sh` already refuses on the router's side - the
+identical principle, applied to the hub's own config, reusing the boundary
+rather than re-deriving it. A router that fails this check is never dialled -
+there is nothing to learn from a doomed request - and is reported through a
+distinct field everywhere a poll outcome surfaces: the Registry
+(`reachable`/`config_error`, appended to `router_sample`'s existing return
+rather than replacing it), `/api/nodes` (`configError`, rendered as "hub
+misconfigured" rather than the router's "not answering"), `/api/status` (a 500
+naming the hub's own fault, not the router's 502), and a fourth Datadog gauge,
+`custom.zippie.hub.router.config_error`, beside the three D30 added - explicit
+and always emitted, same rule.
+
+**A smaller thing fixed on the same path.** `/api/status`'s cache meta carried
+`age_ms` and `checked_at_ms` but no field a consumer could read directly for
+"has this actually answered" or "is this too old to trust" - both had to be
+derived by comparing two numbers, and the `reachable` bit computed in
+`fetch_router_status` was thrown away before it reached anything but Datadog.
+Named fields (`reachable`, `stale`, `fetched_at`) now carry both, alongside the
+numeric ones for whatever already reads them.
+
+**And staleMs stopped lying by omission.** An unreachable router's age used to
+read `null` - "never" - regardless of how many cycles the poller had actually
+run against it. A router the hub has been checking every five seconds for an
+hour and one that has genuinely never been polled read identically. staleMs is
+now computed from the poller's last touch whenever one has happened; "never" is
+reserved for the one case it is literally true.
 
 ---
 
