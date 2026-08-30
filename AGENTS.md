@@ -20,7 +20,7 @@ deploy has the shape it does, and why the rules below are not ceremony.
 
 ## Before you touch anything under `travel/`
 
-**Merging to `main` deploys to a live router.** `deploy.suzu.yml` triggers on
+**Merging to `main` deploys to a live router.** `deploy.travel-router.yml` triggers on
 `travel/**` and `scripts/deploy-openwrt.sh`. There is no staging device. If the
 operator is travelling, they are travelling on the thing you just changed.
 
@@ -105,7 +105,7 @@ No real hostnames, addresses, SSIDs or personal identifiers - not in code, not
 in comments, not in fixtures.
 
 One filename still carries a host name deliberately: renaming
-`deploy.suzu.yml` requires renaming two repository secrets and an SSM path in
+`deploy.travel-router.yml` requires renaming two repository secrets and an SSM path in
 the same change, and getting that wrong breaks the only remote deploy path to
 a router that may be in another state. It waits for a window where someone can
 watch a deploy round-trip.

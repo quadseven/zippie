@@ -181,7 +181,7 @@ PY
 # 192.0.2.0/24. `.invalid` is a reserved TLD that can never resolve (RFC 2606)
 # and 192.0.2.0/24 is documentation space (RFC 5737) - so a deploy would have
 # pointed the bond at a name with no answer. Identical outage, different field,
-# and `deploy.suzu.yml` runs this on every push to main that touches travel/.
+# and `deploy.travel-router.yml` runs this on every push to main that touches travel/.
 #
 # The previous guard could not have caught it, because it looked for the SHAPE
 # of one placeholder - `= "<...>"` - and `"dns-e.example-home.invalid"` is not
