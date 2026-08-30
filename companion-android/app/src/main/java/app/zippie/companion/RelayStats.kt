@@ -105,6 +105,22 @@ data class RelayStats(
         get() = RelayVerdict.evaluate(RelayReport(this, System.currentTimeMillis())).detail()
 
     /**
+     * What this run has actually relayed, both directions summed.
+     *
+     * THIS PHONE'S OWN COUNTERS, which the router cannot report - matching
+     * BondModel.swift's `BudgetSummary.usedBytes`. It is deliberately not
+     * [dayUsedBytes] or [monthUsedBytes]: those persist across restarts of the
+     * relay and answer "how much of the cap is spent", where this answers "how
+     * much has THIS run of the app carried" - the "Session total" line on the
+     * Status screen. The caller is responsible for suppressing it while the
+     * report is stale, the same way the byte counts above it already are: a
+     * stopped relay's last count sitting under a live leg table would read as
+     * current spending, and it is not.
+     */
+    val sessionBytes: Long
+        get() = (upBytes + downBytes).coerceAtLeast(0)
+
+    /**
      * Whether Android is about to make a liar of everything above.
      *
      * DELIBERATELY NOT A [RelayVerdict] CASE. The verdict says what the relay

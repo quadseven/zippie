@@ -288,6 +288,68 @@ object BondLegs {
         return if (carrying == 1) "1 connection" else "$carrying connections"
     }
 
+    /**
+     * The heading above the connection rows.
+     *
+     * MUST TELL THE TRUTH ABOUT SCOPE, matching BondModel.swift's
+     * `legsHeading`. When the router answers, these rows are the whole bond;
+     * when it does not, the only row on screen is [thisPhoneFallback] and a
+     * fixed "Connections" heading would claim a count nobody measured.
+     *
+     * "one out of two" was literally the question on the iOS screen this was
+     * ported from - answered here rather than left for someone to count rows.
+     */
+    fun legsHeading(rows: List<Leg>, bondReachable: Boolean): String {
+        if (!bondReachable) return "What this phone carried"
+        val carrying = rows.count { it.isCarrying }
+        return "Connections - $carrying of ${rows.size} carrying"
+    }
+
+    /**
+     * The one row this phone can vouch for on its own, when the router's
+     * console cannot be reached from here.
+     *
+     * Ported from BondModel.swift's `rebuild()` fallback: with no console,
+     * only THIS phone's own relay counters are knowable, so the screen shows
+     * one honest row rather than inventing siblings it cannot see. An
+     * invented leg would be exactly the fabrication `tokens.json` calls
+     * `neverStateUnmeasured`.
+     *
+     * NO REPORT AT ALL - or a report older than [RelayReport.STALENESS_MS] -
+     * draws NO ROW, matching the iOS twin: a stale relay report says nothing
+     * has reported currently, and drawing a row from a corpse's counters
+     * would present a stopped relay's last count as current.
+     *
+     * The state comes from [WidgetContent.toneOf], the same judgement the
+     * home-screen widget uses, so this row and the widget's leg list cannot
+     * disagree about what "carrying" means for a single phone.
+     */
+    fun thisPhoneFallback(report: RelayReport?, nowMs: Long): List<Leg> {
+        if (report == null || report.isStale(nowMs)) return emptyList()
+        val verdict = RelayVerdict.evaluate(report, nowMs)
+        val state = when (WidgetContent.toneOf(verdict)) {
+            WidgetContent.Tone.LIVE -> LegState.CARRYING
+            WidgetContent.Tone.DOWN -> LegState.DOWN
+            WidgetContent.Tone.IDLE -> LegState.IDLE
+        }
+        val stats = report.stats
+        return listOf(
+            Leg(
+                id = "this-phone",
+                name = "This phone",
+                state = state,
+                stateWord = if (state == LegState.CARRYING) "carrying" else "not carrying",
+                upBytes = stats.upBytes,
+                downBytes = stats.downBytes,
+                rttMs = null,
+                isYou = false,
+                note = stats.budgetExhausted ?: stats.lastError,
+                usageNote = null,
+                isCarrying = state == LegState.CARRYING,
+            ),
+        )
+    }
+
     fun subhead(rows: List<Leg>): String {
         val carrying = rows.filter { it.isCarrying }
         if (carrying.isEmpty()) {

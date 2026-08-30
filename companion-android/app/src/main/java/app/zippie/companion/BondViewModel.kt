@@ -57,6 +57,15 @@ data class BondUiState(
      */
     val throughput: BondThroughput.Chart = BondThroughput.Chart.EMPTY,
     val nowMs: Long = System.currentTimeMillis(),
+    /** Whether [legs] describes the WHOLE bond (the router answered) or only
+     *  what this phone can see on its own. Drives [legsHeading] and matches
+     *  BondModel.swift's `bond != nil` - a heading that claimed a bond-wide
+     *  count while showing a single fallback row would be wrong in the
+     *  flattering direction. */
+    val bondReachable: Boolean = false,
+    /** The heading above the connection rows, pre-computed by [BondLegs] so
+     *  the screen never has to guess at scope on its own. */
+    val legsHeading: String = "What this phone carried",
 )
 
 class BondViewModel(app: Application) : AndroidViewModel(app) {
@@ -136,6 +145,8 @@ class BondViewModel(app: Application) : AndroidViewModel(app) {
                         legs = rows,
                         headline = BondLegs.headline(rows),
                         subhead = BondLegs.subhead(rows),
+                        bondReachable = true,
+                        legsHeading = BondLegs.legsHeading(rows, bondReachable = true),
                         datapath = status.datapath,
                         pathsMissing = status.paths == null,
                         consoleError = null,
@@ -163,11 +174,23 @@ class BondViewModel(app: Application) : AndroidViewModel(app) {
                     // does not claim to be current, and the outage draws itself
                     // as the break in the bars it really is once the router
                     // answers again.
+                    //
+                    // THE ONE ROW THIS PHONE CAN STILL VOUCH FOR, matching
+                    // BondModel.swift's fallback: no console does not mean no
+                    // information, it means the only information left is this
+                    // phone's own relay counters. Built from whatever
+                    // [RelayReport] the OTHER collector in `init` has already
+                    // published - never re-fetched here, so this branch cannot
+                    // disagree with the "This phone" section on the Relay tab
+                    // about what the relay is doing.
+                    val fallback = BondLegs.thisPhoneFallback(_state.value.relay, now)
                     _state.value = _state.value.copy(
                         decision = ModeDecision(proximity),
-                        legs = emptyList(),
+                        legs = fallback,
                         headline = "The router is not answering",
                         subhead = "Nothing on this screen can be trusted to be current.",
+                        bondReachable = false,
+                        legsHeading = BondLegs.legsHeading(fallback, bondReachable = false),
                         datapath = null,
                         pathsMissing = false,
                         consoleError = result.message,
