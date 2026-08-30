@@ -73,8 +73,15 @@ def refresh_budget(path: PathRuntime) -> None:
 
 
 def cost_rank(path: PathRuntime) -> int:
-    """Effective cost rank; over soft monthly limit bumps metered paths toward expensive."""
-    base = COST_RANK.get(path.config.cost_class, 3)
+    """Effective cost rank; over soft monthly limit bumps metered paths toward expensive.
+
+    Reads `effective_cost_class`, not `config.cost_class` directly (#25): a
+    repeater leg on a known-free network derives `free` from the live SSID,
+    and this is the single chokepoint every weighting decision routes
+    through, so deriving it here is what makes the bond actually prefer the
+    leg it should, rather than only changing what the console displays.
+    """
+    base = COST_RANK.get(path.effective_cost_class, 3)
     if path.over_soft_limit:
         # Still usable, but prefer any not-over-limit peer first
         base = max(base, COST_RANK[CostClass.EXPENSIVE])
@@ -356,7 +363,7 @@ def free_leg_is_carrying(paths: list[PathRuntime]) -> bool:
       #278 was precisely a leg with healthy tx and rx pinned at zero.
     """
     for p in paths:
-        if COST_RANK.get(p.config.cost_class, 3) != COST_RANK[CostClass.FREE]:
+        if COST_RANK.get(p.effective_cost_class, 3) != COST_RANK[CostClass.FREE]:
             continue
         if p.state is not PathState.UP:
             continue
