@@ -61,6 +61,19 @@ def _cost_class(value: str | None) -> CostClass:
     return CostClass(raw)
 
 
+def _free_ssids(raw: Any) -> list[str]:
+    """PathConfig.free_ssids (#25): a small, operator-typed allowlist.
+
+    Tolerant of a hand-edited file the same way _lan_endpoints is: a stray
+    non-string entry or the wrong type entirely must degrade to "this leg
+    derives nothing automatically" rather than take the agent down over a
+    typo in a list of SSIDs.
+    """
+    if not isinstance(raw, list):
+        return []
+    return [str(s) for s in raw if isinstance(s, str) and s]
+
+
 def _match(raw: dict[str, Any]) -> PathMatch:
     return PathMatch(
         type=str(raw.get("type", "interface")),
@@ -276,6 +289,7 @@ def parse_config(data: dict[str, Any], *, private_key: str = "", public_key: str
                 # at all. Unit-tested in isolation, never connected end to end.
                 tier=int(raw.get("tier", 1)),
                 label=str(raw.get("label", "")),
+                free_ssids=_free_ssids(raw.get("free_ssids")),
             )
         )
 

@@ -169,6 +169,7 @@ def test_append_happens_once_per_control_loop_pass(monkeypatch):
         "roll_usage_period",
         "match_interfaces",
         "apply_auto_labels",
+        "apply_auto_cost_class",
         "ensure_tunnels",
         "probe_paths",
         "apply_policy",
