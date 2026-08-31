@@ -94,7 +94,8 @@ REQUIRED_PKGS="${REQUIRED_PKGS:-python3-pynacl curl tailscale}"
 # explicit act - see docs/coldboot-testing.md.
 HELPER_SCRIPTS=(watchdog.sh lan-guard.sh lan-health.sh config-snapshot.sh
                 failsafe-rollback.sh m2000-join.sh carrying.sh
-                autotest.sh autotest-arm.sh coldboot-trace.sh drift-check.sh)
+                autotest.sh autotest-arm.sh coldboot-trace.sh drift-check.sh
+                muster-refresh.sh)
 
 # md5 is spelled differently on macOS and Linux, and this script is run from
 # both a laptop and a CI runner.
@@ -1023,16 +1024,69 @@ say "installing cron entries"
 # than the top of an hour, so it does not queue behind every other cron on the
 # box. #232: it was shipped by #200 for #187 and never scheduled at all, so it
 # had never run once.
-ssh_run "crontab -l 2>/dev/null | grep -vE 'zippie/(watchdog|lan-guard|drift-check)\.sh' > /tmp/ct.base || true
+# muster-refresh.sh is HOURLY, at :23. Hourly because the thing it collects is a
+# key the far end can rotate, and a router that learns about a rotation a day
+# late is a router that spends a day unable to talk to home. :23 because every
+# other recurring job on this box fires at :00, and this one makes two network
+# requests over what is often a metered phone leg.
+#
+# IT IS SAFE TO RUN WHEN muster IS UNREACHABLE, which is the common case for a
+# travel router - musterwrt keeps the cached key on every failing path and the
+# wrapper logs rather than alarms. See travel/gl-mt3000/muster-refresh.sh.
+ssh_run "crontab -l 2>/dev/null | grep -vE 'zippie/(watchdog|lan-guard|drift-check|muster-refresh)\.sh' > /tmp/ct.base || true
          { cat /tmp/ct.base; echo '* * * * * /etc/zippie/watchdog.sh >/dev/null 2>&1 # zippie-watchdog'
            echo '*/2 * * * * /etc/zippie/lan-guard.sh'
-           echo '17 4 * * * /etc/zippie/drift-check.sh >/dev/null 2>&1 # zippie-drift'; } | grep -v '^\$' > /tmp/ct.new
+           echo '17 4 * * * /etc/zippie/drift-check.sh >/dev/null 2>&1 # zippie-drift'
+           echo '23 * * * * /etc/zippie/muster-refresh.sh >/dev/null 2>&1 # zippie-muster'; } | grep -v '^\$' > /tmp/ct.new
          crontab /tmp/ct.new; rm -f /tmp/ct.base /tmp/ct.new"
-for entry in watchdog lan-guard drift-check; do
+for entry in watchdog lan-guard drift-check muster-refresh; do
   ssh_run "crontab -l 2>/dev/null | grep -q 'zippie/${entry}.sh'" \
     || die "cron entry for ${entry} did not stick"
   echo "  cron ${entry}: present"
 done
+
+# THE SAME LESSON THE DRIFT CHECK TAUGHT, APPLIED BEFORE IT IS RE-LEARNED.
+#
+# The block below this one exists because drift-check.sh was shipped, scheduled,
+# read back as present, and was DEAD ON ARRIVAL for months - the cron loop above
+# cannot tell a job that runs from a job that exits on its first line. So
+# muster-refresh.sh is RUN ONCE HERE, at the one moment a human is watching, and
+# what it wrote is read back.
+#
+# NOT FATAL ON ANY OUTCOME, and that is deliberate rather than lazy. This script
+# is a refresher, never a precondition: the agent does not import it, does not
+# wait for it, and starts from the cached key in keys.json. Failing a deploy
+# because muster is behind a captive portal would make a Cloudflare incident
+# able to stop a router being fixed - the exact coupling musterwrt.py refuses to
+# create. What matters is that the operator SEES it now rather than discovering
+# it in ninety days when a certificate lapses.
+say "proving muster-refresh.sh can actually run"
+muster_before=$(ssh_run "wc -c < /etc/zippie/state/muster-refresh.log 2>/dev/null || echo 0")
+muster_rc=0
+ssh_run "/etc/zippie/muster-refresh.sh" >/dev/null 2>&1 || muster_rc=$?
+muster_after=$(ssh_run "wc -c < /etc/zippie/state/muster-refresh.log 2>/dev/null || echo 0")
+muster_said=$(ssh_run "tail -1 /etc/zippie/state/muster-refresh.log 2>/dev/null" || true)
+if ssh_run "[ -f /etc/zippie/muster/device.crt ]"; then
+  if [[ "${muster_after}" -gt "${muster_before}" ]]; then
+    echo "  muster-refresh: ran (exit ${muster_rc}) - ${muster_said}"
+    [[ "${muster_rc}" -eq 2 ]] && echo "
+   NOTE: exit 2 means muster ANSWERED and the answer was refused. The cached key
+   is untouched and the bond is unaffected, but a rotation you believe happened
+   has not. Read the line above before travelling."
+  else
+    echo "
+   WARNING: muster-refresh.sh wrote nothing to its log. It is scheduled and it
+   is on disk, and it is doing nothing - which is indistinguishable from working
+   until a certificate expires. Run it by hand:
+     ssh root@${HOST} 'sh -x /etc/zippie/muster-refresh.sh'"
+  fi
+else
+  # Enrollment is a one-time act with a human in it (muster has no unattended
+  # issuance), so a router that has not been enrolled is a normal state to
+  # deploy to, not a defect. Say what it means rather than warning about it.
+  echo "  muster-refresh: installed and scheduled; this router is not enrolled yet,
+    so it will exit immediately every hour until it is. See docs/adr/0023."
+fi
 
 # THE FOURTH THING THAT SILENCES THE DRIFT CHECK, after the three #232 fixed.
 #
