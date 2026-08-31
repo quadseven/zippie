@@ -293,6 +293,33 @@ def datapath_keys(files: dict[str, str]) -> dict[str, str]:
 # ---------------------------------------------------------------- the cache
 
 
+class NotYet(Unreachable):
+    """muster answered, and the answer is "ask again later".
+
+    A SUBCLASS OF Unreachable, DELIBERATELY. Every existing caller catches
+    Unreachable and responds by keeping what it has and staying quiet, which is
+    exactly right for this too - a renewal attempted before muster's own
+    `renew_after` is a normal hourly no-op, not an incident. The subclass exists
+    so the renewal path can say WHICH kind of nothing happened, without any
+    other caller having to learn a new exception.
+    """
+
+
+class Revoked(Refused):
+    """muster says this device is no longer one of ours.
+
+    A SUBCLASS OF Refused, so it is LOUD. Before this existed a 403 came back
+    through `_post` as `Unreachable` and was logged at the same volume as a
+    hotel captive portal - so the one answer that means "an administrator
+    deliberately cut this device off" was the one nobody would see.
+
+    IT IS NOT AN INSTRUCTION TO DELETE ANYTHING. The cached datapath key stays
+    exactly where it is. Revocation stops the next delivery; retracting the last
+    one is a rotation at the far end, and a router that wiped its own key on a
+    403 would island itself the moment somebody revoked the wrong key_id.
+    """
+
+
 def _digest(value: str) -> str:
     """A name for a key that is not the key.
 
@@ -510,6 +537,19 @@ def _post(url: str, payload: dict, timeout: float = 20.0) -> dict:
                 f"muster cannot say what this device should be yet ({detail}). "
                 "The cached key is unaffected and stays in force."
             ) from status
+        if status.code == 403:
+            raise Revoked(
+                f"muster refuses this device ({detail}). An administrator has "
+                "revoked it. Nothing on this router has been changed - the "
+                "cached datapath key is still in force and the bond is "
+                "unaffected."
+            ) from status
+        if status.code == 409:
+            # ASK AGAIN LATER, and both things that answer 409 mean that. A
+            # renewal before muster's own `renew_after` is one; a nonce that
+            # another request already spent is the other. Neither is a fault and
+            # neither is fixed by doing anything differently.
+            raise NotYet(f"not yet ({detail})") from status
         raise Unreachable(f"muster answered {status.code}: {detail}") from status
     except (urllib.error.URLError, OSError, ValueError) as down:
         raise Unreachable(f"muster could not be reached: {down}") from down
@@ -607,24 +647,24 @@ def refresh(
 # ---------------------------------------------------------------------------
 # WHEN A HUMAN MUST ENROLL THIS ROUTER AGAIN
 #
-# muster HAS NO UNATTENDED RENEWAL ROUTE, and that is the fact everything below
-# is shaped by - tracked as muster#10. Checked against the server 2026-08-30: the
-# only way to a certificate is POST /v1/enroll/requests, which requires a pairing
-# code an administrator minted - vouched at the console, or self-vouched by QR. A
-# device holding a perfectly valid certificate cannot trade it for a fresh one.
+# THIS IS NOW AN ALARM THAT RENEWAL IS NOT WORKING, and it used to be the whole
+# mechanism. When it was written muster had no unattended renewal route at all,
+# so the only thing this router could do about an expiring certificate was tell
+# a person to enroll it again by hand. muster#10 shipped that route and `renew`
+# below uses it, so the ordinary path has no human in it.
 #
-# So there is no "renewal" to wire into a lifecycle here. What this router can
-# do - and what a device whose only uplink depends on its own identity had
-# better do - is NOTICE, early and out loud, that a person needs to enroll it
-# again, while it still has a working certificate to say so with.
+# THE THRESHOLDS ARE UNCHANGED AND THAT IS THE POINT. muster renews at a third
+# of certificate life - day 30 of 90, with 60 days still on the clock - so a
+# healthy router NEVER reaches 45 days remaining. Arriving here at all now means
+# renewal has been failing for a fortnight: an expired identity, a revocation, a
+# router that has been off the network, or a bug. The number that was a polite
+# reminder is now a symptom, and it needed no adjustment to become one.
 #
-# THESE THRESHOLDS ARE THE ROUTER'S, NOT muster's, and they are deliberately not
-# muster's `renew_after`. That value answers "when may a machine start trying",
-# which is a question with no answer here. This one answers "how long does a
-# PERSON have", and a person needs more warning than a retry loop does. It is
-# also why nothing recomputes muster's fraction: `api.py` says a second copy of
-# that arithmetic is a second definition of when a device renews, and this is
-# not a second copy - it is a different question with its own number.
+# THEY ARE STILL THE ROUTER'S NUMBERS, NOT muster's `renew_after`, and nothing
+# here recomputes muster's fraction. `api.py` is right that a second copy of that
+# arithmetic is a second definition of when a device renews - and this is not a
+# second copy, it is a different question: not "when may I start trying" but
+# "how long before somebody has to look at this".
 ATTENTION_DAYS = 45
 URGENT_DAYS = 14
 
@@ -686,21 +726,130 @@ def enrollment_verdict(certificate_pem: str, now: float | None = None) -> tuple[
             "urgent",
             (
                 f"the muster certificate EXPIRED {-left}d ago. Refreshes have stopped; "
-                "the cached key still works and the bond is unaffected. muster has no "
-                "unattended renewal, so this needs a pairing code and a person."
+                "the cached key still works and the bond is unaffected. An expired "
+                "certificate cannot renew itself - there is no proof left to offer - "
+                "so this one needs a pairing code and a person."
             ),
         )
     if left <= URGENT_DAYS:
         return (
             "urgent",
             (
-                f"the muster certificate expires in {left}d and only a person can "
-                "replace it (enroll again with a pairing code)."
+                f"the muster certificate expires in {left}d and automatic renewal has "
+                "not managed it. Check the refresh log for a revocation or a repeated "
+                "refusal; below zero days only a person can fix it."
             ),
         )
     if left <= ATTENTION_DAYS:
         return (
             "attention",
-            f"the muster certificate expires in {left}d - enroll again when convenient.",
+            (
+                f"the muster certificate expires in {left}d. muster renews at 60 days "
+                "remaining, so renewal has been failing for about a fortnight - the "
+                "refresh log says why."
+            ),
         )
     return ("ok", f"certificate good for {left}d")
+
+
+def _public_key_of_certificate(certificate_pem: str) -> bytes:
+    return _openssl(["x509", "-noout", "-pubkey"], certificate_pem.encode()).strip()
+
+
+def _public_key_of_private(key_path: Path) -> bytes:
+    return _openssl(["pkey", "-in", str(key_path), "-pubout"]).strip()
+
+
+def renew(base_url: str, key_path: Path, certificate_path: Path) -> str:
+    """Ask muster for a fresh certificate over the one this router already has.
+
+    THE ROUTER DOES NOT DECIDE WHEN. It asks; muster answers 409 if it is too
+    early. That is not laziness - it is the same rule this module follows about
+    the datapath key. `renew_after` is computed by `ca.Identity` from a
+    certificate's own dates, and a second copy of that arithmetic out here would
+    be a second definition of when a device renews, on the one machine in the
+    estate whose clock can be 1970 at boot. Asking costs one request a day.
+
+    THE KEY NEVER CHANGES. The CSR is generated from the private key already at
+    `key_path`, so this is renewal and not rotation - a new key would be a new
+    key_id, which is what every policy scope on the server is filed under, and
+    muster refuses it anyway (403). The device would also have thrown away the
+    only credential it can prove itself with, on a router nobody can reach.
+
+    Returns a one-line human summary. Raises NotYet (quiet, normal), Revoked
+    (loud), Refused, or Unreachable - and in EVERY failing case the certificate
+    on disk is untouched, which is the property that matters: a router whose
+    identity file was replaced by something unusable cannot ask for another one.
+    """
+    certificate_pem = certificate_path.read_text(encoding="utf-8")
+    base = base_url.rstrip("/")
+
+    # NO -nodes, NO -newkey. `req -new -key` signs a request FOR AN EXISTING
+    # key and generates nothing; `-newkey` would silently overwrite the identity
+    # this router proves itself with, and the failure would land on a box in
+    # another state with no way back.
+    csr = _openssl(
+        ["req", "-new", "-key", str(key_path), "-subj", "/CN=travel-router"]
+    ).decode()
+
+    challenge = _post(f"{base}/v1/auth/challenge", {})
+    nonce = challenge.get("nonce", "")
+    if not nonce:
+        raise Unreachable("muster issued no nonce")
+    answer = _post(
+        f"{base}/v1/device/renew",
+        {
+            "nonce": nonce,
+            "signature_b64": sign_nonce(nonce, key_path),
+            "certificate_pem": certificate_pem,
+            "csr_pem": csr,
+        },
+    )
+
+    fresh = answer.get("certificate_pem", "")
+    if not isinstance(fresh, str) or "BEGIN CERTIFICATE" not in fresh:
+        raise Refused("muster's renewal answer carried no certificate")
+
+    # THE CHECK THAT EARNS THIS FUNCTION. Installing a certificate that does not
+    # match the private key on this box would leave a router that cannot prove
+    # itself to anything - and it could not renew its way out, because renewing
+    # requires the proof it just lost. Recovery is physical, which this project
+    # has already paid for once. So the bytes are verified against the key
+    # BEFORE the working certificate is replaced, using the only two openssl
+    # subcommands that can answer it.
+    try:
+        theirs = _public_key_of_certificate(fresh)
+        ours = _public_key_of_private(key_path)
+    except Unreachable as unusable:
+        raise Refused(
+            f"could not check muster's new certificate against this router's key "
+            f"({unusable}). The existing certificate is untouched."
+        ) from unusable
+    if theirs != ours:
+        raise Refused(
+            "muster returned a certificate for a DIFFERENT key. Not installed - "
+            "the existing certificate is untouched and still works."
+        )
+
+    # Atomic, same directory, same mode as the file it replaces. A half-written
+    # certificate is the same dead router as a wrong one.
+    certificate_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(certificate_path.parent), prefix=".device.crt.")
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(fresh)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, certificate_path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+    return (
+        f"renewed (expires {answer.get('not_after', '?')}, "
+        f"renew again after {answer.get('renew_after', '?')}) -> {certificate_path}"
+    )
