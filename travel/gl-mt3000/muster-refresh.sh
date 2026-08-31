@@ -30,6 +30,7 @@ IDENT="${MUSTER_IDENTITY_DIR:-$PERSIST/muster}"
 KEYS="${ZIPPIE_KEYS:-$PERSIST/keys.json}"
 LOG="$STATE/muster-refresh.log"
 TOLD="$STATE/muster-cert-warned"
+TRIED="$STATE/muster-renew-tried"
 
 # NOT IN THE REPO, DELIBERATELY. This is a public repository and muster's own
 # guard exists because a scrub found the operator's domain in 42 places. The
@@ -74,13 +75,13 @@ if [ ! -f "$IDENT/device.key" ] || [ ! -f "$IDENT/device.crt" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 1. Does a person need to enroll this router again?
+# 1. Is renewal working?
 #
-# muster HAS NO UNATTENDED RENEWAL. A certificate is only ever issued against a
-# pairing code an administrator minted, so there is no machine path from "about
-# to expire" to "renewed" - checked against the server 2026-08-30. This warning
-# is therefore not a prelude to an automatic retry; it IS the mechanism, and if
-# it does not reach somebody the refresh channel simply stops one day.
+# THIS WAS THE MECHANISM AND IS NOW THE ALARM. When it was written muster had no
+# unattended renewal, so warning a person was the only thing this router could
+# do about an expiring certificate. Step 2 below renews automatically now, and
+# muster does it at 60 days remaining - so a healthy router NEVER reaches the 45
+# day threshold. Getting here means renewal has been failing for a fortnight.
 verdict=$(PYTHONPATH="$(dirname "$PKG")" python3 -c "
 import sys
 from zippie import musterwrt
@@ -111,11 +112,11 @@ case "$severity" in
         # ONCE A DAY, NOT ONCE AN HOUR. Twenty-four identical events a day for
         # forty-five days is 1080 events that train an operator to mute the
         # aggregation key this depends on.
-        today=$(date -u +%F)
-        if [ "$(cat "$TOLD" 2>/dev/null)" != "$today" ]; then
+        warned_today=$(date -u +%F)
+        if [ "$(cat "$TOLD" 2>/dev/null)" != "$warned_today" ]; then
             [ "$severity" = "urgent" ] && kind=error || kind=warning
             dd_event "zippie: the travel router needs enrolling again" "$message" "$kind"
-            echo "$today" > "$TOLD"
+            echo "$warned_today" > "$TOLD"
         fi
         ;;
     *)
@@ -127,7 +128,78 @@ case "$severity" in
 esac
 
 # ---------------------------------------------------------------------------
-# 2. The refresh itself.
+# 2. Renew the certificate, if muster thinks it is time.
+#
+# THE ROUTER DOES NOT DECIDE WHEN. It asks once a day and muster answers 409 if
+# it is too early. Keeping the schedule on the server is the same rule this
+# whole channel follows about the key: `renew_after` is computed from a
+# certificate's own dates by `ca.Identity`, and a second copy of that arithmetic
+# out here would be a second definition of when a device renews - on the one
+# machine in the estate whose clock can read 1970 at boot.
+#
+# ONCE A DAY, NOT ONCE AN HOUR, because the answer changes at most once in
+# thirty days and 720 requests to be told "too early" is a metered phone leg
+# spent on nothing.
+today=$(date -u +%F)
+if [ -n "$BASE" ] && [ "$(cat "$TRIED" 2>/dev/null)" != "$today" ]; then
+    renewal=$(MUSTER_BASE_URL="$BASE" PYTHONPATH="$(dirname "$PKG")" python3 -c "
+import os
+from pathlib import Path
+from zippie import musterwrt
+try:
+    print('ok|%s' % musterwrt.renew(
+        os.environ['MUSTER_BASE_URL'],
+        Path('$IDENT/device.key'),
+        Path('$IDENT/device.crt'),
+    ))
+except musterwrt.NotYet as early:
+    print('early|%s' % early)
+except musterwrt.Revoked as revoked:
+    print('revoked|%s' % revoked)
+except musterwrt.Unreachable as unreachable:
+    print('soft|%s' % unreachable)
+except musterwrt.Refused as refused:
+    print('refused|%s' % refused)
+except Exception as bad:
+    print('refused|%s: %s' % (type(bad).__name__, bad))
+" 2>&1)
+
+    case "${renewal%%|*}" in
+        ok)
+            log "${renewal#*|}"
+            dd_event "zippie: the travel router renewed its own certificate"                      "${renewal#*|}" info
+            echo "$today" > "$TRIED"
+            ;;
+        early)
+            # The ordinary answer for 29 days out of 30.
+            echo "$(date -u +%FT%TZ) renewal ${renewal#*|}" >> "$LOG"
+            echo "$today" > "$TRIED"
+            ;;
+        revoked)
+            # An administrator cut this router off deliberately. Nothing here
+            # deletes anything - see musterwrt.Revoked - but somebody has to be
+            # told, and the daily marker keeps it to one page rather than one an
+            # hour.
+            log "REVOKED: ${renewal#*|}"
+            dd_event "zippie: the travel router has been revoked"                      "${renewal#*|}" error
+            echo "$today" > "$TRIED"
+            ;;
+        soft)
+            # NOT MARKED AS TRIED. muster being unreachable is the normal state
+            # of a travel router, and marking the day would spend the one hour
+            # this box is online on a request that could not have worked.
+            echo "$(date -u +%FT%TZ) renewal not attempted: ${renewal#*|}" >> "$LOG"
+            ;;
+        *)
+            log "renewal REFUSED: ${renewal#*|}"
+            dd_event "zippie: the travel router refused a renewal"                      "${renewal#*|}" error
+            echo "$today" > "$TRIED"
+            ;;
+    esac
+fi
+
+# ---------------------------------------------------------------------------
+# 3. The refresh itself.
 if [ -z "$BASE" ]; then
     # Configured to enroll but not to refresh. Worth one line, not an alarm.
     echo "$(date -u +%FT%TZ) no MUSTER_BASE_URL in $PERSIST/env - not refreshing" >> "$LOG"

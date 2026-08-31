@@ -117,6 +117,34 @@ Until that gap is closed (#38), the name check is you. Grep before you push, and
 write "the travel router" - which is also what its certificate says, so the
 scrubbed form is the accurate one rather than a euphemism.
 
+## The router renews its own certificate
+
+`travel/gl-mt3000/muster-refresh.sh` runs hourly and does three things: checks
+how long the certificate has left, tries a renewal once a day, then refreshes
+the datapath key. All three are safe to fail - `musterwrt` keeps what is on disk
+on every failing path, and the agent never waits for any of it.
+
+**The router does not decide when to renew.** It asks; muster answers 409 if it
+is too early. `renew_after` is computed from a certificate's own dates on the
+server, and a copy of that arithmetic here would be a second definition of it -
+on the one box in the estate whose clock can read 1970 at boot.
+
+**`openssl req -new -key`, never `-newkey`.** Four characters apart. The first
+signs a request for the key this router already has; the second GENERATES one,
+overwriting the only credential the box can prove itself with, on hardware that
+may be in another state. A test pins the CSR's public key against the key file.
+
+**A new certificate is verified against the private key before it replaces the
+working one.** A mismatch is a router that cannot prove itself to anything and
+cannot renew its way out, because renewing needs the proof it just discarded.
+Recovery is physical, and this project has already paid for that once.
+
+**A 403 means revoked, and it deletes nothing.** `musterwrt.Revoked` is loud -
+before it existed a 403 came back as `Unreachable` and was logged at the same
+volume as a hotel captive portal. It keeps the cached key: a router that wiped
+its own key on a 403 would island itself the moment somebody revoked the wrong
+key_id.
+
 ## Related
 
 [muster](https://github.com/quadseven/muster) exists because of a decision made

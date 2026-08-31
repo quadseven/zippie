@@ -248,8 +248,16 @@ and the client mirrors that.
 4. Wire the refresh into cron. Only then does anything on the router depend on
    muster.
 
+   **Both halves exist now.** The paragraphs below record why the second one
+   did not when this stage was first done, because the reasoning is what
+   produced muster#10 and it explains why the 45-day warning is still here and
+   why its thresholds did not move. muster now has `POST /v1/device/renew`
+   (muster#12) and `musterwrt.renew` calls it once a day; the router replaces
+   its own certificate with nobody present. The warning below is no longer the
+   mechanism - it is the alarm that the mechanism has stopped.
+
    **This stage was written as "refresh into cron and RENEWAL into the agent's
-   own lifecycle", and half of it turned out not to exist.** Checked against the
+   own lifecycle", and half of it did not exist at the time.** Checked against the
    server on 2026-08-30: muster's only route to a certificate is
    `POST /v1/enroll/requests`, which requires a pairing code an administrator
    minted - vouched at the console, or self-vouched by QR. A device holding a
@@ -270,12 +278,22 @@ and the client mirrors that.
    fraction - `api.py` is right that a second copy of that arithmetic is a
    second definition of when a device renews.
 
-   Unattended renewal is worth building and is tracked upstream as
-   [muster#10](https://github.com/quadseven/muster/issues/10): a device that
-   can already sign a nonce with an enrolled key has proved exactly what a
-   pairing code proves, so possession of the current key should be sufficient
-   vouch for the next certificate. That is the property `key_id` was chosen for
-   ("identity survives renewal") and it is not yet redeemable.
+   Unattended renewal was built as
+   [muster#10](https://github.com/quadseven/muster/issues/10): a device that can
+   already sign a nonce with an enrolled key has proved exactly what a pairing
+   code proves, so possession of the current key is sufficient vouch for the
+   next certificate. That is the property `key_id` was chosen for ("identity
+   survives renewal") and it is redeemable now.
+
+   Revocation had to land first (muster#11). muster's original revocation
+   mechanism was LAPSE - declining to renew - which only works while renewal
+   needs a human. A device that renews itself never lapses, so shipping renewal
+   alone would have left a fleet nothing could cut off.
+
+   The router does not decide when to renew. It asks once a day and muster
+   answers 409 if it is too early, which keeps `renew_after` in one place -
+   `ca.Identity` - rather than putting a copy of that arithmetic on the one
+   machine in the estate whose clock can read 1970 at boot.
 5. Move `server_public_key` off the splice and onto this channel, and perform one
    real rotation with the overlap - which is the first time the design is proven
    rather than argued.
