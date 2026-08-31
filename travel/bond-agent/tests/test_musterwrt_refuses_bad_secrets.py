@@ -1,7 +1,7 @@
 """Every way muster's answer can take this router off the network, refused.
 
 On 2026-08-29 a deploy shipped `server_public_key = "<server-public-key>"` to
-suzu. The placeholder is in the repo on purpose; nothing had ever substituted it
+the travel router. The placeholder is in the repo on purpose; nothing had ever substituted it
 back. `wg setconf` refused it, the bond never came up, and because the agent
 owns the router's only default route the box left the network. Recovery took
 physical access.
@@ -71,7 +71,7 @@ def test_a_rotation_carries_both_keys():
 
 def test_comments_and_blank_lines_are_ignored():
     keys = musterwrt.datapath_keys(
-        app_config("# suzu datapath", "", datapath_line("key.current", GOOD))
+        app_config("# travel router datapath", "", datapath_line("key.current", GOOD))
     )
     assert keys == {"key.current": GOOD}
 

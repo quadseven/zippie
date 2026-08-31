@@ -1,10 +1,11 @@
 """Fetch this router's own secrets from muster, and refuse to apply garbage.
 
 WHY THIS EXISTS. On 2026-08-29 a deploy shipped `server_public_key =
-"<server-public-key>"` to suzu. The placeholder is in the repo on purpose - the
-real value must not be - and nothing had ever substituted it back. `wg setconf`
-refused it, the bond never came up, and because the agent owns the router's only
-default route the box left the network entirely. Recovery took physical access.
+"<server-public-key>"` to the travel router. The placeholder is in the repo on
+purpose - the real value must not be - and nothing had ever substituted it back.
+`wg setconf` refused it, the bond never came up, and because the agent owns the
+router's only default route the box left the network entirely. Recovery took
+physical access.
 
 The lesson is not "add a placeholder check". It is that a device secret which
 lives in a config file has to travel through every place that file travels: a
@@ -33,7 +34,7 @@ handshake through busybox is a project; signing 43 bytes with `openssl dgst` is
 a subprocess call. Nothing here is Android-specific, because the wire protocol
 never was - only muster's existing AGENT is.
 
-WHAT IS ON THIS ROUTER, measured 2026-08-29 on suzu (GL-MT3000, OpenWrt 21.02,
+WHAT IS ON THIS ROUTER, measured 2026-08-29 (GL-MT3000, OpenWrt 21.02,
 aarch64):
 
     python3          3.9.15, with `ssl` (OpenSSL 1.1.1q) and urllib
@@ -48,7 +49,7 @@ aarch64):
 
 So: openssl for the crypto, stdlib for everything else. No new packages.
 
-THE USER-AGENT IS LOAD-BEARING AND THAT IS NOT A JOKE. Measured on suzu the
+THE USER-AGENT IS LOAD-BEARING AND THAT IS NOT A JOKE. Measured on the router the
 same day: `urllib` with its default `Python-urllib/3.9` header gets **403 from
 Cloudflare** before the request ever reaches muster, while the identical request
 with any other User-Agent gets 201. A client written the obvious way fails with
@@ -111,7 +112,7 @@ log = logging.getLogger(__name__)
 # ANYTHING BUT THE DEFAULT. See the module docstring: Cloudflare answers 403 to
 # `Python-urllib/3.9` before muster is reached, so a client that does not set
 # this fails with a message about authentication for a request the server never
-# received. Measured on suzu 2026-08-29.
+# received. Measured on the router 2026-08-29.
 USER_AGENT = "musterwrt/1 (openwrt; zippie)"
 
 # The router's own name for the thing muster's `app-config` grammar calls a
@@ -601,3 +602,105 @@ def refresh(
         + (f", previous {_digest(keys[PREVIOUS])}" if PREVIOUS in keys else "")
         + f") -> {bond_key_path}{note}"
     )
+
+
+# ---------------------------------------------------------------------------
+# WHEN A HUMAN MUST ENROLL THIS ROUTER AGAIN
+#
+# muster HAS NO UNATTENDED RENEWAL ROUTE, and that is the fact everything below
+# is shaped by - tracked as muster#10. Checked against the server 2026-08-30: the
+# only way to a certificate is POST /v1/enroll/requests, which requires a pairing
+# code an administrator minted - vouched at the console, or self-vouched by QR. A
+# device holding a perfectly valid certificate cannot trade it for a fresh one.
+#
+# So there is no "renewal" to wire into a lifecycle here. What this router can
+# do - and what a device whose only uplink depends on its own identity had
+# better do - is NOTICE, early and out loud, that a person needs to enroll it
+# again, while it still has a working certificate to say so with.
+#
+# THESE THRESHOLDS ARE THE ROUTER'S, NOT muster's, and they are deliberately not
+# muster's `renew_after`. That value answers "when may a machine start trying",
+# which is a question with no answer here. This one answers "how long does a
+# PERSON have", and a person needs more warning than a retry loop does. It is
+# also why nothing recomputes muster's fraction: `api.py` says a second copy of
+# that arithmetic is a second definition of when a device renews, and this is
+# not a second copy - it is a different question with its own number.
+ATTENTION_DAYS = 45
+URGENT_DAYS = 14
+
+
+def expires_in_days(certificate_pem: str, now: float | None = None) -> int:
+    """Whole days until this certificate stops being accepted. May be negative.
+
+    PARSED BY openssl AND stdlib, because busybox `date` cannot do this. There
+    is no `date -d` on this router - the deploy learned that the hard way when a
+    rollback window built from one produced an empty string and a crontab line
+    that never fired - so any arithmetic on a date here has to happen in python.
+
+    Rounded DOWN, so "1 day left" never prints for a certificate with an hour on
+    it. The direction of the rounding error should always be the alarming one.
+    """
+    import ssl
+
+    try:
+        ends = _openssl(["x509", "-noout", "-enddate"], certificate_pem.encode())
+    except Unreachable as unusable:
+        # RE-RAISED AS Refused, AND THE DIFFERENCE IS WHETHER ANYONE IS TOLD.
+        # `_openssl` reports every non-zero exit as Unreachable because for the
+        # SIGNING path that is right - a missing or broken openssl is a transient
+        # local fault, and the caller's answer is to keep the cached key and stay
+        # quiet. Here the input is a file on this router's own disk, so openssl
+        # saying "that is not a certificate" is an ANSWER, not an outage. Left as
+        # Unreachable it would be logged at the same volume as a hotel wifi
+        # captive portal and the corrupt identity would sit there unmentioned.
+        raise Refused(
+            f"the stored certificate could not be read by openssl ({unusable}). "
+            "This router's muster identity is unusable; the cached datapath key "
+            "is unaffected."
+        ) from unusable
+    text = ends.decode().strip()
+    _, _, stamp = text.partition("=")
+    if not stamp:
+        raise Refused(f"openssl gave no notAfter for this certificate (got {text!r})")
+    try:
+        expiry = ssl.cert_time_to_seconds(stamp)
+    except ValueError as bad:
+        raise Refused(f"could not read notAfter {stamp!r}: {bad}") from bad
+    import time
+
+    return int((expiry - (time.time() if now is None else now)) // 86400)
+
+
+def enrollment_verdict(certificate_pem: str, now: float | None = None) -> tuple[str, str]:
+    """(severity, one line for a human). Severity is 'ok', 'attention' or 'urgent'.
+
+    EXPIRED IS URGENT, NOT FATAL, and the wording says so. A certificate past
+    `not_after` costs this router its refreshes; it does not cost it the bond,
+    because the cached key in keys.json is authoritative and this whole module
+    is a refresher rather than a precondition. A message that reads like the
+    router is down would send somebody driving to it for no reason.
+    """
+    left = expires_in_days(certificate_pem, now)
+    if left < 0:
+        return (
+            "urgent",
+            (
+                f"the muster certificate EXPIRED {-left}d ago. Refreshes have stopped; "
+                "the cached key still works and the bond is unaffected. muster has no "
+                "unattended renewal, so this needs a pairing code and a person."
+            ),
+        )
+    if left <= URGENT_DAYS:
+        return (
+            "urgent",
+            (
+                f"the muster certificate expires in {left}d and only a person can "
+                "replace it (enroll again with a pairing code)."
+            ),
+        )
+    if left <= ATTENTION_DAYS:
+        return (
+            "attention",
+            f"the muster certificate expires in {left}d - enroll again when convenient.",
+        )
+    return ("ok", f"certificate good for {left}d")

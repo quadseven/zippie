@@ -104,11 +104,18 @@ exist because a scrub removed the topology and nothing stopped it returning.
 No real hostnames, addresses, SSIDs or personal identifiers - not in code, not
 in comments, not in fixtures.
 
-One filename still carries a host name deliberately: renaming
-`deploy.travel-router.yml` requires renaming two repository secrets and an SSM path in
-the same change, and getting that wrong breaks the only remote deploy path to
-a router that may be in another state. It waits for a window where someone can
-watch a deploy round-trip.
+**The guard checks ADDRESSES, not names, and a hostname has already come back
+through that gap.** `check-no-operator-hosts.sh` PART 2 is an allowlist of
+permitted IP ranges - deliberately, because a guard that failed on the household
+/24 would have to WRITE the household /24 in a public file. It has no equivalent
+for a bare word, so the travel router's own name walked back into
+`musterwrt.py`, its test and an ADR - twelve occurrences, every one of them
+added AFTER the scrub, by work that was written while the repo was still
+private. It passed CI each time.
+
+Until that gap is closed (#38), the name check is you. Grep before you push, and
+write "the travel router" - which is also what its certificate says, so the
+scrubbed form is the accurate one rather than a euphemism.
 
 ## Related
 

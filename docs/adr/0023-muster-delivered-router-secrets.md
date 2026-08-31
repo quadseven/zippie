@@ -5,16 +5,16 @@ Date: 2026-08-29
 ## Status
 
 Proposed. The client module (`travel/bond-agent/zippie/musterwrt.py`) is
-shipped and unarmed; enrollment of suzu has not happened and needs an operator
-at the console.
+shipped and unarmed; enrollment of the travel router has not happened and
+needs an operator at the console.
 
 ## Context
 
 On 2026-08-29 a deploy shipped `server_public_key = "<server-public-key>"` to
-suzu. The placeholder is in the repo deliberately - the real value must not be -
-and nothing had ever substituted it back. `wg setconf` refused it, the bond never
-came up, and because the agent owns the router's only default route the box left
-the network. Recovery took physical access.
+the travel router. The placeholder is in the repo deliberately - the real value
+must not be - and nothing had ever substituted it back. `wg setconf` refused
+it, the bond never came up, and because the agent owns the router's only default
+route the box left the network. Recovery took physical access.
 
 The immediate fix (#3) takes the key the router already has and splices it into
 a rendered copy, so the secret never enters git, a GitHub secret, or a runner's
@@ -29,7 +29,7 @@ where a device secret belongs.
 
 ## What was measured, and what it changes
 
-All on suzu (GL-MT3000, OpenWrt 21.02-SNAPSHOT, aarch64, mediatek/mt7981),
+All on the travel router (GL-MT3000, OpenWrt 21.02-SNAPSHOT, aarch64, mediatek/mt7981),
 2026-08-29.
 
 ### muster does not use mTLS, and must not start
@@ -102,8 +102,8 @@ where it is available.
 should not. `policy.py` states the trade plainly: "a role is a statement that
 these devices are interchangeable, and interchangeable devices share what they
 run." A datapath key is shared between one router and one far end; putting it in
-a role means one router's compromise is every router's, and there is exactly one
-suzu.
+a role means one router's compromise is every router's, and there is exactly
+one travel router.
 
 `role-` earns its keep for credentials that genuinely are fleet-wide - a GitHub
 runner registration token, a Datadog client token. The client does not care
@@ -230,9 +230,9 @@ and the client mirrors that.
 
 - No muster server change. The channel already exists.
 - No new OpenWrt packages.
-- The `server_public_key` splice in `deploy-openwrt.sh` (#3) stays until suzu is
-  enrolled and the datapath key is actually delivered; it is the same shape and
-  does not have to be unwound.
+- The `server_public_key` splice in `deploy-openwrt.sh` (#3) stays until the
+  travel router is enrolled and the datapath key is actually delivered; it is
+  the same shape and does not have to be unwound.
 - Enrollment is a one-time operator act and is not automated. A deploy that could
   enroll a device would need a credential that mints pairing codes, and that is a
   credential in CI - the thing this whole ADR exists to remove.
@@ -241,12 +241,41 @@ and the client mirrors that.
 
 1. **Shipped here.** The client, unarmed: parse, validate, refuse, atomically
    cache. Nothing imports it; nothing schedules it.
-2. Enroll suzu by hand, with the operator at the console and the fingerprint
-   compared. Certificate to `/etc/zippie/muster/`.
+2. Enroll the travel router by hand, with the operator at the console and the
+   fingerprint compared. Certificate to `/etc/zippie/muster/`.
 3. Serve `<key_id>.app-config` from the `muster-policy` Secret with the router's
    current key as `key.current`, and confirm a fetch is a no-op.
-4. Wire the refresh into cron and renewal into the agent's own lifecycle. Only
-   then does anything on the router depend on muster.
+4. Wire the refresh into cron. Only then does anything on the router depend on
+   muster.
+
+   **This stage was written as "refresh into cron and RENEWAL into the agent's
+   own lifecycle", and half of it turned out not to exist.** Checked against the
+   server on 2026-08-30: muster's only route to a certificate is
+   `POST /v1/enroll/requests`, which requires a pairing code an administrator
+   minted - vouched at the console, or self-vouched by QR. A device holding a
+   valid certificate cannot trade it for a fresh one. There is no renewal to
+   wire in, and a job written to attempt one would have failed forever against
+   an endpoint that was never there.
+
+   So renewal is a NOTIFICATION, not a mechanism: `muster-refresh.sh` reads the
+   stored certificate every hour and tells the operator - log, and once a day
+   Datadog - that a person must enroll the router again, starting 45 days out.
+   That warning is not a prelude to an automatic retry. It IS the mechanism, and
+   if it fails to reach somebody the refresh channel simply stops one day.
+
+   The thresholds are the router's own and are deliberately not muster's
+   `renew_after`. That value answers "when may a machine start trying", which
+   here has no answer; theirs answers "how long does a PERSON have", and a
+   person needs more warning than a retry loop. Nothing recomputes muster's
+   fraction - `api.py` is right that a second copy of that arithmetic is a
+   second definition of when a device renews.
+
+   Unattended renewal is worth building and is tracked upstream as
+   [muster#10](https://github.com/quadseven/muster/issues/10): a device that
+   can already sign a nonce with an enrolled key has proved exactly what a
+   pairing code proves, so possession of the current key should be sufficient
+   vouch for the next certificate. That is the property `key_id` was chosen for
+   ("identity survives renewal") and it is not yet redeemable.
 5. Move `server_public_key` off the splice and onto this channel, and perform one
    real rotation with the overlap - which is the first time the design is proven
    rather than argued.
