@@ -136,19 +136,84 @@ after boot, with nobody present - which only happens when there is no secure
 lock credential. **Set a PIN on these handsets and the gap becomes reachable:**
 the relay would carry bytes and never appear in the leg list.
 
-### Where this stands, in this repo's three buckets
+### Where this stands, in four buckets (re-read 2026-09-01, evening)
 
-PROVEN (measured, quoted above, 2026-09-01): Android announces on the 15 s /
-45 s lease; Android carries; an Android leg carries the household alone; the
-whole arrangement survives a cold boot of the router and of both handsets with
-no human action.
+Re-measured from scratch in the evening, off the live router (`7a071db`,
+deployed 2026-08-31, uptime 32293 s) and the live handsets (both Pixel 6a,
+`app.zippie.companion` `0.1.0-157-735a31b`, reached over adb through SSH
+tunnels off the router). The morning's numbers above still stand; these are
+the ones read again, so the claim does not rest on memory.
 
-WRITTEN, NOT MEASURED: the pre-unlock announce path in `BootReceiver.kt`, for
-the reason above. The absent-leg filter that brings the Android leg list into
-line with iOS - unit tests pass on the self-hosted runner, but no handset has
-run it; the installed APK is older than main.
+**PROVEN** (measured, quoted, 2026-09-01):
 
-NOT BUILT: nothing remaining for Android announce.
+- *Announces.* Router log, 15 s cadence, both legs: `pixel-6a-589f` 18:50:51,
+  18:51:06, 18:51:22, 18:51:37, 18:51:52, 18:52:07; `pixel-6a-ea83` 18:50:58,
+  18:51:13, 18:51:28, 18:51:43, 18:51:58, 18:52:13.
+- *Carries.* Two `/api/status` reads 30 s apart (18:51:44 -> 18:52:14):
+  `pixel-6a-589f` link_rx +53,319 B, link_tx +110,039 B, weight 24, `in_bond`;
+  `pixel-6a-ea83` link_rx +70,779 B, link_tx +344,240 B, weight 32, `in_bond`.
+  On the Google Fi handset the cellular interface's own counters moved with it
+  (`/proc/net/dev` `rmnet1` rx +90,956 B / tx +59,223 B in 15 s), so the bytes
+  are leaving on the radio, not looping back over Wi-Fi.
+- *Again after an unattended cold boot.* The handset's OWN persisted boot log
+  (Diagnostics > BOOT LOG, device-protected storage) for the 11:55:56 boot of
+  `pixel-6a-589f`:
+
+      +00011885 11:56:07 [boot] LOCKED_BOOT_COMPLETED: decision started (attempt 1)
+      +00012423 11:56:08 [ZippieBoot] LOCKED_BOOT_COMPLETED: started (proximity=LOCAL)
+      +00012498 11:56:08 [relay] service started: unlocked=true console=<router lan>:8787 token=present
+      +00013364 11:56:09 [cellular] bound: home=dns-e.example-home.invalid resolved on the cellular network
+      +00013706 11:56:09 [leg] leg socket pinned to wifi; replies leave on wlan
+
+  Nobody touched it: `dumpsys power` reads `mLastUserActivityTime=347402`
+  (5 min 47 s after boot, both handsets within 0.3 s of each other, so not a
+  hand) and nothing since across 25,000 s of uptime. The `RelayService` record
+  the system holds has `createTime` = boot + 12 s and is the instance behind
+  the 18:5x announces above; the handset sat in `mWakefulness=Dozing` the
+  whole time. The router's log ring has since wrapped (oldest line 18:22), so
+  the 11:57:24 / 11:57:37 first announces are the morning's reading, not
+  re-read.
+
+**DEPLOYED, NEVER EXERCISED** (on the handset, never run in anger):
+
+- The credential-locked branch of `BootReceiver.kt` (lines 47-59): a relay
+  started by `LOCKED_BOOT_COMPLETED` with the token unavailable "relays, does
+  not announce". Build 157 reaches `LOCKED_BOOT_COMPLETED` (line 1 above) but
+  with `unlocked=true token=present`, because neither handset has a secure lock
+  credential. Setting a PIN would exercise it, and would also put adb-over-Wi-Fi
+  behind that PIN after the reboot.
+- The `MY_PACKAGE_REPLACED` restart in the manifest. Build 157 was installed
+  by the DPC on 2026-08-23 (first install 14:33 / 18:31, updated 22:58 / 22:59
+  the same day); whether the relay came back on its own after that update was
+  not observed by anyone in this repo.
+
+**MERGED, NOT DEPLOYED** (on main, not on the handset):
+
+- Everything under `companion-android/` on this repo's main. The handsets run
+  `0.1.0-157-735a31b`, built from the history that `24657d1` (clean-slate
+  initial commit) replaced; that commit is not in this repo, so the exact diff
+  cannot be read. Known to be on main and not on the handset: `ed9c5e4`,
+  `8a5af4b` (Status tab to the iOS design, Relay on its own tab), `9484afb`.
+- **Nothing from this repo can be installed over it as the build stands.**
+  `versionCode` is the commit count (`companion-android/ci/build-signed-apk.sh`
+  line 82); main has 24 commits, the handset has 157, and Android refuses the
+  downgrade (`INSTALL_FAILED_VERSION_DOWNGRADE`). The release workflow
+  `app.companion-android.release.yml` has never been dispatched. The installed
+  build is signed `CN=Zippie Companion, O=zippie` - the DN the README
+  prescribes - but whether the keystore seeded into CI on 2026-08-28 is that
+  same key has not been checked, and a different one is
+  `INSTALL_FAILED_UPDATE_INCOMPATIBLE`.
+- PR #44 (absent legs hidden, as on iOS): not even merged.
+
+**NOT BUILT**: a `versionCode` that clears 157 from this repo's history - an
+offset, or a one-off `ZIPPIE_VERSION_CODE` >= 158 on the dispatch. Nothing
+else for the announce goal.
+
+Observed and not chased: on build 157 the Diagnostics screen said `Bond: not
+carrying`, `Last announce: not checked` at 18:54 while the Status tab and the
+router both said carrying. That screen's rows are its own probe from the
+phone, not the router's word; it is not the goal, and it is not on main's
+code either way.
 
 ## Verified working
 
