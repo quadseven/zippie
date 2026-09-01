@@ -35,27 +35,33 @@ class BondLegsTest {
     }
 
     /**
-     * The divergence from iOS, and the reason for it: dongle4g is on a gated
-     * tier AND has no interface at all. Calling that "held in reserve" would
-     * promise a fallback that cannot be called on - so it is not RESERVE.
+     * PARITY WITH iOS, and a deliberate reversal of the #26 follow-up.
      *
-     * It is also not plain DOWN (#26 follow-up). "no interface matched" is
-     * true and reads exactly like a fault next to a leg that actually failed
-     * to carry - the operator flagged precisely this shape live, next to
-     * hotspot-2ghz reading identically for an unassociated station radio.
-     * A configured leg with nothing to bind to is an absence, not a fault.
+     * dongle4g is on a gated tier AND has no interface at all, so it was never
+     * RESERVE - that would promise a fallback which cannot be called on. #26
+     * softened it from a red fault to a calm ABSENT row, because the operator
+     * flagged this exact shape live next to hotspot-2ghz, an unassociated
+     * station radio reading identically.
+     *
+     * On 2026-09-01 the same operator asked for the next step, holding both
+     * handsets: iOS has never drawn these rows at all, and a bond that reads
+     * differently depending on which phone you pick up is the drift this app
+     * exists to remove. A configured path with nothing to bind to is not a
+     * quiet row - it is not a row.
      */
     @Test
-    fun `a leg with no interface at all reads as absent, not down`() {
-        val dongle = row("dongle4g")
-        assertEquals(LegState.ABSENT, dongle.state)
-        assertEquals("Not connected right now - nothing to bind to.", dongle.note)
+    fun `a leg with no interface at all is not a row at all`() {
+        assertTrue(
+            "a configured path with nothing to bind to is not a connection",
+            rows().none { it.id == "dongle4g" },
+        )
     }
 
     @Test
     fun `the headline counts carrying legs, not configured ones`() {
         val rows = rows()
-        assertEquals(5, rows.size)
+        // FOUR, not five: dongle4g has nothing to bind to and is not drawn.
+        assertEquals(4, rows.size)
         assertEquals("1 connection", BondLegs.headline(rows))
     }
 
@@ -139,7 +145,7 @@ class BondLegsTest {
     @Test
     fun `a snapshot carries the packet counters and the router's own membership`() {
         val snapshot = BondLegs.snapshot(status, atMs = 1_700_000_000_000)
-        assertEquals(5, snapshot.legs.size)
+        assertEquals(4, snapshot.legs.size)
         val hotspot = snapshot.legs.first { it.name == "hotspot" }
         assertEquals("Phone hotspot", hotspot.label)
         assertEquals(11018643L, hotspot.txBytes)
@@ -151,7 +157,7 @@ class BondLegsTest {
     @Test
     fun `nothing carrying says so rather than showing a count`() {
         val nothing = BondStatus.decode(
-            """{"paths":[{"name":"a","state":"down","effective_weight":0,"in_bond":false}]}""",
+            """{"paths":[{"name":"a","interface":"eth0","state":"down","effective_weight":0,"in_bond":false}]}""",
         )
         val rows = BondLegs.rows(nothing, 51999, null)
         assertEquals("Nothing carrying", BondLegs.headline(rows))
@@ -167,12 +173,13 @@ class BondLegsTest {
      * "one out of two" was the question BondModel.swift's own comment names.
      * Answered in the heading rather than left for someone to count rows -
      * against the live fixture, which has exactly one leg (hotspot) carrying
-     * out of five configured.
+     * out of four DRAWN - the fixture configures five, and dongle4g has
+     * nothing to bind to, so it is not one of them.
      */
     @Test
     fun `legsHeading counts carrying legs out of the whole bond when the router answers`() {
         assertEquals(
-            "Connections - 1 of 5 carrying",
+            "Connections - 1 of 4 carrying",
             BondLegs.legsHeading(rows(), bondReachable = true),
         )
     }
@@ -264,11 +271,11 @@ class BondLegsTest {
     }
 
     /**
-     * THE ONE THAT MATTERS for #26's follow-up: absence must not swallow a
-     * real fault. A leg that HAS an interface and is still down - it bound
-     * to something and that something stopped working - is exactly the row
-     * a reader needs painted red. Only the leg with no interface at all
-     * reads as absent.
+     * THE ONE THAT MATTERS: dropping absent legs must not swallow a real
+     * fault. A leg that HAS an interface and is still down - it bound to
+     * something and that something stopped working - is exactly the row a
+     * reader needs painted red, and it must survive the filter. Only the leg
+     * with nothing to bind to disappears.
      */
     @Test
     fun `a down leg with a bound interface still reads as a real fault`() {
@@ -282,13 +289,11 @@ class BondLegsTest {
             ]}""",
         )
         val rows = BondLegs.rows(status, 51999, null)
-        val absent = rows.first { it.id == "absent" }
         val faulted = rows.first { it.id == "faulted" }
 
-        assertEquals(LegState.ABSENT, absent.state)
-        assertEquals(
-            "Not connected right now - nothing to bind to.",
-            absent.note,
+        assertTrue(
+            "a path with nothing to bind to is not drawn",
+            rows.none { it.id == "absent" },
         )
 
         assertEquals(LegState.DOWN, faulted.state)
