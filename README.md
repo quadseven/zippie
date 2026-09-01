@@ -32,7 +32,7 @@ lives in [muster](https://github.com/quadseven/muster).
   only uplink is the bond this code implements, so a broken change removes the
   way to fix it; that file is the short list of what has already gone wrong.
 
-## Current state
+## Current state (measured 2026-09-01)
 
 Zippie runs a phone-inclusive multipath bond on a GL-MT3000 travel router
 today. The packet datapath carries traffic continuously across several legs
@@ -42,6 +42,24 @@ step either way. WireGuard tunnels, tiered reserve links, per-leg usage
 accounting, and address-loss failover (measured in the tens of milliseconds,
 not the multi-second probe delay of earlier builds) are all live on the
 router this project runs on day to day.
+
+**Both phone platforms announce and carry.** Read off the router's own console
+and log on 2026-09-01, with the agent 35 h into its uptime: two Android Pixels
+and one iPhone were all announcing on the 15 s / 45 s lease this project
+defines, and the leg carrying the household was an **Android** one -
+`pixel-6a-ea83`, in the bond at weight 48, 0.0% loss, 225 ms, **764 MB
+received** on its own link counter. A second Android leg had 586 MB against its
+counter. The iPhone leg was `down` at 62.5% loss at the time of reading. This
+README claimed the opposite for 24 days; see
+[docs/state-of-play.md](docs/state-of-play.md) for the full reading.
+
+**And it comes back by itself.** Same day, cold-booted at both ends with nobody
+touching anything: the router by `sysrq`, then both handsets. Every leg
+re-announced and the bond reformed unattended - and at 91 s after boot the
+router's ONLY active path was the Android leg, carrying the household by itself
+until the Wi-Fi repeater and the second phone came back. The
+handsets' own uptime read 171 s and 173 s afterwards, which is how the reboot is
+known to have happened rather than assumed.
 
 Known gaps: data caps are entered by hand rather than pulled from a carrier
 API, the Companion app's history chart is slow to load away from the router's
@@ -97,7 +115,7 @@ See [docs/openmptcprouter.md](docs/openmptcprouter.md). Zippie can sit in front 
 | Compact bond client | [GL-MT3000 (Beryl AX)](https://www.gl-inet.com/en-us/products/gl-mt3000) | Dual-band Wi-Fi 6, OpenWrt-based; multi-WAN + WireGuard native. **One** USB port (the 2.0 and 3.0 buses share one connector) |
 | Travel LAN / "home remotely" | UniFi UTR | Put behind the bond client; clients join UTR as if at home |
 | WAN sources | Starlink, phone hotspots (T-Mo, VZ) | Agent auto-joins preferred SSIDs |
-| **Phone legs** | iPhone / Android on the router's wifi | Run the Companion relay; the phone lends its cellular. iOS **announces** itself; Android cannot yet (#53) |
+| **Phone legs** | iPhone / Android on the router's wifi | Run the Companion relay; the phone lends its cellular. **Both platforms announce**; a phone that is present is a leg and a phone that is absent is not |
 | **Phone power** | USB-C PD source, not the router | See below - the router cannot keep a relaying phone charged |
 | Bond server | Mini PC / Pi / NUC on the home LAN | Port-forward UDP 51820+; 2.5G NIC preferred |
 
