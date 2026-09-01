@@ -361,10 +361,17 @@ Android decides an upgrade on two facts, and both are handled here:
 Settings > Apps names the exact commit: `0.1.0-341-0ce0f7f`, and
 `0.1.0-341-0ce0f7f-TESTKEY` when a throwaway key signed it.
 
-**None of this has been tested on hardware.** The version arithmetic and the
-signature are verified in CI against the built file; whether two consecutive
-installs on a Pixel 6a preserve the budget counters has not been observed, and
-cannot be until an APK is on a phone.
+**Two Pixel 6a handsets run build `0.1.0-157-735a31b`**, installed by the
+device-management agent on 2026-08-23 and updated once the same day, signed
+`CN=Zippie Companion, O=zippie`. Whether that update preserved the budget
+counters was not observed. And the sentence above about the count moving
+forward along main was made false by `24657d1`, the clean-slate initial
+commit: this repo's main has 24 commits, the handset has 157, so every build
+from here is a refused downgrade until the count is offset or
+`ZIPPIE_VERSION_CODE` is passed by hand (>= 158). Neither has been done
+(2026-09-01). The release workflow has never been dispatched, and whether the
+keystore seeded into CI on 2026-08-28 is the key that signed build 157 has not
+been checked.
 
 ### Building a release APK by hand
 
@@ -411,18 +418,26 @@ without it, but its notification - the only visible sign it is spending cellular
 and the only way to stop it from the shade - is hidden), and confirm the router
 console address if it is not `10.99.0.1:8787`.
 
+## Verified on hardware (2026-09-01, build 157, two Pixel 6a)
+
+Measured on the live router and the live handsets; the numbers are in
+`docs/state-of-play.md`, "Update (2026-09-01)".
+
+- The router's frames arrive at the listen port and come back: the leg carried
+  53-70 KB in and 110-344 KB out per 30 s window, weight 24-32, `in_bond`.
+- The uplink is the radio: the handset's `rmnet1` counters moved with the leg
+  (rx +90,956 B / tx +59,223 B in 15 s) while it carried.
+- The foreground service survives Doze: `mWakefulness=Dozing` for hours with
+  the announces landing every 15 s from the service instance created 12 s
+  after boot.
+- Two Pixels announce at once, with `dynamic` legs and no `zippie.toml` entry,
+  and neither is dropped.
+- The status screen reads on a real display (operator screenshots, and a
+  uiautomator read of the same tab).
+
 ## Not verified
 
-Everything that needs a phone: whether the cellular socket really pins to the
-radio, whether the router's frames arrive at the listen port, whether the
-foreground service survives Doze on a Pixel, and whether the status screen reads
-well on a real display. The first of these is the one that matters; the rest are
-cosmetic by comparison.
-
-Announcing (added 2026-08-08) is in the same position. Its logic is unit tested
-- the request the router receives, the refusals, the renewal loop, the withdraw
-on stop, and that every name it can produce satisfies the router's regex - and
-none of that is a phone appearing in `/api/status`. Still to prove on hardware:
-a Pixel showing up as a leg with `dynamic: true` and no `zippie.toml` entry,
-stopping the relay removing it within the lease, and two Android phones
-announcing at once without either being dropped.
+Stopping the relay removing the leg within the lease - not timed in this repo's records. The
+credential-locked boot path: both handsets have no PIN, so
+`LOCKED_BOOT_COMPLETED` arrives with the token readable and the branch that
+"relays, does not announce" has never run.
