@@ -46,6 +46,57 @@ Two items above have moved since 2026-07-30:
   datapath but is OFF by default and does nothing until it is enabled a rung
   at a time at both ends - see the ladder in `travel/datapath-go/zippie/auth.go`.
 
+## Update (2026-09-01): Android announces, and was carrying the household
+
+Measured on the live router, not inferred. The agent was 35.2 h into its uptime,
+`datapath: packet`, transport holding 3 links.
+
+**The README was wrong for 24 days.** Its Status block, dated 2026-08-07, said
+"iOS **announces** itself; Android cannot yet (#53)". Android announce landed the
+NEXT DAY - `feat(android): announce, so a Pixel can be a leg without a static
+entry`, 2026-08-08 - and nothing corrected the README until now. That is the
+second time this project's summary has asserted the opposite of reality for a
+stretch of days, which is why that block now carries a measurement date.
+
+Read off the router's console:
+
+| leg | state | in_bond | weight | loss | rtt | link_rx_bytes | never_handshaked |
+|---|---|---|---|---|---|---|---|
+| `pixel-6a-ea83` (Android) | up | true | 48 | 0.0% | 225 ms | 764,086,708 | false |
+| `pixel-6a-589f` (Android) | degraded | false | 0 | 5.0% | 283 ms | 585,802,062 | false |
+| `iphone-8fe5` (iOS) | down | false | 0 | 62.5% | 224 ms | 2,909,074 | false |
+
+By this project's own definition of **carrying** - in the link table AND weight
+above zero AND bytes arriving - `pixel-6a-ea83` was carrying and the iPhone was
+not. The platform the README credited was the one that was down.
+
+Announce cadence agrees at both ends. The router logged, repeatedly and at a
+steady 15 s spacing:
+
+    08:35:18 INFO zippie.agent: leg announced name=pixel-6a-ea83 ...
+    08:35:33 INFO zippie.agent: leg announced name=pixel-6a-ea83 ...
+    08:35:48 INFO zippie.agent: leg announced name=pixel-6a-ea83 ...
+    08:36:03 INFO zippie.agent: leg announced name=pixel-6a-ea83 ...
+
+and the client side sets exactly what CONTEXT.md specifies -
+`LegAnnouncer.RENEW_INTERVAL_MS = 15_000L`, `LEASE_S = 45.0`. The relay stays a
+DUMB HOP: `LegAnnouncer` POSTs identity and endpoint to the console and nothing
+else; it does not parse a frame it carries.
+
+**Why Android survives with the screen off.** `RelayService` is a foreground
+service typed `connectedDevice` (`FOREGROUND_SERVICE_CONNECTED_DEVICE`), started
+via `startForeground()` behind an ongoing `IMPORTANCE_LOW` notification, and the
+app holds `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` with a `BatteryExemption`
+decision that surfaces the one combination that matters - not exempt, and being
+asked to relay. None of that is optional. A plain background service holding a
+cellular socket is killed by Doze and App Standby; a foreground service without
+the battery exemption still has its network cut in Doze windows.
+
+**The `#53` reference was dangling.** This repository was recreated on
+2026-08-28 when it went public and the tracker was renumbered - the highest live
+issue is now #41 and there is no #53. No replacement issue was filed for Android
+announce, because there is nothing left to build.
+
 ## Verified working
 
 Measured live, not inferred:
