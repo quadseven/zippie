@@ -53,6 +53,14 @@ counter. The iPhone leg was `down` at 62.5% loss at the time of reading. This
 README claimed the opposite for 24 days; see
 [docs/state-of-play.md](docs/state-of-play.md) for the full reading.
 
+**And it comes back by itself.** Same day, cold-booted at both ends with nobody
+touching anything: the router by `sysrq`, then both handsets. Every leg
+re-announced and the bond reformed unattended - and at 91 s after boot the
+router's ONLY active path was the Android leg, carrying the household by itself
+until the Wi-Fi repeater and the second phone came back. The
+handsets' own uptime read 171 s and 173 s afterwards, which is how the reboot is
+known to have happened rather than assumed.
+
 Known gaps: data caps are entered by hand rather than pulled from a carrier
 API, the Companion app's history chart is slow to load away from the router's
 own LAN, and the newer Go datapath's throughput ceiling and frame

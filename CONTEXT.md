@@ -35,6 +35,14 @@ open. Writes need a token.
 **announce** - how a phone tells the router it exists. The relay POSTs to the
 console every 15s with a 45s lease. No announce, no leg.
 
+> Both platforms announce. PROVEN 2026-09-01 on the live router: three legs on
+> the 15s/45s lease, and an Android leg carrying the household alone
+> (`primary=pixel-6a-ea83`). Survives a cold boot of the router AND both
+> handsets with nobody touching them. Numbers and method in
+> docs/state-of-play.md, "Update (2026-09-01)". NOT proven: the pre-unlock
+> path in companion-android BootReceiver.kt, which cannot run on a handset
+> with no secure lock credential - see the same section.
+
 **uplink** - anything the router can reach the internet through. The bond is one
 uplink; an ethernet cable is another.
 
@@ -117,7 +125,7 @@ which in practice means the router's own files and counters.
     travel/bond-agent/          the agent (python)
     travel/gl-mt3000/           router scripts: watchdog, guards, test harness
     companion-android/          the relay app
-    companion-ios/              the iOS relay
+    companion/                  the iOS relay (app, kit, tunnel)
     hub/                        home-side services
     deploy/oke/                 home hub manifests
     docs/coldboot-testing.md    how to test recovery without stranding a device
