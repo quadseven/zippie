@@ -22,6 +22,7 @@ class LegLabelRoundTripTest {
     private fun statusWith(label: String): String = """
         {"mode":"aggregate","datapath":"packet","paths":[
           {"name":"hotspot","label":${org.json.JSONObject.quote(label)},
+           "interface":"apclix0",
            "state":"up","effective_weight":32,"in_bond":true}
         ]}
     """.trimIndent()

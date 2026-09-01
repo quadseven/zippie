@@ -157,7 +157,7 @@ class BondLegsTest {
     @Test
     fun `nothing carrying says so rather than showing a count`() {
         val nothing = BondStatus.decode(
-            """{"paths":[{"name":"a","state":"down","effective_weight":0,"in_bond":false}]}""",
+            """{"paths":[{"name":"a","interface":"eth0","state":"down","effective_weight":0,"in_bond":false}]}""",
         )
         val rows = BondLegs.rows(nothing, 51999, null)
         assertEquals("Nothing carrying", BondLegs.headline(rows))
@@ -173,12 +173,13 @@ class BondLegsTest {
      * "one out of two" was the question BondModel.swift's own comment names.
      * Answered in the heading rather than left for someone to count rows -
      * against the live fixture, which has exactly one leg (hotspot) carrying
-     * out of five configured.
+     * out of four DRAWN - the fixture configures five, and dongle4g has
+     * nothing to bind to, so it is not one of them.
      */
     @Test
     fun `legsHeading counts carrying legs out of the whole bond when the router answers`() {
         assertEquals(
-            "Connections - 1 of 5 carrying",
+            "Connections - 1 of 4 carrying",
             BondLegs.legsHeading(rows(), bondReachable = true),
         )
     }
