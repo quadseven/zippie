@@ -35,13 +35,20 @@ open. Writes need a token.
 **announce** - how a phone tells the router it exists. The relay POSTs to the
 console every 15s with a 45s lease. No announce, no leg.
 
-> Both platforms announce. PROVEN 2026-09-01 on the live router: three legs on
-> the 15s/45s lease, and an Android leg carrying the household alone
-> (`primary=pixel-6a-ea83`). Survives a cold boot of the router AND both
-> handsets with nobody touching them. Numbers and method in
-> docs/state-of-play.md, "Update (2026-09-01)". NOT proven: the pre-unlock
-> path in companion-android BootReceiver.kt, which cannot run on a handset
-> with no secure lock credential - see the same section.
+> Both platforms announce. PROVEN 2026-09-01, morning and again in the
+> evening, on the live router and the live handsets: 15s cadence in the
+> router's log, bytes moving on both Android legs and on the handset's own
+> cellular interface, and the handset's persisted boot log showing the relay
+> up 12s after an unattended cold boot with `token=present`. An Android leg
+> carried the household alone (`primary=pixel-6a-ea83`). Numbers and method
+> in docs/state-of-play.md, "Update (2026-09-01)".
+>
+> The four buckets, as of 2026-09-01 evening. DEPLOYED, NEVER EXERCISED: the
+> credential-locked branch of BootReceiver.kt (no handset has a PIN).
+> MERGED, NOT DEPLOYED: all of companion-android on main - the handsets run
+> build 157 from the history the clean-slate commit replaced, and this repo's
+> commit count (24) makes every build from it a refused downgrade. NOT BUILT:
+> a versionCode that clears 157. The status doc has the measurements.
 
 **uplink** - anything the router can reach the internet through. The bond is one
 uplink; an ethernet cable is another.
