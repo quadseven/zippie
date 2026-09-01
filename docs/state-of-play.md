@@ -203,7 +203,9 @@ the ones read again, so the claim does not rest on memory.
   prescribes - but whether the keystore seeded into CI on 2026-08-28 is that
   same key has not been checked, and a different one is
   `INSTALL_FAILED_UPDATE_INCOMPATIBLE`.
-- PR #44 (absent legs hidden, as on iOS): not even merged.
+- PR #44 (absent legs hidden, as on iOS): merged as `8192127` on
+  2026-09-01 19:25 EDT, so it joins the list above - on main, not on the
+  handset, for the same `versionCode` reason.
 
 **NOT BUILT**: a `versionCode` that clears 157 from this repo's history - an
 offset, or a one-off `ZIPPIE_VERSION_CODE` >= 158 on the dispatch. Nothing
@@ -357,6 +359,29 @@ everything is.
 deployed to the travel router and #22 stays open until an on-device iperf says otherwise.
 What the harness can prove is the shape of the cost, not the router's absolute
 number - run it on the device to get that.
+
+### 8. The shaper on the bond is configured and not running (PR #42)
+
+PR #42 puts cake on `pbz0` via `sqm-scripts` and measured it on 2026-08-31:
+24 / 78 / 281 ms with a 50 MB fetch beside the ping, against 85 / 355 / 920
+without. Read on the router 2026-09-01 19:26 EDT, 9 h 33 m after that day's
+cold boot, nothing changed:
+
+    uci -q show sqm | grep pbz0          sqm.pbz0.enabled='1'  download='5000'  upload='1200'
+    tc qdisc show dev pbz0               qdisc noqueue 0: root refcnt 2
+    ls /etc/rc.d | grep -E 'sqm|zippie'  S50sqm  S99zippie
+
+The `uci` section is there, the init script is enabled, and the interface has
+no qdisc. `S50sqm` runs before `S99zippie` creates `pbz0`, and
+`/etc/hotplug.d/iface/11-sqm` fires only for netifd interfaces, which `pbz0`
+is not - so nothing ever retries. The PR's own comment predicts this state
+("sqm silently does nothing when its interface is absent at start") and its
+read-back would print the WARNING; its acceptance criterion "`sqm` is enabled
+at boot" is true and does not mean the shaper is. In the four buckets this is
+DEPLOYED, NEVER EXERCISED across a boot, and #42 is unmerged with that on the
+record. The fix belongs where `pbz0` is created, not in the boot order.
+Merging #42 also fires `deploy.travel-router.yml`, which rides the tunnel it
+restarts: pick the moment and arm a dead man switch first.
 
 ## Operating notes
 
