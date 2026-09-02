@@ -106,7 +106,8 @@ watchdog and has stranded this router before), then both handsets separately.
 **Router cold boot.** `sysrq` at 09:52:59 against 226968 s of uptime. SSH
 answered 24 s after it went down. First announce per leg, off the router's own
 log: `iphone-8fe5` 09:53:10, `pixel-6a-ea83` 09:54:24, `pixel-6a-589f` 09:55:21.
-At t+112 s the Android was carrying the household ALONE - `primary=pixel-6a-ea83`,
+At t+112 s (the agent's own `uptime: 91s`; it starts about 20 s into boot) the
+Android was carrying the household ALONE - `primary=pixel-6a-ea83`,
 `active=['pixel-6a-ea83']` - before the Fios repeater returned. Settled at
 t+344 s with three legs carrying: `hotspot` w168, `pixel-6a-ea83` w32 at 0.0%
 loss, `pixel-6a-589f` w16 at 7.5%.
@@ -138,7 +139,7 @@ the relay would carry bytes and never appear in the leg list.
 
 ### Where this stands, in four buckets (re-read 2026-09-01, evening)
 
-Re-measured from scratch in the evening, off the live router (`7a071db`,
+Re-measured from scratch in the evening, off the live router (`68f72ed`,
 deployed 2026-08-31, uptime 32293 s) and the live handsets (both Pixel 6a,
 `app.zippie.companion` `0.1.0-157-735a31b`, reached over adb through SSH
 tunnels off the router). The morning's numbers above still stand; these are
@@ -192,8 +193,8 @@ the ones read again, so the claim does not rest on memory.
 - Everything under `companion-android/` on this repo's main. The handsets run
   `0.1.0-157-735a31b`, built from the history that `24657d1` (clean-slate
   initial commit) replaced; that commit is not in this repo, so the exact diff
-  cannot be read. Known to be on main and not on the handset: `ed9c5e4`,
-  `8a5af4b` (Status tab to the iOS design, Relay on its own tab), `9484afb`.
+  cannot be read. Known to be on main and not on the handset: `b387231`,
+  `1f46da6` (Status tab to the iOS design, Relay on its own tab), `6596d08`.
 - **Nothing from this repo can be installed over it as the build stands.**
   `versionCode` is the commit count (`companion-android/ci/build-signed-apk.sh`
   line 82); main has 24 commits, the handset has 157, and Android refuses the
@@ -203,7 +204,7 @@ the ones read again, so the claim does not rest on memory.
   prescribes - but whether the keystore seeded into CI on 2026-08-28 is that
   same key has not been checked, and a different one is
   `INSTALL_FAILED_UPDATE_INCOMPATIBLE`.
-- PR #44 (absent legs hidden, as on iOS): merged as `8192127` on
+- PR #44 (absent legs hidden, as on iOS): merged as `937fcfa` on
   2026-09-01 19:25 EDT, so it joins the list above - on main, not on the
   handset, for the same `versionCode` reason.
 
