@@ -106,7 +106,8 @@ watchdog and has stranded this router before), then both handsets separately.
 **Router cold boot.** `sysrq` at 09:52:59 against 226968 s of uptime. SSH
 answered 24 s after it went down. First announce per leg, off the router's own
 log: `iphone-8fe5` 09:53:10, `pixel-6a-ea83` 09:54:24, `pixel-6a-589f` 09:55:21.
-At t+112 s the Android was carrying the household ALONE - `primary=pixel-6a-ea83`,
+At t+112 s (the agent's own `uptime: 91s`; it starts about 20 s into boot) the
+Android was carrying the household ALONE - `primary=pixel-6a-ea83`,
 `active=['pixel-6a-ea83']` - before the Fios repeater returned. Settled at
 t+344 s with three legs carrying: `hotspot` w168, `pixel-6a-ea83` w32 at 0.0%
 loss, `pixel-6a-589f` w16 at 7.5%.
