@@ -1,8 +1,14 @@
 """Ask the LAN which adb port Android picked.
 
-Run this ON THE ROUTER, which shares the phone's LAN:
+Run this ON THE ROUTER, which shares the phone's LAN. Pass the router's own
+address on that LAN - `install-to-handsets.sh` derives it rather than carrying
+one, because a hardcoded default went stale when the LAN was renumbered and the
+failure surfaced as `OSError: [Errno 19] No such device`, which names neither
+the address nor the renumbering:
 
-    ssh root@<router> 'python3 -' < adb-port.py
+    LAN=$(ssh root@<router> "ip -4 -o addr show br-lan | cut -d/ -f1 | rev \
+        | cut -d' ' -f1 | rev")
+    ssh root@<router> "python3 - $LAN 8" < adb-port.py
 
 WHY THIS EXISTS. Android's wireless debugging port is chosen by adbd every time
 it is enabled, so a number read off the phone's screen goes stale - and it does
@@ -96,7 +102,17 @@ def records(buf):
 
 
 def main():
-    lan = sys.argv[1] if len(sys.argv) > 1 else "10.99.0.1"
+    # NO DEFAULT. A wrong LAN address does not report "wrong address", it
+    # raises errno 19 out of IP_ADD_MEMBERSHIP below, which reads like a broken
+    # socket API. The caller knows the address - and on the router it is one
+    # command away - so ask for it rather than guessing on its behalf.
+    if len(sys.argv) < 2:
+        print("usage: adb-port.py <this host's address on the phones' LAN> "
+              "[seconds]")
+        print("on the router:  python3 - \"$(ip -4 -o addr show br-lan "
+              "| awk '{print $4}' | cut -d/ -f1)\" 8")
+        return 2
+    lan = sys.argv[1]
     seconds = int(sys.argv[2]) if len(sys.argv) > 2 else 8
 
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

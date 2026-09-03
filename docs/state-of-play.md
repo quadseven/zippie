@@ -183,12 +183,16 @@ the ones read again, so the claim does not rest on memory.
   with `unlocked=true token=present`, because neither handset has a secure lock
   credential. Setting a PIN would exercise it, and would also put adb-over-Wi-Fi
   behind that PIN after the reboot.
-- The `MY_PACKAGE_REPLACED` restart in the manifest. Build 157 was installed
-  by the DPC on 2026-08-23 (first install 14:33 / 18:31, updated 22:58 / 22:59
-  the same day); whether the relay came back on its own after that update was
-  not observed by anyone in this repo.
+- ~~The `MY_PACKAGE_REPLACED` restart in the manifest.~~ EXERCISED AND
+  OBSERVED 2026-09-03, on the 157 -> 195 install. Nobody touched either phone:
+  both legs re-announced within seconds of their own package being replaced
+  (`pixel-6a-ea83` 00:05:01, `pixel-6a-589f` 00:05:15, off the router's log)
+  and the router had all three legs `in_bond` and `contributing` immediately
+  after.
 
-**MERGED, NOT DEPLOYED** (on main, not on the handset):
+**MERGED, NOT DEPLOYED** (on main, not on the handset) - EMPTIED 2026-09-03
+when build 195 reached both handsets; kept below as the record of what was
+stranded, and of why:
 
 - Everything under `companion-android/` on this repo's main. The handsets run
   `0.1.0-157-735a31b`, built from the history that `24657d1` (clean-slate
@@ -203,15 +207,13 @@ the ones read again, so the claim does not rest on memory.
   The offset is the retired history's LENGTH, not the 157 read off a handset,
   so it bounds every code that history could have minted whether or not that
   reading is right.
-- **The signing certificate is the remaining blocker, and it is unchecked.**
-  The installed build is signed `CN=Zippie Companion, O=zippie` - the DN the
-  README prescribes - and all four `ANDROID_KEYSTORE_*` / `ANDROID_KEY_*`
-  repo secrets exist (seeded 2026-08-28), but whether that key is the one that
-  signed build 157 has never been compared. A different certificate is
-  `INSTALL_FAILED_UPDATE_INCOMPATIBLE` at any version code. The comparison is
-  the release job's `signer SHA-256` line against the handset's
-  `dumpsys package app.zippie.companion`. The release workflow
-  `app.companion-android.release.yml` has still never been dispatched.
+- **The signing certificate matched, and both handsets are now on main.**
+  Compared 2026-09-03: the release job and both devices all produce
+  `ecaaf695...`, read off the APK pulled from each phone rather than off a log.
+  The release workflow was dispatched for the first time, built 195, and
+  `ci/install-to-handsets.sh` put it on both handsets in place over 157 -
+  counters kept, nothing uninstalled. The digest is now pinned in
+  `build-signed-apk.sh`.
 - PR #44 (absent legs hidden, as on iOS): merged as `937fcfa` on
   2026-09-01 19:25 EDT, so it joins the list above - on main, not on the
   handset, for the same `versionCode` reason.
