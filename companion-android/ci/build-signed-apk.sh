@@ -22,8 +22,9 @@
 #   ZIPPIE_KEY_PASSWORD       key password
 #
 # Optional:
-#   ZIPPIE_VERSION_CODE   override the commit-count default (a rebuild of the
-#                         same commit needs a higher code to install over it)
+#   ZIPPIE_VERSION_CODE   override the computed default (a rebuild of the
+#                         same commit needs a higher code to install over it).
+#                         Still has to clear RETIRED_HISTORY_COMMITS below.
 #   ZIPPIE_BUILD_MARKER   appended to the version name and to the output file
 #                         name; the throwaway-key wrapper sets it to TESTKEY
 #   ZIPPIE_BUILD_BUNDLE   also produce a signed .aab for managed Google Play
@@ -65,13 +66,40 @@ require_env ZIPPIE_KEY_PASSWORD
 # ---------------------------------------------------------------------------
 # Version numbering
 #
-# versionCode is the commit count of the ref being built. That is monotonic
-# along main, it is derivable from any checkout (so an APK can be traced back to
-# a commit), and it needs no external counter that could reset. The consequence
-# is deliberate: a build from an older branch produces a LOWER code and the
-# phone refuses to install it over a newer one, which is the correct answer
-# stated loudly rather than an older app silently replacing a newer one.
+# versionCode is the commit count of the ref being built, PLUS the length of
+# the history this repository replaced. The count part is monotonic along main,
+# is derivable from any checkout (so an APK can be traced back to a commit), and
+# needs no external counter that could reset. The consequence is deliberate: a
+# build from an older branch produces a LOWER code and the phone refuses to
+# install it over a newer one, which is the correct answer stated loudly rather
+# than an older app silently replacing a newer one.
+#
+# THE OFFSET IS NOT COSMETIC - WITHOUT IT NOTHING MERGED HERE CAN REACH A PHONE.
+# A commit count is monotonic only within ONE history. This repository was
+# recreated from scratch on 2026-08-28 (24657d1, infra#2958) and the count
+# restarted at 1, while both handsets were carrying a build minted from the
+# retired history at 157. Every build from the new history therefore numbered
+# BELOW what was installed, and `adb install` answered
+# INSTALL_FAILED_VERSION_DOWNGRADE - so the fix for the phantom legs (#44) sat
+# on main for a day while both handsets went on drawing an unplugged ethernet
+# port and an unassociated station radio as links in the bond, which is the
+# whole reason this offset exists.
+#
+# The offset is the LENGTH OF THE RETIRED HISTORY (166 commits on that
+# repository's main), not the version code someone read off a handset. Those
+# are different numbers and the distinction is the point: the length bounds
+# EVERY code that history could ever have minted, so this is correct without
+# anyone having to be right about which build a given phone happens to be
+# carrying. The numbering continues that line rather than restarting it - this
+# repository's first commit is 167 - and no code minted here can collide with
+# one minted there.
+#
+# It is a constant rather than a value passed on the dispatch because a one-off
+# `ZIPPIE_VERSION_CODE=158` fixes one build and leaves the next one broken in
+# exactly the same way, silently, for whoever forgets it next.
 # ---------------------------------------------------------------------------
+RETIRED_HISTORY_COMMITS=166
+
 if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
     # A shallow clone does not fail this count, it QUIETLY returns a small
     # number - which would mint version codes that go backwards on the next
@@ -79,7 +107,29 @@ if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
     fail "this is a shallow clone, so the commit count would be wrong - use fetch-depth: 0"
 fi
 
-VERSION_CODE="${ZIPPIE_VERSION_CODE:-$(git rev-list --count HEAD)}"
+if [ -n "${ZIPPIE_VERSION_CODE:-}" ]; then
+    VERSION_CODE="$ZIPPIE_VERSION_CODE"
+else
+    VERSION_CODE="$(( $(git rev-list --count HEAD) + RETIRED_HISTORY_COMMITS ))"
+fi
+
+# Checked for the OVERRIDE as well as for the computed value, which is the whole
+# point of putting it here instead of inside the else branch above: the
+# realistic way this breaks again is somebody passing a code by hand, and a
+# forty-minute build that produces an APK no phone will take is worth failing
+# in the first second instead.
+#
+# WHAT THIS DOES NOT CATCH, stated so nobody trusts it further than it goes:
+# the floor is the same constant as the offset, so setting
+# RETIRED_HISTORY_COMMITS to 0 removes both and this check still passes. There
+# is no second number to compare against that would not itself be the same fact
+# written twice. That edit is a deliberate change to a documented line rather
+# than an accident, and it surfaces on the next install attempt.
+case "$VERSION_CODE" in
+    ''|*[!0-9]*) fail "version code '$VERSION_CODE' is not a number" ;;
+esac
+[ "$VERSION_CODE" -gt "$RETIRED_HISTORY_COMMITS" ] || fail \
+    "version code $VERSION_CODE does not clear the retired history's $RETIRED_HISTORY_COMMITS commits, so this build cannot install over what the handsets carry"
 SHORT_SHA="$(git rev-parse --short=7 HEAD)"
 MARKER="${ZIPPIE_BUILD_MARKER:-}"
 if [ -n "$MARKER" ]; then

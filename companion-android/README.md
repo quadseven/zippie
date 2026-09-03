@@ -351,11 +351,17 @@ Android decides an upgrade on two facts, and both are handled here:
   are different certificates**, and so are two throwaway builds from two
   different CI runs.
 - **A strictly higher `versionCode`.** `versionCode` is the commit count of the
-  ref being built (`git rev-list --count HEAD`), so it only moves forward along
-  main and can be traced back to a commit. A build from an older branch has a
-  LOWER count and the phone refuses it (`INSTALL_FAILED_VERSION_DOWNGRADE`) -
-  which is the correct answer, said out loud, rather than an older app silently
-  replacing a newer one.
+  ref being built (`git rev-list --count HEAD`) plus `RETIRED_HISTORY_COMMITS`
+  (166), the length of the history this repository replaced, so it only moves
+  forward along main and can be traced back to a commit. A build from an older
+  branch has a LOWER count and the phone refuses it
+  (`INSTALL_FAILED_VERSION_DOWNGRADE`) - which is the correct answer, said out
+  loud, rather than an older app silently replacing a newer one. The offset is
+  why a build from this repository can install over one minted before the clean
+  slate; `build-signed-apk.sh` refuses any code that does not clear it. A CI
+  build of a pull request numbers ONE HIGHER than the same branch built by
+  hand, because Actions checks out the merge ref and that carries an extra
+  merge commit - expected, and still monotonic.
 
 `versionName` carries the same numbers plus the short sha, so
 Settings > Apps names the exact commit: `0.1.0-341-0ce0f7f`, and
@@ -364,14 +370,25 @@ Settings > Apps names the exact commit: `0.1.0-341-0ce0f7f`, and
 **Two Pixel 6a handsets run build `0.1.0-157-735a31b`**, installed by the
 device-management agent on 2026-08-23 and updated once the same day, signed
 `CN=Zippie Companion, O=zippie`. Whether that update preserved the budget
-counters was not observed. And the sentence above about the count moving
-forward along main was made false by `24657d1`, the clean-slate initial
-commit: this repo's main has 24 commits, the handset has 157, so every build
-from here is a refused downgrade until the count is offset or
-`ZIPPIE_VERSION_CODE` is passed by hand (>= 158). Neither has been done
-(2026-09-01). The release workflow has never been dispatched, and whether the
-keystore seeded into CI on 2026-08-28 is the key that signed build 157 has not
-been checked.
+counters was not observed.
+
+`24657d1`, the clean-slate initial commit, restarted the commit count at 1 while
+those handsets carried 157, so for four days every build from this repository
+was a refused downgrade and nothing merged here could reach a phone - the #44
+fix for phantom legs sat on main while both handsets went on drawing them.
+`RETIRED_HISTORY_COMMITS` closes that (2026-09-02): the offset is the retired
+history's LENGTH rather than any code read off a handset, which bounds every
+code that history could have minted without anyone needing to be right about
+which build a given phone carries.
+
+**Still unchecked: the signing certificate.** The four `ANDROID_KEYSTORE_*` /
+`ANDROID_KEY_*` repository secrets exist (seeded 2026-08-28), but whether that
+key is the one that signed build 157 has not been compared. A different
+certificate is `INSTALL_FAILED_UPDATE_INCOMPATIBLE` no matter how high the
+version code goes. `build-signed-apk.sh` prints `signer SHA-256 <digest>` for
+what it built; the handset's side of that comparison is
+`adb shell dumpsys package app.zippie.companion` (`signatures=` / `pkg cert`).
+The release workflow has never been dispatched.
 
 ### Building a release APK by hand
 
