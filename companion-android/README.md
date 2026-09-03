@@ -358,7 +358,10 @@ Android decides an upgrade on two facts, and both are handled here:
   (`INSTALL_FAILED_VERSION_DOWNGRADE`) - which is the correct answer, said out
   loud, rather than an older app silently replacing a newer one. The offset is
   why a build from this repository can install over one minted before the clean
-  slate; `build-signed-apk.sh` refuses any code that does not clear it.
+  slate; `build-signed-apk.sh` refuses any code that does not clear it. A CI
+  build of a pull request numbers ONE HIGHER than the same branch built by
+  hand, because Actions checks out the merge ref and that carries an extra
+  merge commit - expected, and still monotonic.
 
 `versionName` carries the same numbers plus the short sha, so
 Settings > Apps names the exact commit: `0.1.0-341-0ce0f7f`, and

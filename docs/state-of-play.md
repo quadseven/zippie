@@ -199,7 +199,7 @@ the ones read again, so the claim does not rest on memory.
   `build-signed-apk.sh` now adds `RETIRED_HISTORY_COMMITS = 166` - the length
   of the retired history - to the commit count, so this repo's numbering
   continues that line instead of restarting below it, and the script refuses
-  any code that does not clear the floor. Main builds at 193 rather than 27.
+  any code that does not clear the floor. Main builds at 194 rather than 28.
   The offset is the retired history's LENGTH, not the 157 read off a handset,
   so it bounds every code that history could have minted whether or not that
   reading is right.
