@@ -284,6 +284,10 @@ facts_value() { printf '%s\n' "$FACTS" | sed -n "s/^$1=//p"; }
     || fail "apk-facts.py reads versionName $(facts_value versionName), aapt2 reads $BUILT_NAME"
 [ "$(facts_value signerSha256)" = "$CERT_DIGEST" ] \
     || fail "apk-facts.py reads signer $(facts_value signerSha256), apksigner reads $CERT_DIGEST"
+# Said out loud on SUCCESS too. A check that only speaks when it fails looks
+# identical in the log to one that stopped running, and the whole value of this
+# one is that the operator's laptop can trust a reader it has no way to verify.
+echo "apk-facts.py agrees with aapt2 and apksigner on all four facts"
 
 # ---------------------------------------------------------------------------
 # Publish it under a name that says what it is
