@@ -93,6 +93,10 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+listening() { python3 -c 'import socket,sys
+s=socket.socket(); s.settimeout(0.5)
+sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)' "$1"; }
+
 while read -r ip port; do
     [ -n "$ip" ] || continue
     # A local port that is free right now, rather than reusing the device's:
@@ -100,12 +104,29 @@ while read -r ip port; do
     LOCAL="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
     ssh -o ConnectTimeout=10 -o ExitOnForwardFailure=yes -N -L "$LOCAL:$ip:$port" "$ROUTER" &
     TUNNEL_PIDS="$TUNNEL_PIDS $!"
+
+    # WAIT FOR THIS ONE TO BIND BEFORE ASKING FOR THE NEXT PORT. The kernel
+    # hands out a free port, we close the socket, and ssh binds it a moment
+    # later - so a second iteration that asks in that gap can be handed the
+    # SAME number. `ExitOnForwardFailure` then makes the loser exit without a
+    # word and that handset is silently never tunnelled. Once ssh holds the
+    # port, the kernel will not offer it again.
+    bound=""
+    for _ in $(seq 1 40); do
+        if listening "$LOCAL"; then bound=1; break; fi
+        sleep 0.25
+    done
+    if [ -z "$bound" ]; then
+        echo "warning: the tunnel to the handset at port $port never came up; it will be reported as not connected" >&2
+        continue
+    fi
     LOCAL_TARGETS="$LOCAL_TARGETS localhost:$LOCAL"
 done <<EOF
 $ENDPOINTS
 EOF
 
-sleep 5
+[ -n "$LOCAL_TARGETS" ] || fail "no tunnel came up - is $ROUTER reachable?"
+
 for target in $LOCAL_TARGETS; do
     adb connect "$target" >/dev/null 2>&1 || true
 done

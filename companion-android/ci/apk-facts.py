@@ -45,6 +45,8 @@ V2_BLOCK_ID = 0x7109871A
 # resource map instead - so matching on the pool string alone finds nothing.
 ATTR_BY_RES_ID = {0x0101021B: "versionCode", 0x0101021C: "versionName"}
 
+WANTED = ("package", "versionCode", "versionName")
+
 
 class NotAnApk(Exception):
     pass
@@ -77,6 +79,26 @@ def _string_pool(chunk: bytes) -> list[str]:
     return out
 
 
+def _element_attrs(axml: bytes, p: int, pool: list, res_map: list) -> dict:
+    """The attributes of one start-element, by name."""
+    attr_start = p + struct.unpack_from("<H", axml, p + 8)[0]
+    attr_count = struct.unpack_from("<H", axml, p + 12)[0]
+    out = {}
+    for i in range(attr_count):
+        a = attr_start + i * 20
+        name_idx = struct.unpack_from("<I", axml, a + 4)[0]
+        raw_idx = struct.unpack_from("<i", axml, a + 8)[0]
+        data_type = axml[a + 15]
+        key = ATTR_BY_RES_ID.get(res_map[name_idx]) if name_idx < len(res_map) else None
+        if key is None:
+            key = pool[name_idx]
+        # 0x03 is TYPE_STRING, whose real value is the raw pool entry; anything
+        # else (versionCode is an int) is in the typed data word.
+        out[key] = (pool[raw_idx] if data_type == 0x03 and raw_idx >= 0
+                    else struct.unpack_from("<I", axml, a + 16)[0])
+    return out
+
+
 def manifest_facts(axml: bytes) -> dict:
     """package / versionCode / versionName off the first `manifest` element."""
     pool: list[str] = []
@@ -95,25 +117,9 @@ def manifest_facts(axml: bytes) -> dict:
             # ResXMLTree_attrExt, straight after the 16-byte node header:
             # ns, name, attributeStart, attributeSize, attributeCount, ...
             p = off + header_size
-            element = pool[struct.unpack_from("<I", axml, p + 4)[0]]
-            if element != "manifest":
-                off += size
-                continue
-            attr_start = p + struct.unpack_from("<H", axml, p + 8)[0]
-            attr_count = struct.unpack_from("<H", axml, p + 12)[0]
-            facts = {}
-            for i in range(attr_count):
-                a = attr_start + i * 20
-                name_idx = struct.unpack_from("<I", axml, a + 4)[0]
-                raw_idx = struct.unpack_from("<i", axml, a + 8)[0]
-                data_type = axml[a + 15]
-                value = struct.unpack_from("<I", axml, a + 16)[0]
-                key = ATTR_BY_RES_ID.get(res_map[name_idx]) if name_idx < len(res_map) else None
-                if key is None:
-                    key = pool[name_idx]
-                # 0x03 is TYPE_STRING, whose real value is the raw pool entry.
-                facts[key] = pool[raw_idx] if data_type == 0x03 and raw_idx >= 0 else value
-            return {k: facts[k] for k in ("package", "versionCode", "versionName") if k in facts}
+            if pool[struct.unpack_from("<I", axml, p + 4)[0]] == "manifest":
+                found = _element_attrs(axml, p, pool, res_map)
+                return {k: found[k] for k in WANTED if k in found}
         off += size
     raise NotAnApk("no `manifest` element in AndroidManifest.xml")
 
@@ -155,13 +161,24 @@ def signer_digests(path: str) -> list[str]:
         pair_id = struct.unpack_from("<I", block, off + 8)[0]
         value = block[off + 12:off + 8 + pair_size]
         if pair_id == V2_BLOCK_ID:
-            out = []
-            for signer in _length_prefixed(next(_length_prefixed(value))):
-                signed_data = next(_length_prefixed(signer))
-                # signed data is: digests, then certificates, then attributes.
-                certificates = list(_length_prefixed(signed_data))[1]
-                for der in _length_prefixed(certificates):
-                    out.append(hashlib.sha256(der).hexdigest())
+            # A truncated or malformed block must say so, not raise
+            # StopIteration or IndexError out of a generator: this runs in the
+            # preflight of an install, where "malformed APK" is an answer and a
+            # traceback is not.
+            try:
+                out = []
+                for signer in _length_prefixed(next(_length_prefixed(value))):
+                    signed_data = next(_length_prefixed(signer))
+                    # signed data is: digests, then certificates, then attributes.
+                    sections = list(_length_prefixed(signed_data))
+                    if len(sections) < 2:
+                        raise NotAnApk("v2 signed data has no certificate section")
+                    for der in _length_prefixed(sections[1]):
+                        out.append(hashlib.sha256(der).hexdigest())
+            except (StopIteration, IndexError, struct.error) as exc:
+                raise NotAnApk("malformed v2 signing block: %s" % exc) from exc
+            if not out:
+                raise NotAnApk("v2 signing block carries no certificate")
             return out
         off += 8 + pair_size
     raise NotAnApk("no v2 signature - this build cannot install on minSdk 29")
@@ -186,7 +203,7 @@ def main(argv: list[str]) -> int:
     for path in paths:
         try:
             got = facts(path)
-        except (NotAnApk, KeyError, zipfile.BadZipFile) as exc:
+        except (NotAnApk, KeyError, IndexError, struct.error, zipfile.BadZipFile) as exc:
             sys.stderr.write("%s: %s\n" % (path, exc))
             return 1
         if as_json:
