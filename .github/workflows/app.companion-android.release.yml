@@ -10,14 +10,27 @@ name: App - zippie companion android - signed release APK (manual)
 # - that is a separate decision with a developer account and a review loop
 # behind it (#55 lists both routes; this is the sideload route).
 #
-# THE REAL SIGNING KEY DOES NOT EXIST YET (checked 2026-08-10: 227 SSM
-# parameters, nothing under /infra/android/). Until Operator runs the ceremony in
-# companion-android/README.md, `keystore: release` fails immediately with the
-# command to run, and `keystore: throwaway` produces an installable build signed
-# with a key created and destroyed inside the job.
+# THE SIGNING SECRETS NOW EXIST - all four were seeded 2026-08-28 (re-checked
+# 2026-09-02 against the repository's secret list). The header used to say they
+# did not, which was true when it was written on 2026-08-10 and had been false
+# for five days by the time anyone read it again.
 #
-# Repo secrets, once the key exists (seeded from SSM /infra/android/*, exactly
-# as the ASC_* secrets are seeded from /infra/apple/*):
+# WHAT IS STILL UNKNOWN IS WHETHER THAT KEY IS THE ONE THAT SIGNED BUILD 157,
+# the build both handsets are carrying. A version code that clears the retired
+# history (RETIRED_HISTORY_COMMITS in companion-android/ci/build-signed-apk.sh)
+# gets an install past INSTALL_FAILED_VERSION_DOWNGRADE and straight into
+# INSTALL_FAILED_UPDATE_INCOMPATIBLE if the certificate differs. This job prints
+# `signer SHA-256 <digest>` for what it built; compare it against the handset's
+# own `adb shell dumpsys package app.zippie.companion` BEFORE assuming an
+# upgrade install will work. If they differ the only way on is an uninstall,
+# which discards the on-device DataBudget counters.
+#
+# `keystore: throwaway` still produces an installable build signed with a key
+# created and destroyed inside the job - a different certificate again, so it
+# also cannot upgrade build 157 in place.
+#
+# Repo secrets (seeded from SSM /infra/android/*, exactly as the ASC_* secrets
+# are seeded from /infra/apple/*):
 #   ANDROID_KEYSTORE_BASE64    base64 of the PKCS12 keystore
 #   ANDROID_KEYSTORE_PASSWORD  store password
 #   ANDROID_KEY_ALIAS          key alias

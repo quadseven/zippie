@@ -195,22 +195,31 @@ the ones read again, so the claim does not rest on memory.
   initial commit) replaced; that commit is not in this repo, so the exact diff
   cannot be read. Known to be on main and not on the handset: `b387231`,
   `1f46da6` (Status tab to the iOS design, Relay on its own tab), `6596d08`.
-- **Nothing from this repo can be installed over it as the build stands.**
-  `versionCode` is the commit count (`companion-android/ci/build-signed-apk.sh`
-  line 82); main has 24 commits, the handset has 157, and Android refuses the
-  downgrade (`INSTALL_FAILED_VERSION_DOWNGRADE`). The release workflow
-  `app.companion-android.release.yml` has never been dispatched. The installed
-  build is signed `CN=Zippie Companion, O=zippie` - the DN the README
-  prescribes - but whether the keystore seeded into CI on 2026-08-28 is that
-  same key has not been checked, and a different one is
-  `INSTALL_FAILED_UPDATE_INCOMPATIBLE`.
+- **The version-code half of that is fixed (2026-09-02).**
+  `build-signed-apk.sh` now adds `RETIRED_HISTORY_COMMITS = 166` - the length
+  of the retired history - to the commit count, so this repo's numbering
+  continues that line instead of restarting below it, and the script refuses
+  any code that does not clear the floor. Main builds at 193 rather than 27.
+  The offset is the retired history's LENGTH, not the 157 read off a handset,
+  so it bounds every code that history could have minted whether or not that
+  reading is right.
+- **The signing certificate is the remaining blocker, and it is unchecked.**
+  The installed build is signed `CN=Zippie Companion, O=zippie` - the DN the
+  README prescribes - and all four `ANDROID_KEYSTORE_*` / `ANDROID_KEY_*`
+  repo secrets exist (seeded 2026-08-28), but whether that key is the one that
+  signed build 157 has never been compared. A different certificate is
+  `INSTALL_FAILED_UPDATE_INCOMPATIBLE` at any version code. The comparison is
+  the release job's `signer SHA-256` line against the handset's
+  `dumpsys package app.zippie.companion`. The release workflow
+  `app.companion-android.release.yml` has still never been dispatched.
 - PR #44 (absent legs hidden, as on iOS): merged as `937fcfa` on
   2026-09-01 19:25 EDT, so it joins the list above - on main, not on the
   handset, for the same `versionCode` reason.
 
-**NOT BUILT**: a `versionCode` that clears 157 from this repo's history - an
-offset, or a one-off `ZIPPIE_VERSION_CODE` >= 158 on the dispatch. Nothing
-else for the announce goal.
+**NOT BUILT**: nothing further for the announce goal. The `versionCode` that
+clears 157 shipped 2026-09-02 as an offset rather than a one-off dispatch
+value, because a one-off fixes one build and leaves the next one broken the
+same way.
 
 Observed and not chased: on build 157 the Diagnostics screen said `Bond: not
 carrying`, `Last announce: not checked` at 18:54 while the Status tab and the
