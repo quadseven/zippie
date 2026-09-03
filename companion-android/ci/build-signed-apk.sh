@@ -211,6 +211,37 @@ grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' "$VERIFY_OUT"
 CERT_DIGEST="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$VERIFY_OUT")"
 [ -n "$CERT_DIGEST" ] || fail "apksigner printed no certificate digest"
 
+# ---------------------------------------------------------------------------
+# Is this the key the fleet already trusts?
+#
+# A version code that clears the floor gets an install past
+# INSTALL_FAILED_VERSION_DOWNGRADE and straight into
+# INSTALL_FAILED_UPDATE_INCOMPATIBLE if the certificate differs, and the only
+# way through THAT is an uninstall, which discards the on-device DataBudget
+# counters. So the certificate is pinned by digest here, and a real release
+# build signed by anything else fails now rather than on someone's handset.
+#
+# THE DIGEST IS THE ONLY THING THAT DISTINGUISHES THESE KEYS. Every key this
+# project has used carries the same certificate subject ("zippie"), including
+# the throwaway ones, and a build whose file name, version name and artifact
+# name ALL said TESTKEY still reached the fleet once. Naming is not a control.
+#
+# Verified 2026-09-03 to be the certificate on both handsets: read off the
+# APK pulled from each device, and identical to what the release job builds.
+# Changing the release key is a deliberate edit of this line, and a re-install
+# of every handset.
+FLEET_SIGNER_SHA256="ecaaf695e2ac5bee845edf075038437ab8ae668890c07012525640c652e477f7"
+
+if [ -z "$MARKER" ]; then
+    [ "$CERT_DIGEST" = "$FLEET_SIGNER_SHA256" ] || fail \
+        "this APK is signed by $CERT_DIGEST, not the fleet certificate $FLEET_SIGNER_SHA256 - installing it would need an uninstall first, which discards the on-device budget counters"
+else
+    # A marked build (TESTKEY) is signed by a key that is generated and
+    # destroyed inside the job. It is SUPPOSED to differ, and saying so here
+    # keeps the log honest about what the artifact can and cannot do.
+    echo "marked build ($MARKER): signer is not checked against the fleet certificate, and this APK cannot upgrade an installed release build"
+fi
+
 "$ZIPALIGN" -c 4 "$APK" || fail "$APK is not 4-byte aligned"
 
 # Read the version back OUT of the built APK. Exporting an environment variable
@@ -232,6 +263,31 @@ case "$BUILT_NAME" in
 esac
 [ "$BUILT_PACKAGE" = "app.zippie.companion" ] \
     || fail "the APK is package $BUILT_PACKAGE, not app.zippie.companion"
+
+# ---------------------------------------------------------------------------
+# The SDK-free reader, checked against the SDK on every single build
+#
+# ci/apk-facts.py answers the same three questions without aapt2 or apksigner,
+# because the machine holding a handset is not necessarily the machine with the
+# SDK - install-to-handsets.sh runs its preflight on the operator's laptop.
+# A reader that is only exercised there would be trusted precisely where it is
+# never checked, so it is differentially tested HERE, against the SDK, on a
+# freshly built APK, with no fixture files to go stale.
+# ---------------------------------------------------------------------------
+FACTS="$(python3 ci/apk-facts.py "$APK")" || fail "ci/apk-facts.py could not read the APK the SDK just read"
+facts_value() { printf '%s\n' "$FACTS" | sed -n "s/^$1=//p"; }
+[ "$(facts_value package)" = "$BUILT_PACKAGE" ] \
+    || fail "apk-facts.py reads package $(facts_value package), aapt2 reads $BUILT_PACKAGE"
+[ "$(facts_value versionCode)" = "$BUILT_CODE" ] \
+    || fail "apk-facts.py reads versionCode $(facts_value versionCode), aapt2 reads $BUILT_CODE"
+[ "$(facts_value versionName)" = "$BUILT_NAME" ] \
+    || fail "apk-facts.py reads versionName $(facts_value versionName), aapt2 reads $BUILT_NAME"
+[ "$(facts_value signerSha256)" = "$CERT_DIGEST" ] \
+    || fail "apk-facts.py reads signer $(facts_value signerSha256), apksigner reads $CERT_DIGEST"
+# Said out loud on SUCCESS too. A check that only speaks when it fails looks
+# identical in the log to one that stopped running, and the whole value of this
+# one is that the operator's laptop can trust a reader it has no way to verify.
+echo "apk-facts.py agrees with aapt2 and apksigner on all four facts"
 
 # ---------------------------------------------------------------------------
 # Publish it under a name that says what it is
