@@ -17,9 +17,11 @@
 #   2. copy,
 #   3. prove the bytes on the router equal the bytes here,
 #   4. restart,
-#   5. prove the RUNNING agent reports the fingerprint we just installed.
+#   5. prove the RUNNING agent reports the fingerprint we just installed,
+#   6. and only then record what landed, once the router can no longer revert it.
 #
-# Steps 3 and 5 are the point. `scp` does not work against this device at all
+# Steps 3 and 5 are the point. Step 6 is LAST on purpose - see "record what we
+# did" at the bottom, and zippie#21. `scp` does not work against this device at all
 # (dropbear ships no SFTP server and OpenSSH 9+ scp speaks SFTP), so everything
 # goes through `tar` over a pipe, where a short write is silent.
 #
@@ -212,7 +214,10 @@ PY
 # the transport. (This used to cite docs/adr/0023, which does not exist here.)
 RENDERED_CONFIG="$(mktemp)"
 LIVE_CONFIG="$(mktemp)"
-trap 'rm -f "${RENDERED_CONFIG}" "${LIVE_CONFIG}"' EXIT
+# The stamp is composed locally too, so its bytes can be hashed before and
+# after the trip over the pipe - see "record what we did" at the bottom.
+STAMP_LOCAL="$(mktemp)"
+trap 'rm -f "${RENDERED_CONFIG}" "${LIVE_CONFIG}" "${STAMP_LOCAL}"' EXIT
 
 # What the router is running now, which is the only place the real values exist.
 # An empty file is legitimate - a router that has never had a config - and the
@@ -773,18 +778,13 @@ elif [[ "${CONFIG_WAS}" != "${CONFIG_SHA}" ]]; then
   echo "  that takes effect in seconds - watch /api/status, not just this script."
 fi
 
-# ------------------------------------------------------------ record what we did
-# `rollbacks_fired` IS READ AGAIN HERE, not carried down from the top of the
-# script. The pre-test fires the rollback deliberately, so the count has moved
-# since then - and a stamp written with the older number would make the NEXT
-# deploy report this deploy's own pre-test as an unexplained rescue, every time,
-# until nobody reads the warning any more.
-ROLLBACKS_NOW="$(ssh_run "wc -l < ${FIRED_MARKER} 2>/dev/null | tr -d ' '" 2>/dev/null || true)"
-ROLLBACKS_NOW="${ROLLBACKS_NOW:-0}"
-printf '{"commit":"%s","deployed_at":"%s","fingerprint":"%s","modules":%s,"config_sha256":"%s","rollbacks_fired":%s}\n' \
-  "${COMMIT}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${LOCAL_FP}" "${LOCAL_COUNT}" \
-  "${CONFIG_SHA}" "${ROLLBACKS_NOW}" \
-  | ssh_run "cat > ${STAMP} && chmod 0644 ${STAMP}"
+# THE STAMP IS NOT WRITTEN HERE. It used to be, right after the config, and
+# that is zippie#21: from this line until the disarm at the very bottom the
+# armed rollback can still fire and put the PREVIOUS package and config back,
+# and it never touched the stamp - so a deploy that died anywhere in between
+# left a stamp describing a config the router was no longer running. The stamp
+# is written last, once nothing can revert what it describes. See "record what
+# we did" below.
 
 # ---------------------------------------------------------------- restart it
 # THE RESTART IS HANDED TO CRON, NOT SENT OVER SSH - and this is the fix for
@@ -1114,9 +1114,103 @@ ssh_run "grep -q '^export ZIPPIE_GH_TOKEN=' /etc/zippie/env 2>/dev/null" || drif
 # installed; until that is true the router should still be able to rescue itself
 # without anybody connected.
 say "disarming the rollback"
-disarm_rollback \
-  || echo "  WARNING: a rollback line is still armed - it will fire and revert this deploy"
-ssh_run "rm -rf ${REMOTE_ROOT}/zippie.deploy-rollback ${REMOTE_CONFIG}.deploy-rollback" || true
+if disarm_rollback; then
+  DISARMED=1
+  ssh_run "rm -rf ${REMOTE_ROOT}/zippie.deploy-rollback ${REMOTE_CONFIG}.deploy-rollback" || true
+else
+  # THE SNAPSHOTS STAY WHEN THE DISARM DID NOT. A line that is still armed is
+  # going to fire, and a rollback that finds no snapshot restarts the agent on
+  # whatever is installed - it says so in logread, and it is not a rescue.
+  # Removing them here used to happen unconditionally, which would have turned
+  # the one firing that matters into a restart of the very build it was armed
+  # against.
+  DISARMED=0
+  echo "  WARNING: a rollback line is still armed - it will fire and revert this deploy"
+fi
+
+# ------------------------------------------------------------ record what we did
+# LAST, AND ONLY ONCE THE DISARM SUCCEEDED. This block used to sit between the
+# config install and the restart, and that ordering is zippie#21.
+#
+# What went wrong. The stamp records the sha256 of the config this deploy
+# installed, and the agent compares it to the file it loaded to answer
+# `config_matches_deploy`. Written early, the stamp described the deploy that
+# was ABOUT to happen - and between that write and the disarm above sit the
+# restart, the running-agent proof, the package installs, the helper-script
+# md5 checks, the boot-enable check and the BSSID pin, every one of which can
+# `die` with the rollback still armed. When the rollback then fired it restored
+# the previous package and the previous `zippie.toml`, as designed, and left
+# the stamp alone, because the stamp was never part of the snapshot. The
+# router came back running the OLD config beside a stamp naming the NEW one,
+# and `config_matches_deploy` went False for a reason that had nothing to do
+# with anybody editing anything. An indicator that goes False for benign
+# reasons is an indicator the operator learns to ignore, and then the next
+# real drift is noise.
+#
+# The rendered config is where it showed: the repo scrubs `endpoint`, the
+# renderer splices the router's own value in, and the stamp hashes that
+# render. So the stamped hash matched neither the repo file nor the file the
+# rollback had put back - three hashes, no two of them equal, and no way to
+# tell from the router which one was ever true.
+#
+# Why the ordering rather than teaching the rollback to restore the stamp.
+# The rollback runs from the router's own cron, after ssh may already be gone,
+# so anything it restores has to be staged before the risky step - which is
+# possible, but it makes two scripts responsible for one invariant and the
+# first deploy to a fresh router (no previous stamp) a special case. Writing
+# the stamp after the disarm needs nothing on the router and holds in every
+# ordering by construction: a rollback that fires finds the previous stamp
+# beside the previous files it restores, and a stamp that exists at all
+# describes a deploy that survived its own rollback window. Until that moment
+# the previous stamp stays in place, and a router mid-deploy reports
+# `matches_deploy: False` against it - which is true: what it is running is
+# not the last deploy that was proven.
+#
+# ONLY IF THE DISARM SUCCEEDED, for the same reason. A rollback still armed is
+# going to restore the snapshot, so the previous stamp is the right one to
+# leave. If the disarm actually worked and only its read-back failed, the
+# router keeps running this build under the previous stamp until the next
+# deploy records it - False, not a lie, and the warning above says which.
+#
+# `rollbacks_fired` IS READ HERE, not carried down from the top of the script.
+# The pre-test fires the rollback deliberately, so the count has moved since
+# then - and a stamp written with the older number would make the NEXT deploy
+# report this deploy's own pre-test as an unexplained rescue, every time, until
+# nobody reads the warning any more.
+#
+# WRITTEN ASIDE, HASHED, THEN MOVED, like the config: dropbear has no SFTP, so
+# this crosses a pipe where a short write is silent, and a truncated stamp is
+# read by build.py as "no stamp", which quietly turns every drift answer into
+# unknown. The one file whose job is to be believed is checked the same way as
+# the files it describes.
+if [[ "${DISARMED}" -eq 1 ]]; then
+  ROLLBACKS_NOW="$(ssh_run "wc -l < ${FIRED_MARKER} 2>/dev/null | tr -d ' '" 2>/dev/null || true)"
+  ROLLBACKS_NOW="${ROLLBACKS_NOW:-0}"
+  printf '{"commit":"%s","deployed_at":"%s","fingerprint":"%s","modules":%s,"config_sha256":"%s","rollbacks_fired":%s}\n' \
+    "${COMMIT}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${LOCAL_FP}" "${LOCAL_COUNT}" \
+    "${CONFIG_SHA}" "${ROLLBACKS_NOW}" > "${STAMP_LOCAL}"
+  ssh_run "cat > ${STAMP}.new" < "${STAMP_LOCAL}" \
+    || die "could not write ${STAMP}.new. The router IS running ${LOCAL_FP} and the
+  rollback is disarmed; only the record of it failed. The previous stamp is
+  still in place, so matches_deploy reads False until a deploy records this one."
+  want="$(md5_of "${STAMP_LOCAL}")"
+  got="$(ssh_run "md5sum ${STAMP}.new 2>/dev/null | cut -d' ' -f1")"
+  if [[ "${want}" != "${got}" ]]; then
+    ssh_run "rm -f ${STAMP}.new" || true
+    die "${STAMP} differs after copy (want ${want}, got ${got}). The router IS
+  running ${LOCAL_FP} and the rollback is disarmed; only the record of it
+  failed, and the previous stamp was NOT replaced."
+  fi
+  ssh_run "mv ${STAMP}.new ${STAMP} && chmod 0644 ${STAMP}" \
+    || die "could not move ${STAMP}.new into place. The router IS running
+  ${LOCAL_FP} and the rollback is disarmed; the previous stamp is still there."
+  echo "  ${STAMP}: ${COMMIT} / ${LOCAL_FP} / config ${CONFIG_SHA:0:16}"
+else
+  echo "  ${STAMP}: NOT written - the rollback is still armed, and when it fires"
+  echo "  the previous stamp will be the true one. If it does not fire, the router"
+  echo "  is running ${LOCAL_FP} under the previous stamp and matches_deploy reads"
+  echo "  False until a deploy records it."
+fi
 
 say "deployed and verified"
 echo "  ${HOST} is running ${LOCAL_FP} (${COMMIT})"

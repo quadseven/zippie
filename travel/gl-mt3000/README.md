@@ -122,10 +122,13 @@ hand-edited constant and therefore cannot be wrong.
 
 The script exists to make that state impossible to reach quietly. It refuses to
 deploy an uncommitted tree without `--allow-dirty`, verifies the bytes on the
-router equal the bytes here **before** restarting anything, records what it
-installed in `/etc/zippie/build.json`, and then re-reads `/api/status` to
-confirm the RUNNING agent reports the fingerprint it just installed. A
-mismatch at any of those points is a hard failure, not a warning.
+router equal the bytes here **before** restarting anything, re-reads
+`/api/status` to confirm the RUNNING agent reports the fingerprint it just
+installed, disarms the rollback, and only then records what it installed in
+`/etc/zippie/build.json`. The stamp is last on purpose: until the rollback is
+disarmed it can still put the previous package and config back, and a stamp
+written earlier would describe a config the router is no longer running
+(#21). A mismatch at any of those points is a hard failure, not a warning.
 
 **Why it pipes tar rather than using `scp`:** `scp` does not work against this
 device at all. dropbear ships no SFTP server, and OpenSSH 9+ `scp` speaks SFTP
