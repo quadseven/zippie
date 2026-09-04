@@ -385,13 +385,32 @@ def test_a_post_to_api_report_is_traced(traced_hub, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def _wait_for_accounting(tracer, expected, timeout=5.0):
+    """Block until `expected` requests have been counted, submitted or dropped.
+
+    submit() runs in the handler's `finally`, AFTER the response has left the
+    socket, so a client holding its answer can read the counters before the
+    handler thread has reached them. CI read through exactly that window on
+    an unrelated PR: `assert (3 + 8) == 12`, the twelfth span neither
+    submitted nor dropped YET. Polling until the total settles closes the
+    window without weakening the property: a request that is genuinely never
+    accounted for leaves the total short past the deadline, and the caller's
+    assertion then names the counters it saw.
+    """
+    deadline = time.monotonic() + timeout
+    while tracer.submitted + tracer.dropped < expected:
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.005)
+
+
 def test_requests_keep_answering_while_the_agent_is_wedged(hub_server):
     """A sender stuck forever must cost a request nothing but a dropped span.
 
-    Structural rather than timed: the sender blocks until the test releases
-    it, so if submit() did any I/O - or if the queue blocked when full - the
-    requests below would never return and the test would hang rather than
-    flake.
+    The sender blocks until the test releases it, so if submit() did any I/O
+    the requests below would not return. The counters are read only after
+    they have settled (see _wait_for_accounting): sampling them the moment
+    the last response arrived failed the hub gate at random.
     """
     release = threading.Event()
     entered = threading.Event()
@@ -407,8 +426,11 @@ def test_requests_keep_answering_while_the_agent_is_wedged(hub_server):
             status, _ = _get(base + "/livez")
             assert status == 200
         assert entered.wait(5), "sender thread never ran"
+        _wait_for_accounting(tracer, 12)
+        assert tracer.submitted + tracer.dropped == 12, (
+            f"submitted={tracer.submitted} dropped={tracer.dropped}: "
+            "a request was neither submitted nor dropped")
         assert tracer.dropped > 0, "a full queue must drop, not block"
-        assert tracer.submitted + tracer.dropped == 12
     finally:
         release.set()
         tracer.close()
