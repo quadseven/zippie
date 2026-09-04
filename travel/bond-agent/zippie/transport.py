@@ -855,89 +855,27 @@ class Transport:
                       addr: tuple[str, int] | None = None) -> list[bytes]:
         """Handle one datagram off a link socket. Returns payloads to deliver.
 
+        THIS FUNCTION IS THE ORDER, AND ONLY THE ORDER. Each decision it
+        makes lives in a helper named for the decision, so the security of
+        the receive path can be audited by reading this body top to bottom:
+
+          1. `_verify_mac`         the rung ladder; a forgery stops here
+          2. `_pass_epoch_gate`    the epoch gate; a stranger stops here
+          3. `_roam_link`          ONLY on the far side of both gates
+          4. `_credit_leg`         liveness, also only on the far side
+          5. `_answer_control`     NACK and keepalive replies, both gated
+          6. the data path         reassembly and gap tracking
+
         `addr` is the UDP source. It is taken here rather than acted on by the
         caller because ROAMING TO IT IS A SIDE EFFECT THAT MUST BE GATED, and
-        the gate lives in this function - see below.
+        the gate is step 2 - see `_pass_epoch_gate` for what it guards.
         """
-        try:
-            # At the off rung this IS Frame.unpack, so the existing wire path
-            # is unchanged. Above it a v3 frame is verified against the shared
-            # key and a v2 frame is accepted only while the rung still
-            # tolerates legacy, which is what carries a mixed-version bond.
-            frame, authed = unpack_auth(raw, self._identity, self._auth)
-        except UnauthenticatedError as exc:
-            # A forgery, a key mismatch, or a peer that has not moved up the
-            # ladder yet. Counted apart from malformed input so the three can
-            # be told apart from outside the process.
-            self.stats.mac_rejected += 1
-            log.debug("dropping unauthenticated frame: %s", exc)
+        frame = self._verify_mac(raw)
+        if frame is None:
             return []
-        except DatapathError as exc:
-            # Bytes off the internet: malformed input is expected, not a bug.
-            self.stats.malformed += 1
-            log.debug("dropping malformed frame: %s", exc)
-            return []
-
-        if self._auth is not AuthLevel.OFF:
-            if authed:
-                self.stats.mac_verified += 1
-            else:
-                self.stats.mac_legacy += 1
-
         self.stats.received += 1
-
-        # NOTHING BELOW THIS POINT IS AUTHENTICATED AT THE OFF AND OBSERVE
-        # RUNGS, so be careful what a stranger's packet is allowed to do. At
-        # the require rung it is: `authed` is true for every frame that reaches
-        # here, and the epoch heuristics below become a second line rather than
-        # the only one.
-        #
-        # This is a public UDP port. Anyone can send a well-formed 17-byte
-        # header, and without the gate below the only thing separating a real
-        # peer from an attacker is nothing at all. Three side effects have to
-        # be gated or a single spoofed datagram is enough to take the tunnel:
-        #
-        #   roaming        - moves where every reply goes, i.e. hands the
-        #                    tunnel to whoever spoke last (hijack)
-        #   NACK answers   - 17 bytes in, up to ~1400 out, to a source we never
-        #                    verified (an ~80x reflector)
-        #   keepalive rep. - a smaller reflector on the same principle
-        #
-        # The epoch is trust-on-first-use and only a real peer can plausibly
-        # guess it once established, so a running tunnel cannot be stolen
-        # without 32 bits of luck. A restart is still honoured, but ONLY FROM A
-        # DATA FRAME and only once the current stream has actually gone quiet -
-        # otherwise an attacker flips the epoch repeatedly and resets the
-        # stream at will, which is a denial of service even without a hijack.
-        #
-        # WHY A KEEPALIVE MAY NOT CLAIM A RESTART, given that a keepalive is
-        # exactly what arrives first after one: because a keepalive is the
-        # cheapest frame to forge and the one an attacker would choose. The
-        # real peer's WireGuard keeps a persistent keepalive running, so DATA
-        # follows within seconds and takes over then; the cost of the rule is a
-        # few seconds of a restart not being believed, and the cost of not
-        # having it is that 17 bytes resets the stream.
-        known = self._peer_epoch is not None and frame.epoch == self._peer_epoch
-        if not known:
-            idle = (self._last_good_frame is None
-                    or self._clock() - self._last_good_frame
-                    > self._epoch_takeover_idle_s)
-            first_ever = self._peer_epoch is None
-            takeover = not frame.is_keepalive and not (frame.flags & FLAG_NACK) and idle
-            if first_ever or takeover:
-                if not first_ever:
-                    log.info("peer restarted (epoch %d -> %d); resetting stream",
-                             self._peer_epoch, frame.epoch)
-                    self.reassembler.reset_stream()
-                    self._reset_gap_tracking()
-                self._peer_epoch = frame.epoch
-            else:
-                # Wrong epoch on a live tunnel: someone else's packet.
-                self.stats.unauthenticated += 1
-                log.debug("dropping frame with epoch %d (stream is on %d)",
-                          frame.epoch, self._peer_epoch)
-                return []
-        self._last_good_frame = self._clock()
+        if not self._pass_epoch_gate(frame):
+            return []
 
         # FOLLOW THE TRAVEL ROUTER AS IT MOVES BETWEEN ISPs - but only now, on
         # the far side of the gate. This used to happen in run_once BEFORE the
@@ -945,70 +883,9 @@ class Transport:
         # repointed every reply at whoever sent it.
         if self._roam and addr is not None and path_id is not None:
             self._roam_link(path_id, addr)
-
-        # Credit the leg BEFORE inspecting the frame type. Any well-formed
-        # frame proves the leg round-trips, whether it is a keepalive answer or
-        # ordinary tunnel data - and on a busy bond real data is the more
-        # common proof. Judging liveness on keepalives alone would call a leg
-        # dead while it was carrying traffic.
         if path_id is not None:
-            self._link_rx[path_id] = self._clock()
-            # Estimated bytes the metered IP link carried. The socket exposes
-            # UDP payload only, so add its fixed IPv4+UDP headers; the payload
-            # after reassembly would also miss every zippie header and duplicate.
-            self._link_rx_bytes[path_id] = (
-                self._link_rx_bytes.get(path_id, 0)
-                + len(raw) + _IPV4_UDP_HEADER_BYTES
-            )
-            # RECEIVING IS PROOF, so it must be able to UNDO a demotion.
-            #
-            # `_send_on` marks a link unhealthy on any send error, and nothing
-            # on the home side ever marks it back: only the travel agent drives
-            # set_link_health, from probes it runs against its own legs. So one
-            # transient failure - a roam to an address that had already gone
-            # away, or the placeholder remote at startup - left home unable to
-            # send for the rest of the process's life.
-            #
-            # It hid because keepalive replies bypass the scheduler entirely
-            # and go out through _send_on directly. Captured at home
-            # 2026-08-02: every 17-byte keepalive answered, every 165-byte data
-            # frame silently dropped, while the wg server was visibly replying
-            # on loopback. The bond looked alive from both ends and moved
-            # nothing.
-            self.scheduler.set_healthy(path_id, True)
-
-        if frame.flags & FLAG_NACK:
-            self.stats.nacks_received += 1
-            self._answer_nack(frame.seq)
-            return []
-        if frame.is_keepalive:
-            if frame.is_keepalive_reply:
-                outstanding = (self._ka_sent.get(path_id)
-                               if path_id is not None else None)
-                sent = outstanding.pop(frame.seq, None) if outstanding else None
-                if sent is not None and path_id is not None:
-                    self._link_rtt[path_id] = (self._clock() - sent) * 1000.0
-                    self._note_ka_outcome(path_id, lost=False)
-                    # Anything older than the probe just answered is LOST, not
-                    # merely slow - the far end answers in order on a given
-                    # leg. Dropping them stops a stale timestamp being matched
-                    # later and reported as a huge round trip, and each one
-                    # counts against this leg's loss window (#115).
-                    for older in [p for p in outstanding if p < frame.seq]:
-                        outstanding.pop(older, None)
-                        self._note_ka_outcome(path_id, lost=True)
-            elif path_id is not None:
-                # Answer on the SAME leg it arrived on. Replying over whichever
-                # link the scheduler happens to like would measure that link
-                # instead, and the answer would prove nothing about the leg
-                # being probed.
-                self._send_on(path_id, self._pack(Frame(
-                    seq=frame.seq,
-                    path_id=path_id,
-                    payload=b"",
-                    flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
-                    epoch=self._epoch,
-                )))
+            self._credit_leg(path_id, len(raw))
+        if self._answer_control(frame, path_id):
             return []
 
         # The frame's OWN path_id, not the socket it turned up on. Home listens
@@ -1028,6 +905,216 @@ class Transport:
         delivered = self.reassembler.push(frame)
         self._note_gaps(frame.seq)
         return delivered
+
+    def _verify_mac(self, raw: bytes) -> Frame | None:
+        """MAC VERIFICATION: the rung ladder (auth.py). Owns the decision
+        "is this frame authentic under the rung this end stands on", and
+        the stats that let the three ways of failing it be told apart.
+
+        First in the order because it is the only step that can refuse a
+        frame on evidence rather than heuristics: at the require rung nothing
+        unsigned gets past it, and everything after it becomes a second line
+        of defense instead of the only one. At off and observe it verifies
+        nothing, which is why the epoch gate after it exists at all.
+
+        Returns the frame, or None when the datagram was dropped.
+        """
+        try:
+            # At the off rung this IS Frame.unpack, so the existing wire path
+            # is unchanged. Above it a v3 frame is verified against the shared
+            # key and a v2 frame is accepted only while the rung still
+            # tolerates legacy, which is what carries a mixed-version bond.
+            frame, authed = unpack_auth(raw, self._identity, self._auth)
+        except UnauthenticatedError as exc:
+            # A forgery, a key mismatch, or a peer that has not moved up the
+            # ladder yet. Counted apart from malformed input so the three can
+            # be told apart from outside the process.
+            self.stats.mac_rejected += 1
+            log.debug("dropping unauthenticated frame: %s", exc)
+            return None
+        except DatapathError as exc:
+            # Bytes off the internet: malformed input is expected, not a bug.
+            self.stats.malformed += 1
+            log.debug("dropping malformed frame: %s", exc)
+            return None
+
+        if self._auth is not AuthLevel.OFF:
+            if authed:
+                self.stats.mac_verified += 1
+            else:
+                self.stats.mac_legacy += 1
+        return frame
+
+    def _pass_epoch_gate(self, frame: Frame) -> bool:
+        """THE EPOCH GATE. Owns the decision "does this frame belong to the
+        stream this end is on, or is it a stranger's". Runs at every rung
+        including off, and BEFORE roaming, NACK answers and keepalive
+        replies, because it is the only thing standing between those three
+        side effects and anyone on the internet until the require rung.
+
+        Returns True when the frame may act on this end. Only a frame that
+        passes refreshes `_last_good_frame`, so a flood of rejected frames
+        cannot hold the takeover window open and wedge a genuine restart out.
+
+        NOTHING PAST THIS GATE IS AUTHENTICATED AT THE OFF AND OBSERVE RUNGS,
+        so be careful what a stranger's packet is allowed to do. At the
+        require rung `_verify_mac` has already refused every unsigned frame,
+        and the epoch heuristics here become a second line rather than the
+        only one.
+
+        This is a public UDP port. Anyone can send a well-formed 17-byte
+        header, and without this gate the only thing separating a real peer
+        from an attacker is nothing at all. Three side effects have to be
+        gated or a single spoofed datagram is enough to take the tunnel:
+
+          roaming        - moves where every reply goes, i.e. hands the
+                           tunnel to whoever spoke last (hijack)
+          NACK answers   - 17 bytes in, up to ~1400 out, to a source we never
+                           verified (an ~80x reflector)
+          keepalive rep. - a smaller reflector on the same principle
+
+        The epoch is trust-on-first-use and only a real peer can plausibly
+        guess it once established, so a running tunnel cannot be stolen
+        without 32 bits of luck. A restart is still honored, but ONLY FROM A
+        DATA FRAME and only once the current stream has actually gone quiet -
+        otherwise an attacker flips the epoch repeatedly and resets the
+        stream at will, which is a denial of service even without a hijack.
+
+        WHY A KEEPALIVE MAY NOT CLAIM A RESTART, given that a keepalive is
+        exactly what arrives first after one: because a keepalive is the
+        cheapest frame to forge and the one an attacker would choose. The
+        real peer's WireGuard keeps a persistent keepalive running, so DATA
+        follows within seconds and takes over then; the cost of the rule is a
+        few seconds of a restart not being believed, and the cost of not
+        having it is that 17 bytes resets the stream.
+        """
+        known = self._peer_epoch is not None and frame.epoch == self._peer_epoch
+        if not known and not self._adopt_epoch(frame):
+            # Wrong epoch on a live tunnel: someone else's packet.
+            self.stats.unauthenticated += 1
+            log.debug("dropping frame with epoch %d (stream is on %d)",
+                      frame.epoch, self._peer_epoch)
+            return False
+        self._last_good_frame = self._clock()
+        return True
+
+    def _adopt_epoch(self, frame: Frame) -> bool:
+        """The half of the epoch gate that decides whether an UNKNOWN epoch
+        is a peer restart to follow or a stranger to drop. Split from
+        `_pass_epoch_gate` so the gate's own body reads as one rule: a known
+        epoch passes, an unknown one passes only if this says so.
+
+        Trust on first use: with no stream established the first frame is
+        believed whatever it is. After that, only a data frame (never a
+        keepalive or NACK, the two cheapest things to forge) and only once
+        the current stream has gone quiet for the takeover window.
+
+        Returns True when the frame's epoch is now the stream's epoch.
+        """
+        idle = (self._last_good_frame is None
+                or self._clock() - self._last_good_frame
+                > self._epoch_takeover_idle_s)
+        first_ever = self._peer_epoch is None
+        takeover = not frame.is_keepalive and not (frame.flags & FLAG_NACK) and idle
+        if not first_ever and not takeover:
+            return False
+        if not first_ever:
+            log.info("peer restarted (epoch %d -> %d); resetting stream",
+                     self._peer_epoch, frame.epoch)
+            self.reassembler.reset_stream()
+            self._reset_gap_tracking()
+        self._peer_epoch = frame.epoch
+        return True
+
+    def _credit_leg(self, path_id: int, wire_len: int) -> None:
+        """Owns the decision "this leg round-trips". Sits after the gate
+        because a stranger's datagram must not keep a dead leg looking alive,
+        and BEFORE the frame type is inspected: any well-formed frame proves
+        the leg, whether it is a keepalive answer or ordinary tunnel data -
+        and on a busy bond real data is the more common proof. Judging
+        liveness on keepalives alone would call a leg dead while it was
+        carrying traffic.
+        """
+        self._link_rx[path_id] = self._clock()
+        # Estimated bytes the metered IP link carried. The socket exposes
+        # UDP payload only, so add its fixed IPv4+UDP headers; the payload
+        # after reassembly would also miss every zippie header and duplicate.
+        self._link_rx_bytes[path_id] = (
+            self._link_rx_bytes.get(path_id, 0)
+            + wire_len + _IPV4_UDP_HEADER_BYTES
+        )
+        # RECEIVING IS PROOF, so it must be able to UNDO a demotion.
+        #
+        # `_send_on` marks a link unhealthy on any send error, and nothing
+        # on the home side ever marks it back: only the travel agent drives
+        # set_link_health, from probes it runs against its own legs. So one
+        # transient failure - a roam to an address that had already gone
+        # away, or the placeholder remote at startup - left home unable to
+        # send for the rest of the process's life.
+        #
+        # It hid because keepalive replies bypass the scheduler entirely
+        # and go out through _send_on directly. Captured at home
+        # 2026-08-02: every 17-byte keepalive answered, every 165-byte data
+        # frame silently dropped, while the wg server was visibly replying
+        # on loopback. The bond looked alive from both ends and moved
+        # nothing.
+        self.scheduler.set_healthy(path_id, True)
+
+    def _answer_control(self, frame: Frame, path_id: int | None) -> bool:
+        """CONTROL-FRAME REPLIES: NACK answers and keepalives. Owns the
+        decision "is this a control frame, and what does it get back".
+
+        Sits after the epoch gate because both replies are reflectors - a
+        NACK answer is ~80x the bytes it cost the sender - and this is the
+        only place they are emitted, so the gate's position ahead of this
+        call is what makes them safe to send at all.
+
+        Returns True when the frame was a control frame and has been dealt
+        with; the caller must then not treat it as data.
+        """
+        if frame.flags & FLAG_NACK:
+            self.stats.nacks_received += 1
+            self._answer_nack(frame.seq)
+            return True
+        if not frame.is_keepalive:
+            return False
+        if frame.is_keepalive_reply:
+            if path_id is not None:
+                self._note_keepalive_reply(frame.seq, path_id)
+        elif path_id is not None:
+            # Answer on the SAME leg it arrived on. Replying over whichever
+            # link the scheduler happens to like would measure that link
+            # instead, and the answer would prove nothing about the leg
+            # being probed.
+            self._send_on(path_id, self._pack(Frame(
+                seq=frame.seq,
+                path_id=path_id,
+                payload=b"",
+                flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
+                epoch=self._epoch,
+            )))
+        return True
+
+    def _note_keepalive_reply(self, probe: int, path_id: int) -> None:
+        """Match an answered probe to the one that caused it and settle the
+        leg's RTT and loss window. Per PROBE, not per leg (#107): a reply
+        has to be matched to the probe that caused it, or a DROPPED probe is
+        indistinguishable from a SLOW one.
+        """
+        outstanding = self._ka_sent.get(path_id)
+        sent = outstanding.pop(probe, None) if outstanding else None
+        if sent is None:
+            return
+        self._link_rtt[path_id] = (self._clock() - sent) * 1000.0
+        self._note_ka_outcome(path_id, lost=False)
+        # Anything older than the probe just answered is LOST, not
+        # merely slow - the far end answers in order on a given
+        # leg. Dropping them stops a stale timestamp being matched
+        # later and reported as a huge round trip, and each one
+        # counts against this leg's loss window (#115).
+        for older in [p for p in outstanding if p < probe]:
+            outstanding.pop(older, None)
+            self._note_ka_outcome(path_id, lost=True)
 
     def _note_gaps(self, seq: int) -> None:
         """Register missing sequences so they can be asked for once they are
