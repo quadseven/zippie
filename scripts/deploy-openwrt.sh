@@ -1013,6 +1013,69 @@ for radio in mt798111 mt798112; do
   echo "  ${radio}.random_bssid: 0"
 done
 
+# SQM. A shaper on the bond, so a download cannot bury a DNS lookup.
+#
+# WHY THIS IS ON pbz0 AND NOT ON A WAN INTERFACE. The bond is the default route
+# and it is where every client flow converges AFTER decryption. On `apclix0` the
+# traffic is one WireGuard UDP conversation, so cake would see a single flow and
+# its whole reason for existing - keeping one bulk transfer from starving
+# everything else - would be unavailable. Shaping each leg separately would also
+# need a rate per leg, and the legs change while the car is moving.
+#
+# MEASURED 2026-08-31, parked on a repeater'"'"'d house wifi. Identical 50 MB fetch
+# with a ping running beside it:
+#
+#     no shaper   latency 85 / 355 / 920 ms      throughput 143 KB/s
+#     cake        latency 24 /  78 / 281 ms      throughput 403 KB/s
+#
+# Both better, which is not the usual trade. The upstream buffer was so full
+# that the link was wasting capacity on packets already too late to matter.
+#
+# THE RATE IS THE HARD PART AND THIS IS NOT THE ANSWER TO IT. A shaper only
+# controls a queue when its rate is BELOW what the path can carry, so one number
+# is wrong in both directions on a router that is 5 Mbit/s behind a house wifi
+# today and something else entirely on a motorway tomorrow. cake'"'"'s own
+# `autorate-ingress` was tried and estimated 65 Mbit/s against a real 5, so it
+# barely shaped. zippie already measures per-leg capacity and should set this
+# itself - #41.
+#
+# SO THE DEPLOY CREATES IT AND NEVER RE-PINS IT. A deploy that reasserted a rate
+# every time would overwrite whatever the operator tuned at the roadside, from a
+# laptop that has no idea where the router is. Absent means "leave it alone",
+# the same rule legs.json follows.
+say "queue management on the bond"
+if ssh_run "uci -q get sqm.pbz0 >/dev/null"; then
+  sqm_rate="$(ssh_run "uci -q get sqm.pbz0.download" || echo "?")"
+  echo "  sqm.pbz0 already configured (download ${sqm_rate} kbit) - not touched"
+else
+  ssh_run "uci set sqm.pbz0=queue
+           uci set sqm.pbz0.interface=pbz0
+           uci set sqm.pbz0.qdisc=cake
+           uci set sqm.pbz0.script=piece_of_cake.qos
+           uci set sqm.pbz0.linklayer=none
+           uci set sqm.pbz0.download=5000
+           uci set sqm.pbz0.upload=1200
+           uci set sqm.pbz0.enabled=1
+           uci commit sqm
+           /etc/init.d/sqm enable >/dev/null 2>&1
+           /etc/init.d/sqm restart >/dev/null 2>&1" \
+    || die "could not configure sqm on pbz0"
+  echo "  sqm.pbz0 created at 5000/1200 kbit - RETUNE IT for wherever this router is"
+fi
+# Read back the QDISC, not the config. `uci get` proves a file was written;
+# only the qdisc proves the shaper is on the interface. sqm silently does
+# nothing when the interface is missing at start - which on this box is every
+# boot where the bond comes up after the init script.
+sqm_qdisc="$(ssh_run "tc qdisc show dev pbz0 2>/dev/null | head -1" || true)"
+case "${sqm_qdisc}" in
+  *cake*) echo "  pbz0 qdisc: cake" ;;
+  *) echo "
+   WARNING: pbz0 has no cake qdisc (got '${sqm_qdisc:-nothing}'). SQM is
+   configured and is not running, which looks identical to working until a
+   download makes everything else crawl. On the router:
+     /etc/init.d/sqm restart; tc qdisc show dev pbz0" ;;
+esac
+
 # Cron. Written as a whole table rather than appended, so re-running cannot
 # accumulate duplicates - and read back, because busybox crontab accepts a file
 # and reports nothing either way.
