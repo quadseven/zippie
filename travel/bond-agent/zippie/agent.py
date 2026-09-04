@@ -228,6 +228,21 @@ PACKET_LINK_STALE_S = 6.0
 # tunnel with no client traffic is not a broken one, and WireGuard's own
 # keepalive alone will keep this fed.
 PACKET_DELIVER_STALE_S = 25.0
+# The operator's shaper on the bond. `sqm-scripts` puts cake on PACKET_IFACE
+# from the uci section named after it (see scripts/deploy-openwrt.sh, which
+# creates that section once and never re-pins the rate). The agent restarts
+# the service rather than running `tc` itself so the rate the operator tuned
+# at the roadside is the one that lands, and it does so only from the place
+# that CREATES the interface - see BondAgent._ensure_bond_shaped for why the
+# boot order cannot be made to do this.
+SQM_INIT_SCRIPT = "/etc/init.d/sqm"
+SQM_UCI_ENABLED = f"sqm.{PACKET_IFACE}.enabled"
+# Ceiling on the restart. It runs inline on the control loop, under the
+# agent's lock, immediately after the bond interface appears - so a hung init
+# script has to cost one tunnel bring-up rather than the whole agent, for the
+# same reason RESOLVER_KICK_TIMEOUT_S exists in net.py. On expiry the bond is
+# left up and unshaped, which is the state it was in before this ran.
+SQM_RESTART_TIMEOUT_S = 15.0
 # THE ROUTE MUST BE EARNED WITH BULK, NOT WITH HELLO. Within this window the
 # datapath has to deliver both a minimum number of payloads AND a minimum byte
 # volume before the default route is installed. Counts alone cannot do it: the
@@ -280,6 +295,19 @@ def projected_idle_mb_per_day(
             * seconds_per_day / keepalive_s
         )
     return (probes + keepalives) / 1_000_000
+
+
+def _command_output(proc) -> str:
+    """Both streams of a finished command, for a log line about its failure.
+
+    An init script may say why on either stream, and the WARNING this feeds
+    is read later from `logread` on a router nobody can reach - so it quotes
+    whatever was said rather than guessing which stream it went to.
+    """
+    out = (proc.stdout or "").strip()
+    err = (proc.stderr or "").strip()
+    text = " | ".join(t for t in (out, err) if t)
+    return text or "no output"
 
 
 def _egress_desc(hops: list | None) -> str:
@@ -621,6 +649,10 @@ class BondAgent:
         # attribute would silently mean "always different", i.e. the spam back.
         self._packet_identity_leg: str | None = None
         self._packet_nexthop: tuple[str, int] | None = None
+        # An unshaped bond is announced ONCE per agent run, not once per
+        # tunnel rebuild: a wrecked pbz0 is rebuilt on every pass until it
+        # holds, and the same INFO line on each of them is the #87 spam again.
+        self._bond_unshaped_announced = False
         # SEEDED FROM DISK so a cold boot has somewhere to send keepalives
         # before DNS works at all (#182). Without this the agent cannot resolve
         # home without internet, cannot get internet without a carrying leg, and
@@ -1303,6 +1335,11 @@ class BondAgent:
                 log.error("packet-mode tunnel %s failed to come up: %s",
                           PACKET_IFACE, exc)
                 raise
+            # Only here, and only after the interface was actually created:
+            # the shaper is attached to the link, so a new link has no shaper
+            # no matter what uci says. Never raises - the bond coming up
+            # matters more than the queue on it.
+            self._ensure_bond_shaped()
         # The prover must reach the far tunnel address BEFORE the default
         # route exists - that is the whole point of proving first. A /32 for
         # the tunnel-inside address via the tunnel device is safe at any time:
@@ -1319,6 +1356,109 @@ class BondAgent:
             log.info("packet mode: %s -> 127.0.0.1:%s (one virtual path)",
                      PACKET_IFACE, self.config.policy.transport_port)
             self._packet_nexthop = nexthop
+
+    def _ensure_bond_shaped(self) -> None:
+        """Put the operator's cake qdisc back on pbz0 after creating it.
+
+        WHY THIS LIVES HERE AND NOT IN THE BOOT ORDER. Read on the travel
+        router 2026-09-01, 9h33m after a cold boot: `uci` said
+        `sqm.pbz0.enabled='1'` and `tc qdisc show dev pbz0` said `noqueue`.
+        The shaper was configured and was not on the interface. `S50sqm` runs
+        at boot before `S99zippie`, and pbz0 does not exist until this agent
+        creates it, so sqm finds no interface and exits quietly. The hotplug
+        hook that would normally catch a late interface
+        (`/etc/hotplug.d/iface/11-sqm`) fires only for netifd interfaces, and
+        pbz0 is not one - it is a WireGuard link the agent makes with `ip`.
+        Reordering the init scripts cannot fix that: the interface is
+        created by a long-running process, not at a point in the boot
+        sequence, and it is re-created every time a wrecked tunnel is
+        rebuilt. A qdisc is attached to the link, so every re-creation loses
+        it. The only place that knows the link is new is the code that made
+        it, which is where this is called from.
+
+        THREE RULES, all from #41:
+
+        - Gate on the qdisc, never on `uci get`. `uci` proves a file was
+          written; only `tc` proves the shaper is on the interface. If the
+          root qdisc already says cake there is nothing to do and nothing to
+          log.
+        - Restart the service rather than running `tc` directly, so the rate
+          the operator tuned at the roadside (deploy-openwrt.sh deliberately
+          never re-pins it) is the one that lands. The agent pins no rate.
+        - A failed apply leaves things exactly as they were - an up, unshaped
+          bond - and says so at WARNING with the command's output. It never
+          raises: this runs inside the tunnel bring-up, and a bond without a
+          shaper is a bad afternoon whereas a bond that will not come up is
+          a stranded router.
+
+        A router with no `sqm.pbz0` section at all (a fresh box before the
+        deploy has run, or one the operator disabled) is ordinary, and is
+        announced once at INFO so an unshaped bond is visible rather than
+        silent - a shaper that is configured and not running looks identical
+        to a working one until somebody starts a download.
+        """
+        try:
+            if self._bond_qdisc_is_cake():
+                return
+            proc = net.run_or_dry(["uci", "-q", "get", SQM_UCI_ENABLED],
+                                  check=False)
+            if proc.returncode != 0 or (proc.stdout or "").strip() != "1":
+                if not self._bond_unshaped_announced:
+                    self._bond_unshaped_announced = True
+                    log.info(
+                        "%s is unshaped: %s is not enabled in uci, so no "
+                        "queue management is applied to the bond",
+                        PACKET_IFACE, SQM_UCI_ENABLED,
+                    )
+                return
+            proc = net.run_or_dry([SQM_INIT_SCRIPT, "restart"], check=False,
+                                  timeout=SQM_RESTART_TIMEOUT_S)
+            if proc.returncode != 0:
+                log.warning(
+                    "%s restart exited %s; %s is up and unshaped: %s",
+                    SQM_INIT_SCRIPT, proc.returncode, PACKET_IFACE,
+                    _command_output(proc),
+                )
+                return
+            # Read the qdisc back. A restart that exits 0 and applies nothing
+            # is exactly the failure that was found on the router.
+            if self._bond_qdisc_is_cake():
+                log.info("%s shaped: cake re-applied by %s restart",
+                         PACKET_IFACE, SQM_INIT_SCRIPT)
+            else:
+                log.warning(
+                    "%s restart exited 0 but %s still has no cake qdisc; "
+                    "the bond is up and unshaped: %s",
+                    SQM_INIT_SCRIPT, PACKET_IFACE, _command_output(proc),
+                )
+        except net.NetError as exc:
+            # Every call above is check=False, so the only way here is a
+            # timeout (net.run turns TimeoutExpired into NetError, 2026-08-02).
+            # The bond stays up and the shaper stays off, which is where it was.
+            log.warning("could not apply queue management to %s: %s",
+                        PACKET_IFACE, exc)
+
+    @staticmethod
+    def _bond_qdisc_is_cake() -> bool:
+        """Does pbz0's ROOT qdisc say cake?
+
+        `tc qdisc show dev pbz0` lists the root first, and with sqm running it
+        reads `qdisc cake 800b: root refcnt 2 bandwidth 1200Kbit ...`; sqm
+        also attaches an `ingress` qdisc on a second line, so the word "cake"
+        anywhere in the output is not the test - the root line is. Raises
+        NetError only for a timeout; a missing `tc` returns a non-zero exit
+        under check=False and reads as "not cake", which it is.
+        """
+        proc = net.run_or_dry(["tc", "qdisc", "show", "dev", PACKET_IFACE],
+                              check=False)
+        if proc.returncode != 0:
+            return False
+        for line in (proc.stdout or "").splitlines():
+            parts = line.split()
+            if (len(parts) >= 2 and parts[0] == "qdisc"
+                    and parts[1] == "cake" and "root" in parts):
+                return True
+        return False
 
     def ensure_tunnels(self) -> None:
         """Bring the per-leg tunnels into line with the config, leg by leg.
