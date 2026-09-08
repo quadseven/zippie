@@ -133,11 +133,12 @@ DATAPATH_SUBJECT = "zippie.datapath"
 # Writing the key into keys.json instead would have been a section nothing reads
 # - the shape this estate keeps rediscovering as "unit-tested, never wired".
 #
-# THE PREVIOUS KEY GOES BESIDE IT, under this suffix. Nothing verifies against it
-# yet: auth.py holds ONE key, so the overlap a rotation needs cannot be expressed
-# through its loader today. The file is written anyway so that delivery is not
-# the thing blocking a rotation later, and the reason is recorded here rather
-# than discovered by whoever tries.
+# THE PREVIOUS KEY GOES BESIDE IT, under this suffix. `auth.build_identity`
+# reads `<auth_key_file>.previous` through `load_previous_bond_secret` and
+# accepts a MAC under that key for as long as the file exists (zippie#13), which
+# is the overlap a rotation rides on. The suffix is spelled in both modules
+# because only auth.py ships to the home end; a test runs the reader against
+# what this writes so the two cannot drift apart unnoticed.
 PREVIOUS_SUFFIX = ".previous"
 
 # What keys.json keeps: the RECORD, never the secret. Two homes for one credential
