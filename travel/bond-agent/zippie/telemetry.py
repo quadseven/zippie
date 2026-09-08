@@ -311,7 +311,12 @@ def _transport_samples(status: dict, deltas: _Deltas | None) -> list:
     # all. Depth is the driver, buffered is what is stuck behind it, and
     # loop_us is what they cost - a datapath regression moves loop_us long
     # before a human notices the throughput.
-    for gauge in ("links", "healthy", "gap_depth", "buffered", "loop_us"):
+    #
+    # peer_silent_s is the duration that says "the other end has stopped
+    # reaching us on every leg" (#4). A duration, not a counter: a frozen
+    # counter is invisible to a threshold, a climbing age is not.
+    for gauge in ("links", "healthy", "peer_silent_s", "gap_depth",
+                  "buffered", "loop_us"):
         if t.get(gauge) is not None:
             out.append((f"transport.{gauge}", float(t[gauge]), tags))
 

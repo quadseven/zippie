@@ -176,6 +176,37 @@ _KA_OUTSTANDING_MAX = 8
 # number means and does not mean.
 _KA_LOSS_WINDOW = 40
 
+# HOW LONG A LEG MAY GO WITHOUT A SINGLE FRAME BEFORE stats_dict() STOPS
+# COUNTING IT AS `healthy` (#4).
+#
+# The scheduler's own healthy flag only ever drops on a SEND error, and a
+# peer that simply vanishes causes none: on 2026-09-04 the travel router went
+# away at 10:18 ET and for the next 7 h the home end logged `healthy=1`
+# every minute with `received` frozen at 29722112 and client_idle_s climbing
+# past 27000. Nothing said "the peer is gone".
+#
+# WHY RECEIVE AGE AND NOT client_idle_s. client_idle_for_s stops advancing
+# only when real client data stops, and a phone asleep on the router's wifi
+# produces none. But the travel side probes every leg at least every 2 s
+# whether or not anyone is browsing (agent._idle_transport_probe_interval_s
+# floors the idle cadence at PACKET_LINK_STALE_S / 3), so a leg the peer can
+# still reach us on is heard from every couple of seconds, idle or not.
+# Receive age therefore separates "the peer is gone" from "nobody is
+# browsing"; idle time does not.
+#
+# 30 s IS FROM DATA, NOT A GUESS. Home stats for 2026-09-03/04, 1,896
+# one-minute reports with the router present: the receive counter never once
+# stood still for a minute except during one 18-minute absence, and it did
+# not stand still for the 17 minutes that client_idle_s exceeded 30 s outside
+# that absence either - there were none, because the router's phones chatter
+# constantly. 30 s is fifteen missed probe opportunities on EVERY leg at the
+# idle floor; a live peer on a bad link misses a few, never fifteen. It is
+# deliberately slower than the travel side's own 6 s stale window, because
+# this end has no failover to make and a false "gone" would page a human,
+# and much faster than the 60 s stats line, so the first report after the
+# peer vanishes already says so.
+PEER_SILENT_S = 30.0
+
 # WireGuard's public wire format leaves its message type and total length
 # visible. That is enough to separate its own handshakes and empty transport
 # keepalives from encrypted client data without inspecting any plaintext.
@@ -491,6 +522,10 @@ class Transport:
         # datapath regression shows up as a number instead of a field trip.
         self._loop_us = 0.0
         self._link_rx: dict[int, float] = {}
+        # peer_silent_s counts from here until the first frame arrives, so a
+        # transport that has never heard its peer reports how long it has been
+        # waiting rather than nothing at all.
+        self._started_at = self._clock()
         self._link_rtt: dict[int, float] = {}
         # path_id -> {probe_id: sent_at}. Per PROBE, not per leg: a reply has
         # to be matched to the probe that caused it, or a DROPPED probe is
@@ -690,6 +725,24 @@ class Transport:
         """Seconds since anything arrived on this leg; None if unknown."""
         last = self._link_rx.get(path_id)
         return None if last is None else self._clock() - last
+
+    def peer_silent_s(self) -> float:
+        """Seconds since the most recent frame arrived on ANY leg.
+
+        The duration that separates "the peer is gone" from "nobody is
+        browsing" (#4, see PEER_SILENT_S): the other end probes every leg at
+        least every 2 s whether or not anyone is using the bond, so this stays
+        near zero for as long as the peer can reach us on any leg at all,
+        and only climbs when it cannot. Counted from construction while no
+        leg has been heard from, so it is always a number a monitor can
+        compare - a missing field alerts nobody.
+        """
+        last = max(self._link_rx.values(), default=self._started_at)
+        return max(0.0, self._clock() - last)
+
+    def _heard_recently(self, path_id: int) -> bool:
+        age = self.link_rx_age_s(path_id)
+        return age is not None and age < PEER_SILENT_S
 
     def link_rtt_ms(self, path_id: int) -> float | None:
         """RTT of the last ANSWERED keepalive on this leg, if there was one."""
@@ -1243,7 +1296,15 @@ class Transport:
             "nacks": self.nacks.stats.as_dict(),
             "classifier": self.classifier.stats(),
             "links": len(self._links),
-            "healthy": len(self.scheduler.healthy_paths),
+            # A leg counts only while the peer is still reaching us on it.
+            # The scheduler's flag drops on a send error alone, and a peer
+            # that vanishes causes none - this read 1 for the whole 7 h the
+            # router was gone on 2026-09-04 (#4, PEER_SILENT_S).
+            "healthy": sum(
+                1 for p in self.scheduler.healthy_paths
+                if self._heard_recently(p.path_id)
+            ),
+            "peer_silent_s": round(self.peer_silent_s(), 1),
             "client_payload_bytes": client_payload_bytes,
             "client_idle_s": round(self.client_idle_for_s(), 1),
             # The three that would have caught #2169 without an SSH session.
