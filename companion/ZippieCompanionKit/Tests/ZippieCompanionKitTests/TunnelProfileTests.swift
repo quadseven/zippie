@@ -225,6 +225,29 @@ final class TunnelProfileTests: XCTestCase {
         XCTAssertNil(manager.onDemandRules)
     }
 
+    /// A stop by hand switches on-demand OFF and leaves the rules in place,
+    /// so the next start re-arms it from the plan with nothing to remember
+    /// (#55). Only the switch: taking the rules off too would make a start
+    /// after a stop silently different from a first start.
+    func testDisarmingOnDemandFlipsTheSwitchAndKeepsTheRules() throws {
+        let manager = try XCTUnwrap(installed(TunnelPlan.decide(
+            ModeDecision(proximity: .local),
+            relay: relay(["TravelRouter"]), client: nil)))
+        XCTAssertTrue(manager.isOnDemandEnabled, "precondition")
+
+        TunnelProfile.disarmOnDemand(on: manager)
+        XCTAssertFalse(manager.isOnDemandEnabled,
+                       "a stop that leaves this true is a restart on the router's wifi")
+        XCTAssertEqual(manager.onDemandRules?.count, 2, "the rules are not the switch")
+
+        _ = installed(TunnelPlan.decide(ModeDecision(proximity: .local),
+                                        relay: relay(["TravelRouter"]), client: nil),
+                      onto: manager)
+        XCTAssertTrue(manager.isOnDemandEnabled,
+                      "a start after a stop must arm on-demand again, or a jetsammed "
+                    + "extension stays dead until somebody opens the app")
+    }
+
     // MARK: - what the extension does with what it finds
 
     /// RULE 2 OF THE PLAN, ENFORCED AT THE FAR END. A client key that will not

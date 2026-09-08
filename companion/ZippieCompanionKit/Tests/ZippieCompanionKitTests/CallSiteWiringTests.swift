@@ -126,6 +126,38 @@ final class CallSiteWiringTests: XCTestCase {
                            + "which is exactly how the client key came to have no producer")
     }
 
+    /// A stop from the app must disarm on-demand and SAVE before it stops
+    /// (#55). `stopTunnel` used to be a bare `stopVPNTunnel()`, and on the
+    /// router's wifi the Connect rule answered it by starting the tunnel again
+    /// within the second - "Stop relaying" was a restart button. The order is
+    /// the point: a save AFTER the stop leaves the same window open.
+    func testTheAppDisarmsOnDemandBeforeItStopsTheTunnel() throws {
+        let text = try source("ZippieCompanionApp/TunnelController.swift")
+        guard let stop = text.range(of: "func stopTunnel()") else {
+            return XCTFail("TunnelController.stopTunnel is gone - if it moved, move this check")
+        }
+        // The body up to the next MARK, which is where `stopTunnel` ends.
+        let bodyEnd = text.range(of: "// MARK: - supervision", range: stop.upperBound..<text.endIndex)?.lowerBound
+            ?? text.endIndex
+        let body = String(text[stop.lowerBound..<bodyEnd])
+        guard let disarm = body.range(of: "TunnelProfile.disarmOnDemand(on:") else {
+            return XCTFail("stopTunnel no longer disarms on-demand through the Kit: on the "
+                         + "router's wifi the tunnel will be started again the moment it stops")
+        }
+        guard let save = body.range(of: "saveToPreferences()") else {
+            return XCTFail("stopTunnel disarms on-demand but never saves it, and an "
+                         + "in-memory flag is nothing the system acts on")
+        }
+        guard let stopCall = body.range(of: "stopVPNTunnel()") else {
+            return XCTFail("stopTunnel no longer stops the tunnel at all")
+        }
+        XCTAssertTrue(disarm.lowerBound < save.lowerBound,
+                      "the disarm has to happen before the save, or the save writes the armed rule")
+        XCTAssertTrue(save.lowerBound < stopCall.lowerBound,
+                      "the save has to land before the stop, or the rule is still armed when "
+                    + "the tunnel goes down and the system restarts it")
+    }
+
     /// The consumer. The extension used to read the raw key itself and, when it
     /// would not parse, log "falling through to contributor mode" - a phone in a
     /// hotel spending metered data on a bond that cannot hear it.
