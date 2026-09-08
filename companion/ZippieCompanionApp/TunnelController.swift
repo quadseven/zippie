@@ -48,6 +48,11 @@ struct SupervisionPass: Equatable {
 ///      is accepted against a connection that is still up and does nothing at
 ///      all, which is trap 2 in a different costume: the call succeeds and the
 ///      restart did not happen. See `supervise` and `waitForDisconnect`.
+///   8. `stopVPNTunnel()` does not stop a tunnel whose on-demand rule still
+///      matches the network the phone is on. The system sees a tunnel down
+///      on a Connect-rule network and starts it again, within the second -
+///      so a stop from the app has to disarm on-demand and SAVE that first,
+///      or "Stop relaying" is a restart button on the router's wifi (#55).
 @MainActor
 final class TunnelController: ObservableObject {
     @Published private(set) var status: NEVPNStatus = .invalid
@@ -65,6 +70,13 @@ final class TunnelController: ObservableObject {
     /// the sentence that stops somebody debugging the router. Nil only before
     /// the first evaluation, or when there is no installed tunnel to judge.
     @Published private(set) var supervision: SupervisionPass?
+    /// Whether the installed profile will start the tunnel by itself on the
+    /// router's wifi. True after a contributor start with router SSIDs set;
+    /// false after `stopTunnel`, which is the one place it is switched off
+    /// deliberately (trap 8). Read from the manager, never assumed from the
+    /// settings form: the form says what the NEXT start will arm, this says
+    /// what is armed now.
+    @Published private(set) var onDemandArmed = false
 
     private var manager: NETunnelProviderManager?
     private var observer: NSObjectProtocol?
@@ -87,6 +99,7 @@ final class TunnelController: ObservableObject {
             }
             installed = manager != nil
             status = manager?.connection.status ?? .invalid
+            onDemandArmed = manager?.isOnDemandEnabled ?? false
             observeStatus()
         } catch {
             lastError = Self.describe(error)
@@ -162,6 +175,7 @@ final class TunnelController: ObservableObject {
             try await m.loadFromPreferences()
             manager = m
             installed = true
+            onDemandArmed = m.isOnDemandEnabled
             observeStatus()
             try m.connection.startVPNTunnel()
         } catch {
@@ -169,7 +183,17 @@ final class TunnelController: ObservableObject {
         }
     }
 
-    func stopTunnel() {
+    /// Stop the relay and have it STAY stopped (#55).
+    ///
+    /// Trap 8. The contributor profile carries an on-demand Connect rule for
+    /// the router's wifi, and that rule cannot tell a jetsam from a person
+    /// pressing this button: a bare `stopVPNTunnel()` on the router's network
+    /// was answered by the system starting the tunnel again within the
+    /// second. So on-demand is disarmed on the manager and SAVED before the
+    /// stop is issued - the save is what the system acts on, an in-memory
+    /// flag changes nothing. The next start goes through `TunnelProfile.install`,
+    /// which arms it again from the plan.
+    func stopTunnel() async {
         // A COOLDOWN LEFT BY AN AUTOMATIC RESTART MUST NOT SUPPRESS THE FIRST
         // SUPERVISION OF A RELAY A PERSON JUST STARTED. The extension clears it
         // too, on `.userInitiated`, which covers a stop from iOS Settings; this
@@ -179,7 +203,24 @@ final class TunnelController: ObservableObject {
             RelaySupervisionStore.clear(from: shared)
         }
         supervision = nil
-        manager?.connection.stopVPNTunnel()
+        guard let m = manager else { return }
+        if m.isOnDemandEnabled {
+            TunnelProfile.disarmOnDemand(on: m)
+            do {
+                try await m.saveToPreferences()
+                // Trap 2 again: the manager is stale the instant it is saved,
+                // and the next thing that touches it may be a start.
+                try await m.loadFromPreferences()
+                onDemandArmed = false
+            } catch {
+                // Still stop. The tunnel may well come straight back, and
+                // the sentence says so rather than leaving a badge that
+                // will not go away to explain itself.
+                lastError = "Could not switch off the on-demand rule, so iOS may "
+                    + "restart the relay on the router's wifi: " + Self.describe(error)
+            }
+        }
+        m.connection.stopVPNTunnel()
     }
 
     // MARK: - supervision

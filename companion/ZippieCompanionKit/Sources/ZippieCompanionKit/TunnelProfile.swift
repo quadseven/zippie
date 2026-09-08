@@ -111,6 +111,25 @@ public struct TunnelProfile: Sendable {
         manager.onDemandRules = rules
         manager.isOnDemandEnabled = rules != nil
     }
+
+    /// Take the on-demand rule's hands off the tunnel, so that a stop STAYS
+    /// stopped (#55).
+    ///
+    /// The Connect rule above is what brings a jetsammed extension back on the
+    /// router's wifi, and it does not know the difference between "the system
+    /// killed it" and "a person pressed Stop relaying". `stopVPNTunnel()` on
+    /// its own tears the tunnel down and the rule, still armed and still
+    /// matching, starts it again within the second - which is exactly what it
+    /// was installed to do. So a stop from the app disarms the rule FIRST, and
+    /// the caller saves that to preferences before it stops anything.
+    ///
+    /// The rules themselves stay on the manager. Only the switch is flipped:
+    /// the next `install(on:)` sets it from the plan again, so a start by hand
+    /// re-arms on-demand with nothing extra to remember. Client mode never had
+    /// it armed and is unaffected.
+    public static func disarmOnDemand(on manager: NETunnelProviderManager) {
+        manager.isOnDemandEnabled = false
+    }
 }
 
 /// What the extension found on the tunnel it was handed.

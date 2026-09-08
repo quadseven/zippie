@@ -157,7 +157,7 @@ struct RelayScreen: View {
         VStack(alignment: .leading, spacing: Space.snug) {
             if running {
                 ActionButton(title: "Stop relaying", role: .destructive) {
-                    tunnel.stopTunnel()
+                    Task { await tunnel.stopTunnel() }
                 }
             } else {
                 ActionButton(title: tunnel.installed ? "Start relaying" : "Install and start",
@@ -308,8 +308,19 @@ struct RelayScreen: View {
                     .padding(.top, Space.tight)
             }
             .buttonStyle(.plain)
-            Note(text: policy.explain(currentSSID: currentSSID),
-                 tone: policy.shouldRun(onSSID: currentSSID) ? .plain : .warning)
+            // AFTER A STOP BY HAND THE RULE IS OFF, and the sentence has to
+            // say so (#55): the policy describes what the next start will
+            // arm, not what is armed now, and "the tunnel starts on X" beside
+            // a relay that was just stopped on X reads as a broken button.
+            if tunnel.installed, !tunnel.onDemandArmed, policy.isEnabled, !running {
+                Note(text: "Stopped by hand. The tunnel will not start itself again "
+                   + "until you start it - then it comes back on "
+                   + policy.connectSSIDs.joined(separator: " or ") + " by itself.",
+                     tone: .plain)
+            } else {
+                Note(text: policy.explain(currentSSID: currentSSID),
+                     tone: policy.shouldRun(onSSID: currentSSID) ? .plain : .warning)
+            }
         }
         .disabled(editingLocked)
         .opacity(editingLocked ? 0.5 : 1)
