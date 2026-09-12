@@ -81,6 +81,17 @@ public actor CellularRelay {
         /// provably observable rather than looking identical to one that
         /// never needed to.
         public var cellularRetries = 0
+        /// How many times the WIFI LISTENER was torn down and recreated,
+        /// either because it failed outright or sat stuck in `.waiting` past
+        /// `cellularWaitingTimeout`. Mirrors `cellularRetries`, for the side
+        /// that had NOTHING watching it until this field existed - see
+        /// `listenerState(_:)`. Live 2026-09-12: a phone's router-inbound
+        /// went silently stale mid-drive (an Ethernet adapter went in for
+        /// CarPlay on the same phone) while `errors` stayed 0 and
+        /// `cellularReady` stayed true, because neither of those has
+        /// anything to do with whether the LISTENER itself is still alive -
+        /// nothing before this line ever asked.
+        public var listenerRetries = 0
         /// When something last ARRIVED from the router, or nil if nothing ever
         /// has. The only evidence on this struct that the far end exists:
         /// every other field is a fact about this phone, and #44 shipped a
@@ -125,6 +136,7 @@ public actor CellularRelay {
             budgetBlocked = try c.decode(Int.self, forKey: .budgetBlocked)
             lastError = try c.decodeIfPresent(String.self, forKey: .lastError)
             cellularRetries = try c.decodeIfPresent(Int.self, forKey: .cellularRetries) ?? 0
+            listenerRetries = try c.decodeIfPresent(Int.self, forKey: .listenerRetries) ?? 0
             lastRouterInboundAt = try c.decodeIfPresent(Date.self, forKey: .lastRouterInboundAt)
         }
     }
@@ -147,6 +159,11 @@ public actor CellularRelay {
     private var onChange: (@Sendable (Stats) -> Void)?
     /// The pure half of #92's fix - see that type for why it is separate.
     private var waitingRetry = CellularWaitingRetry()
+    /// The SAME pure gate, a second instance, for the wifi listener - see
+    /// `listenerState(_:)`. `CellularWaitingRetry` is generic arithmetic on a
+    /// timestamp and a generation counter; nothing about it is specific to
+    /// the cellular connection it was named for.
+    private var listenerWaitingRetry = CellularWaitingRetry()
 
     /// How long a stuck `.waiting` cellular connection is tolerated before
     /// giving up on Network.framework's own automatic recovery and forcing a
@@ -184,6 +201,7 @@ public actor CellularRelay {
         // Invalidate, not just clear: a retry already scheduled before this
         // stop must not restart a relay that was deliberately shut down.
         waitingRetry.invalidate()
+        listenerWaitingRetry.invalidate()
         publish()
     }
 
@@ -277,6 +295,72 @@ public actor CellularRelay {
         }
     }
 
+    // MARK: - wifi listener health
+
+    /// The wifi-side twin of `cellularState(_:)`, and deliberately matching
+    /// its exact split between the two failure states:
+    ///
+    ///   - `.failed` is logged and counted, NEVER auto-retried - mirroring
+    ///     `cellularState`'s own `.failed` case exactly. A restart that
+    ///     immediately re-fails re-enters `.failed` and, without a rate
+    ///     limit, that is an unbounded tight loop rather than a fix - caught
+    ///     by this file's own test spinning `restartListener()` tens of
+    ///     thousands of times in ten seconds before this comment existed.
+    ///   - `.waiting` gets the same bounded, generation-gated patience the
+    ///     cellular side already has: Network.framework's own recovery gets
+    ///     `cellularWaitingTimeout` to work before this forces a fresh
+    ///     listener, and the generation gate means at most one forced
+    ///     restart per timeout window, however many times `.waiting` refires
+    ///     in between.
+    private func listenerState(_ state: NWListener.State) {
+        switch state {
+        case .ready:
+            listenerWaitingRetry.leftWaiting()
+        case let .failed(e):
+            stats.errors += 1
+            stats.lastError = "wifi listener: \(e.localizedDescription)"
+            listenerWaitingRetry.leftWaiting()
+        case let .waiting(reason):
+            stats.lastError = "wifi listener not usable yet: " + Self.describe(reason)
+            let generation = listenerWaitingRetry.enteredWaiting(now: Date())
+            scheduleListenerWaitingRetry(generation: generation)
+        default:
+            break
+        }
+        publish()
+    }
+
+    private func scheduleListenerWaitingRetry(generation: Int) {
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.cellularWaitingTimeout * 1_000_000_000))
+            await self?.retryListenerIfStillStuck(generation: generation)
+        }
+    }
+
+    private func retryListenerIfStillStuck(generation: Int) {
+        guard listenerWaitingRetry.shouldRetry(scheduledFor: generation, now: Date(),
+                                               timeout: Self.cellularWaitingTimeout)
+        else { return }
+        restartListener()
+    }
+
+    /// Tears down and recreates the listener. Deliberately does NOT touch
+    /// `routerPeer`: the accepted connection that peer rides on is a
+    /// separate `NWConnection` the listener handed off already, and a
+    /// listener restart does not by itself invalidate a connection already
+    /// accepted from it.
+    private func restartListener() {
+        stats.listenerRetries += 1
+        listener?.cancel()
+        listener = nil
+        do {
+            try startListener()
+        } catch {
+            stats.lastError = "wifi listener restart failed: \(error.localizedDescription)"
+            publish()
+        }
+    }
+
     /// Why Network.framework is holding this connection, in words that name
     /// the actual fault rather than a list of suspects.
     ///
@@ -332,6 +416,17 @@ public actor CellularRelay {
             conn.stateUpdateHandler = { _ in }
             conn.start(queue: .global(qos: .userInitiated))
             Task { await self?.adoptRouter(conn) }
+        }
+        // UNTIL THIS LINE, NOTHING EVER ASKED. The cellular side has watched
+        // its own connection since #69/#92; this listener - the one thing
+        // that actually hears the router - had no equivalent. Live
+        // 2026-09-12: router inbound went silently stale for a phone
+        // contributing while also plugged into a CarPlay Ethernet adapter,
+        // with `errors` at 0 and `cellularReady` still true the whole time,
+        // because neither counter has anything to do with this listener
+        // being alive.
+        l.stateUpdateHandler = { [weak self] state in
+            Task { await self?.listenerState(state) }
         }
         l.start(queue: .global(qos: .userInitiated))
         listener = l
@@ -519,6 +614,21 @@ public actor CellularRelay {
     public func testSpend(bytes: Int) { ledger.record(bytes: UInt64(bytes)) }
 
     public func testForwardUpstream(_ data: Data) { forwardToHome(data) }
+
+    /// `NWListener.State` itself needs no device - it is a plain enum, not a
+    /// live socket - so this drives `listenerState(_:)` directly rather than
+    /// standing up a real listener, the same way `testForwardUpstream` drives
+    /// the forwarding path without a real socket underneath it.
+    public func testListenerState(_ state: NWListener.State) { listenerState(state) }
+
+    /// Drives the actual restart `retryListenerIfStillStuck` performs, once,
+    /// without waiting the real `cellularWaitingTimeout` for the generation
+    /// gate to allow it - that gate is `CellularWaitingRetry`'s own job and
+    /// is already fully covered by `CellularWaitingRetryTests`. This proves
+    /// only what `restartListener()` itself does: increments the counter
+    /// exactly once and attempts a fresh bind, regardless of whether that
+    /// bind succeeds in whatever environment the test runs in.
+    public func testRestartListener() { restartListener() }
 
     private func note(error: String) {
         stats.errors += 1
