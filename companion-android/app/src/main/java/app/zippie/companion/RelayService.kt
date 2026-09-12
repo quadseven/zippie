@@ -365,6 +365,15 @@ class RelayService : Service() {
         // Logged without the token, which lives only in the Config and is
         // redacted even in its toString.
         Log.i(TAG, text)
+        // SHIPPED, not only logged (#18's own "make the deadlock legible").
+        // logcat resets every boot and is unreachable from outside exactly
+        // when the router is dark - the same reasoning CellularLogShipper's
+        // own header comment gives for existing at all. Without this, an
+        // announce failure during the cold-start deadlock is visible only
+        // to someone watching logcat live at the moment it happens, which
+        // is how the 2026-08-29 incident went unexplained for 25 minutes.
+        val status = if (outcome is LegAnnouncer.Outcome.Announced) "info" else "warn"
+        ship(text, status, mapOf("announce_outcome" to outcome::class.simpleName))
         publish()
     }
 
