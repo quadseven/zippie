@@ -74,10 +74,40 @@ public struct TunnelProfile: Sendable {
         let connect = NEOnDemandRuleConnect()
         connect.interfaceTypeMatch = .wiFi
         connect.ssidMatch = policy.connectSSIDs
-        // Everything that is not the router's wifi explicitly disconnects,
-        // rather than being left to an implicit default that has changed
-        // between iOS releases.
-        return [connect, NEOnDemandRuleDisconnect()]
+
+        // A CABLE IS NOT "SOMEWHERE ELSE".
+        //
+        // An SSID cannot answer "am I on the router's network?" for a wired
+        // interface, because a wired interface has no SSID. So the Connect
+        // rule above can never match one, and the catch-all below matched
+        // instead: iOS tore the tunnel down within two seconds of every
+        // manual start on a phone plugged into the router's LAN port.
+        //
+        // MEASURED 2026-09-11, phone wired to the router, relay pressed
+        // twice: six status transitions in 1.72s, then five in 1.79s, with
+        // an EMPTY error string at every step, on a phone whose Local
+        // Network and Cellular permissions were both granted and whose app
+        // was polling the router's console successfully throughout. Nothing
+        // was failing. The tunnel was being switched off on policy, by the
+        // rule below, and the operator saw "it connects for a split second
+        // and says Off again".
+        //
+        // IGNORE, NOT CONNECT, and that distinction is the honest one.
+        // Nothing here can tell the router's LAN from a hotel's from the
+        // interface type alone, so this deliberately does NOT start the
+        // tunnel on any cable it happens to find - that would be the
+        // unconditional on-demand the SSID scoping exists to avoid, wearing
+        // a different hat. It only stops the system from undoing a start the
+        // operator explicitly asked for. Auto-connect on a RECOGNISED wired
+        // network needs a positive test of the network's identity - the
+        // router's console answering on the LAN - which is #65.
+        let wired = NEOnDemandRuleIgnore()
+        wired.interfaceTypeMatch = .ethernet
+
+        // Everything that is neither the router's wifi nor a cable explicitly
+        // disconnects, rather than being left to an implicit default that has
+        // changed between iOS releases.
+        return [connect, wired, NEOnDemandRuleDisconnect()]
     }
 
     /// Put this plan on the manager, replacing whatever the last start left.

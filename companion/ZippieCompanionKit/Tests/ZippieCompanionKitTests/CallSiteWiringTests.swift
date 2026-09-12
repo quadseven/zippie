@@ -256,4 +256,25 @@ final class CallSiteWiringTests: XCTestCase {
                     "supervision decides in silence - the operator sees a relay reading "
                   + "Ready and no explanation of why nothing is being done")
     }
+
+    /// Datadog RESERVES `status` for the log level. An attribute by that name
+    /// is overwritten on ingest, so the tunnel's real state never arrives.
+    ///
+    /// This cost a live debugging session on 2026-09-11: a phone was flipping
+    /// through five tunnel states in under two seconds in a moving car, every
+    /// transition reached Datadog correctly timestamped, and every single one
+    /// read `status: info`. The instrumentation existed, looked healthy on a
+    /// dashboard, and could not answer the one question it was written for.
+    /// A rename back would be silent and total, so it is pinned here.
+    func testTheTunnelStatusIsNotLoggedUnderDatadogsReservedKey() throws {
+        let text = try source("ZippieCompanionApp/Observability.swift")
+        XCTAssertTrue(text.contains("\"tunnel_status\":"),
+                      "the tunnel's state must be logged under a key Datadog "
+                    + "does not reserve, or it is destroyed on ingest")
+        XCTAssertFalse(text.contains("\"status\": tunnelStatusName"),
+                       "`status` is Datadog's log level - an attribute of that "
+                    + "name is silently overwritten, which is worse than no "
+                    + "instrumentation because it looks like coverage")
+    }
+
 }

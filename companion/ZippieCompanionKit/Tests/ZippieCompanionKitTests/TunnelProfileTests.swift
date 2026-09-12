@@ -191,7 +191,8 @@ final class TunnelProfileTests: XCTestCase {
             ModeDecision(proximity: .local),
             relay: relay(["TravelRouter", "GL-MT3000-000"]), client: nil)))
         XCTAssertTrue(contributing.isOnDemandEnabled)
-        XCTAssertEqual(contributing.onDemandRules?.count, 2)
+        XCTAssertEqual(contributing.onDemandRules?.count, 3,
+                       "connect on the router's wifi, leave a cable alone, disconnect elsewhere")
         let connect = try XCTUnwrap(contributing.onDemandRules?.first as? NEOnDemandRuleConnect)
         XCTAssertEqual(connect.ssidMatch, ["TravelRouter", "GL-MT3000-000"])
 
@@ -199,6 +200,41 @@ final class TunnelProfileTests: XCTestCase {
             ModeDecision(proximity: .remote), relay: relay(), client: client())))
         XCTAssertFalse(bonding.isOnDemandEnabled)
         XCTAssertNil(bonding.onDemandRules)
+    }
+
+    /// A phone on the router's LAN PORT must be left alone, not switched off.
+    ///
+    /// The regression this pins: a wired interface has no SSID, so the Connect
+    /// rule cannot match it and the catch-all Disconnect did - iOS killed the
+    /// tunnel within two seconds of every manual start, with no error, on a
+    /// phone that was otherwise perfectly configured. Measured on a real phone
+    /// 2026-09-11.
+    func testAPhoneOnACableIsLeftAloneRatherThanDisconnected() throws {
+        let rules = try XCTUnwrap(installed(TunnelPlan.decide(
+            ModeDecision(proximity: .local), relay: relay(), client: nil))?.onDemandRules)
+
+        let wired = rules.filter { $0.interfaceTypeMatch == .ethernet }
+        XCTAssertEqual(wired.count, 1, "exactly one rule speaks for a cable")
+        XCTAssertTrue(wired.first is NEOnDemandRuleIgnore,
+                      "a cable must be IGNORED - disconnecting it is the bug, and "
+                    + "connecting on it would auto-start on any hotel's ethernet")
+
+        // Order is load-bearing: iOS takes the FIRST matching rule, so the
+        // ignore must come before the catch-all or it never gets a say.
+        let ignoreAt = try XCTUnwrap(rules.firstIndex { $0 is NEOnDemandRuleIgnore })
+        let disconnectAt = try XCTUnwrap(rules.firstIndex { $0 is NEOnDemandRuleDisconnect })
+        XCTAssertLessThan(ignoreAt, disconnectAt)
+    }
+
+    /// The wifi behaviour this change must not disturb: on the router's own
+    /// wifi the tunnel still starts itself, which is what #55/#56 restored.
+    func testTheRoutersWifiStillConnectsByItself() throws {
+        let rules = try XCTUnwrap(installed(TunnelPlan.decide(
+            ModeDecision(proximity: .local), relay: relay(), client: nil))?.onDemandRules)
+        let connect = try XCTUnwrap(rules.first as? NEOnDemandRuleConnect)
+        XCTAssertEqual(connect.interfaceTypeMatch, .wiFi)
+        XCTAssertEqual(connect.ssidMatch, ["zippie"],
+                       "the configured router SSID still scopes the auto-connect")
     }
 
     /// An empty settings field must never quietly become "match every network",
@@ -238,7 +274,7 @@ final class TunnelProfileTests: XCTestCase {
         TunnelProfile.disarmOnDemand(on: manager)
         XCTAssertFalse(manager.isOnDemandEnabled,
                        "a stop that leaves this true is a restart on the router's wifi")
-        XCTAssertEqual(manager.onDemandRules?.count, 2, "the rules are not the switch")
+        XCTAssertEqual(manager.onDemandRules?.count, 3, "the rules are not the switch")
 
         _ = installed(TunnelPlan.decide(ModeDecision(proximity: .local),
                                         relay: relay(["TravelRouter"]), client: nil),
