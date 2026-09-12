@@ -184,11 +184,24 @@ targets:
   # phone's traffic - see PacketTunnelProvider.inertNetworkSettings for exactly
   # how, and for the risk that carries.
   #
-  # NO DATADOG HERE, on purpose. Network Extension providers are killed without
-  # warning when they exceed an undocumented memory ceiling (reported around
-  # 50 MB for packet tunnels), and the app is where the SDK's cost is
-  # affordable. The extension reports through the App Group instead and the app
-  # forwards it to Datadog.
+  # DATADOG HERE TOO NOW (#73), but not the way the app links it. Network
+  # Extension providers are killed WITHOUT WARNING when they exceed an
+  # undocumented memory ceiling, reported around 50 MB for packet tunnels -
+  # see PacketTunnelProvider's own MEMORY comment. Before #73 that ceiling was
+  # answered by carrying NO Datadog product at all: the extension reported
+  # through the App Group only, and the app forwarded it to Datadog - except
+  # nothing forwarded the BACKGROUND relay's stats, because the app's one
+  # `Observability.relayStats` call site is the foreground toggle an operator
+  # rarely opens. So the relay that actually carries traffic never reached
+  # Datadog at all (2026-09-11).
+  #
+  # The fix links ONLY `DatadogCore` + `DatadogLogs` below - never `DatadogRUM`
+  # or `DatadogTrace`, both of which the app target links and neither of which
+  # this process has anything to spend them on: RUM tracks view hierarchies
+  # and swizzles URLSession in a provider with no UI and no user-facing
+  # requests, and Trace stands up a second feature registry and its own
+  # storage on top of that. See `TunnelObservability.swift` for the
+  # initialisation itself and why it is guarded to run once per process.
   ZippieCompanionTunnel:
     type: app-extension
     platform: iOS
@@ -214,6 +227,12 @@ targets:
       # router and a real radio; forking it so the extension could have its own
       # would mean two relays drifting apart, and only one of them tested.
       - package: ZippieCompanionKit
+      # ONLY these two products (#73) - see the target-level comment above for
+      # why RUM and Trace stay app-only.
+      - package: Datadog
+        product: DatadogCore
+      - package: Datadog
+        product: DatadogLogs
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.zippie.companion.tunnel

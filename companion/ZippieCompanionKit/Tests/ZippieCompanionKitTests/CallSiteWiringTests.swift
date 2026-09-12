@@ -349,4 +349,217 @@ final class CallSiteWiringTests: XCTestCase {
           + "the fast-flap fallback span above can never fire")
     }
 
+    /// Strips comment lines before a containment check, so a tripwire that
+    /// asserts something is ABSENT cannot trip on the very comment that
+    /// explains why it must stay absent. `prefix` is the file's own comment
+    /// marker - `//` for Swift, `#` for the YAML in `project.yml`. Mirrors
+    /// the code-only filter `testTheCellularDisconnectRuleStillExistsForIOS`
+    /// already uses inline, generalised so the Datadog-wiring checks below
+    /// can reuse it for both a Swift file and a YAML one.
+    private func codeOnly(_ text: String, commentPrefix: String) -> String {
+        text.split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix(commentPrefix) }
+            .joined(separator: "\n")
+    }
+
+    /// THE BACKGROUND RELAY IS THE ONE THAT MATTERS, and until #73 it logged
+    /// exclusively through `os.Logger` - the one call site that ever reached
+    /// Datadog was the foreground toggle at `RelayScreen.swift:447`, which an
+    /// operator rarely opens. `PacketTunnelProvider.swift` cannot be compiled
+    /// by `swift test` at all (it is an app-extension Xcode target, not part
+    /// of this package - see the type comment above), so this is read from
+    /// source, the same way `testBothSupervisorsActuallyAskTheKitAndActOnTheAnswer`
+    /// already proves supervision is wired rather than merely defined.
+    func testTheExtensionShipsRelayStatsToDatadogOnItsHeartbeat() throws {
+        let text = try source("ZippieCompanionTunnel/PacketTunnelProvider.swift")
+        assertCalls(text, "TunnelObservability.start(legName:",
+                    "the extension never brings the SDK up, so nothing it logs can reach Datadog")
+        assertCalls(text, "reporter.nextHeartbeatTick()",
+                    "the report cadence has no counter to ask, so it cannot rate-limit itself")
+        assertCalls(text, "RelayTelemetry.shouldReport(tick:",
+                    "the extension ships on every 2s heartbeat pass rather than on the coarser "
+                  + "schedule #73 requires - that is 15x the request volume for no benefit")
+        assertCalls(text, "TunnelObservability.report(",
+                    "the heartbeat computes whether to report and never actually ships anything")
+    }
+
+    /// `DatadogCore` + `DatadogLogs` ONLY, never `DatadogRUM` or
+    /// `DatadogTrace` - see the target comment in `project.yml` for why. This
+    /// cannot be proven by `swift build`, which does not resolve Xcode
+    /// project dependencies at all; only reading the generator spec can.
+    func testTheTunnelExtensionLinksOnlyDatadogLogsNeverRUMOrTrace() throws {
+        let text = try source("project.yml")
+        guard let start = text.range(of: "\n  ZippieCompanionTunnel:") else {
+            return XCTFail("ZippieCompanionTunnel target is gone from project.yml - "
+                         + "if it moved, move this check with it")
+        }
+        // The next top-level target key in the file today. A literal
+        // boundary rather than an indentation parser, matching the
+        // `// MARK: -` boundary trick above - crude, and the only tripwire
+        // available for a YAML file with no compiler of its own.
+        let end = text.range(of: "\n  ZippieCompanionWidgetExtension:",
+                             range: start.upperBound..<text.endIndex)?.lowerBound
+            ?? text.endIndex
+        let block = codeOnly(String(text[start.lowerBound..<end]), commentPrefix: "#")
+
+        XCTAssertTrue(block.contains("product: DatadogCore"),
+                      "the tunnel target no longer links DatadogCore - Datadog.initialize has "
+                    + "nothing to call")
+        XCTAssertTrue(block.contains("product: DatadogLogs"),
+                      "the tunnel target no longer links DatadogLogs - Logs.enable has nothing "
+                    + "to call")
+        XCTAssertFalse(block.contains("product: DatadogRUM"),
+                       "DatadogRUM is back in the extension target - it tracks view hierarchies "
+                     + "and swizzles URLSession in a provider with neither, for memory this "
+                     + "process cannot afford")
+        XCTAssertFalse(block.contains("product: DatadogTrace"),
+                       "DatadogTrace is back in the extension target - a second feature "
+                     + "registry and its own storage, for memory this process cannot afford")
+    }
+
+    /// The extension's own Datadog wrapper must import the same two products
+    /// `project.yml` links for it, and neither of the heavier ones.
+    func testTheExtensionsDatadogWrapperImportsOnlyCoreAndLogs() throws {
+        let text = try source("ZippieCompanionTunnel/TunnelObservability.swift")
+        assertCalls(text, "import DatadogCore", "the wrapper cannot initialise the SDK without this")
+        assertCalls(text, "import DatadogLogs", "the wrapper cannot log without this")
+        let code = codeOnly(text, commentPrefix: "//")
+        assertDoesNotContain(code, "import DatadogRUM",
+                             "RUM is back in the process this memory budget cannot afford it in")
+        assertDoesNotContain(code, "import DatadogTrace",
+                             "Trace is back in the process this memory budget cannot afford it in")
+    }
+
+    /// Guarded so a tunnel that stops and restarts inside ONE process
+    /// lifetime - which happens, see `stopTunnel`/`startTunnel` - never
+    /// calls `Datadog.initialize` a second time. An unguarded `start()`
+    /// looks identical to a guarded one until the second call, which no
+    /// device test in this repository can exercise.
+    func testTheExtensionsDatadogInitIsGuardedAgainstRunningTwice() throws {
+        let text = try source("ZippieCompanionTunnel/TunnelObservability.swift")
+        guard let fn = text.range(of: "static func start(legName:") else {
+            return XCTFail("TunnelObservability.start() is gone - if it moved, move this check")
+        }
+        let bodyEnd = text.range(of: "\n    static func report(",
+                                 range: fn.upperBound..<text.endIndex)?.lowerBound
+            ?? text.endIndex
+        let body = String(text[fn.lowerBound..<bodyEnd])
+        assertCalls(body, "guard !started else { return }",
+                    "start() has no guard, so a second call re-initialises the whole SDK")
+        assertCalls(body, "started = true",
+                    "the guard flag is never set, so it can never actually guard anything")
+    }
+
+    /// The BACKGROUND relay must be queryable under the SAME attribute shape
+    /// the FOREGROUND toggle already ships, or an operator has to learn two
+    /// log shapes for one fact. `RelayTelemetry.attributes` is the Kit's
+    /// half of that promise (proven by `RelayTelemetryTests`); this proves
+    /// `Observability.relayStats` - which this package cannot import or
+    /// compile - still names the identical keys, so nobody can drift one
+    /// shape without a test noticing.
+    func testTheForegroundAndBackgroundRelayLogsShareTheSameAttributeKeys() throws {
+        let appSide = try source("ZippieCompanionApp/Observability.swift")
+        let kitSide = try source("ZippieCompanionKit/Sources/ZippieCompanionKit/RelayTelemetry.swift")
+        for key in ["cellular_ready", "up.datagrams", "up.bytes",
+                    "down.datagrams", "down.bytes", "errors", "last_error",
+                    "router.ever_inbound", "router.last_inbound_age_s"] {
+            let quoted = "\"\(key)\""
+            XCTAssertTrue(appSide.contains(quoted),
+                          "the foreground shape dropped \(key) - RelayTelemetry would still "
+                        + "ship it, and the two paths would disagree")
+            XCTAssertTrue(kitSide.contains(quoted),
+                          "the background shape dropped \(key) - the foreground toggle would "
+                        + "still ship it, and the two paths would disagree")
+        }
+    }
+
+    /// THE KILL SWITCH. Whether `DatadogCore` actually fits inside this
+    /// process's jetsam ceiling is not knowable without a device; if it
+    /// does not, iOS kills the extension silently, the on-demand rule
+    /// restarts it, and the same SDK pushes it over the same ceiling again
+    /// - a loop whose only other exit is a new TestFlight build. The escape
+    /// hatch only works if the check runs BEFORE `Datadog.initialize`, so
+    /// this proves both that `start()` asks and that it asks first.
+    func testTheExtensionConsultsTheKillSwitchBeforeInitialisingDatadog() throws {
+        let text = try source("ZippieCompanionTunnel/TunnelObservability.swift")
+        guard let fn = text.range(of: "static func start(legName:") else {
+            return XCTFail("TunnelObservability.start() is gone - if it moved, move this check")
+        }
+        let bodyEnd = text.range(of: "\n    static func report(",
+                                 range: fn.upperBound..<text.endIndex)?.lowerBound
+            ?? text.endIndex
+        let body = String(text[fn.lowerBound..<bodyEnd])
+
+        guard let check = body.range(of: "RelayTelemetry.isTelemetryEnabled(in:") else {
+            return XCTFail("start() never asks the kill switch - an operator has no way to "
+                         + "turn this off without shipping a new build")
+        }
+        guard let initCall = body.range(of: "Datadog.initialize(") else {
+            return XCTFail("Datadog.initialize is gone from start() - if it moved, move this "
+                         + "check")
+        }
+        XCTAssertTrue(check.lowerBound < initCall.lowerBound,
+                      "the kill switch is checked AFTER Datadog.initialize - by then the SDK "
+                    + "is already up and the switch cannot prevent the very thing it exists "
+                    + "to prevent")
+        assertCalls(body, "RelayConfiguration.sharedDefaults",
+                    "the kill switch reads something other than the shared App Group, which "
+                    + "is the one channel an operator can write without a new profile install "
+                    + "or a rebuild")
+
+        // The switch must also gate REPORTING, not just initialisation - a
+        // process that skipped `Datadog.initialize` must not go on to call
+        // `Logger.create` (via `log`) from `report` either, or disabling
+        // the switch would still wake Datadog's Logger machinery.
+        assertCalls(text, "guard enabled else { return }",
+                    "report() no longer checks whether the switch was engaged at startup, so "
+                  + "a disabled process would still touch Datadog's Logger machinery")
+    }
+
+    /// Grug flagged (#73 PR review) that `enabled = true` was set BEFORE
+    /// `Datadog.initialize`/`Logs.enable` returned - unreachable given
+    /// `report()`'s only caller is a `Task` created after `start()` has
+    /// already returned synchronously in `startContributor`, but a fix that
+    /// costs one line's position is cheaper than an argument about whether
+    /// a future call site could ever make it reachable. This pins the
+    /// corrected order so it cannot silently drift back.
+    func testTheEnabledFlagIsRaisedOnlyAfterTheSDKIsFullyUp() throws {
+        let text = try source("ZippieCompanionTunnel/TunnelObservability.swift")
+        guard let fn = text.range(of: "static func start(legName:") else {
+            return XCTFail("TunnelObservability.start(legName:) is gone - if it moved, move this check")
+        }
+        let bodyEnd = text.range(of: "\n    static func report(",
+                                 range: fn.upperBound..<text.endIndex)?.lowerBound
+            ?? text.endIndex
+        let body = String(text[fn.lowerBound..<bodyEnd])
+
+        guard let logsEnable = body.range(of: "Logs.enable()") else {
+            return XCTFail("Logs.enable() is gone from start() - if it moved, move this check")
+        }
+        guard let enabledFlag = body.range(of: "enabled = true") else {
+            return XCTFail("enabled = true is gone from start() - report() would never fire")
+        }
+        XCTAssertTrue(logsEnable.upperBound <= enabledFlag.lowerBound,
+                      "enabled is raised before Logs.enable() returns - a concurrent report() "
+                    + "could observe enabled==true and touch the Logger before the SDK has "
+                    + "finished coming up")
+    }
+
+    /// #74's platform/device tags, mirrored onto the extension's OWN stream -
+    /// without this, a background-relay log line is exactly the ambiguous
+    /// "which phone, which process" reading #74 was filed to end, just one
+    /// process over from the one #74 actually fixed.
+    func testTheExtensionsStreamCarriesThePlatformAndDeviceTagsToo() throws {
+        let text = try source("ZippieCompanionTunnel/TunnelObservability.swift")
+        assertCalls(text, "Logs.addAttribute(forKey: \"platform\", value: \"ios\")",
+                    "the extension's logs carry no platform tag - indistinguishable from "
+                  + "Android's relay heartbeat again, the exact 2026-09-11 misdiagnosis")
+        assertCalls(text, "Logs.addAttribute(forKey: \"device\", value: legName)",
+                    "the extension's logs carry no per-device tag - one phone's stream cannot "
+                  + "be told apart from another's of the same platform")
+        assertCalls(text, "Logs.addAttribute(forKey: \"process\", value: \"tunnel\")",
+                    "nothing distinguishes this process's stream from the app's own on the "
+                  + "same device now that both carry platform/device")
+    }
+
 }
