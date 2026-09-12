@@ -372,7 +372,7 @@ final class CallSiteWiringTests: XCTestCase {
     /// already proves supervision is wired rather than merely defined.
     func testTheExtensionShipsRelayStatsToDatadogOnItsHeartbeat() throws {
         let text = try source("ZippieCompanionTunnel/PacketTunnelProvider.swift")
-        assertCalls(text, "TunnelObservability.start()",
+        assertCalls(text, "TunnelObservability.start(legName:",
                     "the extension never brings the SDK up, so nothing it logs can reach Datadog")
         assertCalls(text, "reporter.nextHeartbeatTick()",
                     "the report cadence has no counter to ask, so it cannot rate-limit itself")
@@ -437,7 +437,7 @@ final class CallSiteWiringTests: XCTestCase {
     /// device test in this repository can exercise.
     func testTheExtensionsDatadogInitIsGuardedAgainstRunningTwice() throws {
         let text = try source("ZippieCompanionTunnel/TunnelObservability.swift")
-        guard let fn = text.range(of: "static func start()") else {
+        guard let fn = text.range(of: "static func start(legName:") else {
             return XCTFail("TunnelObservability.start() is gone - if it moved, move this check")
         }
         let bodyEnd = text.range(of: "\n    static func report(",
@@ -482,7 +482,7 @@ final class CallSiteWiringTests: XCTestCase {
     /// this proves both that `start()` asks and that it asks first.
     func testTheExtensionConsultsTheKillSwitchBeforeInitialisingDatadog() throws {
         let text = try source("ZippieCompanionTunnel/TunnelObservability.swift")
-        guard let fn = text.range(of: "static func start()") else {
+        guard let fn = text.range(of: "static func start(legName:") else {
             return XCTFail("TunnelObservability.start() is gone - if it moved, move this check")
         }
         let bodyEnd = text.range(of: "\n    static func report(",
@@ -514,6 +514,52 @@ final class CallSiteWiringTests: XCTestCase {
         assertCalls(text, "guard enabled else { return }",
                     "report() no longer checks whether the switch was engaged at startup, so "
                   + "a disabled process would still touch Datadog's Logger machinery")
+    }
+
+    /// Grug flagged (#73 PR review) that `enabled = true` was set BEFORE
+    /// `Datadog.initialize`/`Logs.enable` returned - unreachable given
+    /// `report()`'s only caller is a `Task` created after `start()` has
+    /// already returned synchronously in `startContributor`, but a fix that
+    /// costs one line's position is cheaper than an argument about whether
+    /// a future call site could ever make it reachable. This pins the
+    /// corrected order so it cannot silently drift back.
+    func testTheEnabledFlagIsRaisedOnlyAfterTheSDKIsFullyUp() throws {
+        let text = try source("ZippieCompanionTunnel/TunnelObservability.swift")
+        guard let fn = text.range(of: "static func start(legName:") else {
+            return XCTFail("TunnelObservability.start(legName:) is gone - if it moved, move this check")
+        }
+        let bodyEnd = text.range(of: "\n    static func report(",
+                                 range: fn.upperBound..<text.endIndex)?.lowerBound
+            ?? text.endIndex
+        let body = String(text[fn.lowerBound..<bodyEnd])
+
+        guard let logsEnable = body.range(of: "Logs.enable()") else {
+            return XCTFail("Logs.enable() is gone from start() - if it moved, move this check")
+        }
+        guard let enabledFlag = body.range(of: "enabled = true") else {
+            return XCTFail("enabled = true is gone from start() - report() would never fire")
+        }
+        XCTAssertTrue(logsEnable.upperBound <= enabledFlag.lowerBound,
+                      "enabled is raised before Logs.enable() returns - a concurrent report() "
+                    + "could observe enabled==true and touch the Logger before the SDK has "
+                    + "finished coming up")
+    }
+
+    /// #74's platform/device tags, mirrored onto the extension's OWN stream -
+    /// without this, a background-relay log line is exactly the ambiguous
+    /// "which phone, which process" reading #74 was filed to end, just one
+    /// process over from the one #74 actually fixed.
+    func testTheExtensionsStreamCarriesThePlatformAndDeviceTagsToo() throws {
+        let text = try source("ZippieCompanionTunnel/TunnelObservability.swift")
+        assertCalls(text, "Logs.addAttribute(forKey: \"platform\", value: \"ios\")",
+                    "the extension's logs carry no platform tag - indistinguishable from "
+                  + "Android's relay heartbeat again, the exact 2026-09-11 misdiagnosis")
+        assertCalls(text, "Logs.addAttribute(forKey: \"device\", value: legName)",
+                    "the extension's logs carry no per-device tag - one phone's stream cannot "
+                  + "be told apart from another's of the same platform")
+        assertCalls(text, "Logs.addAttribute(forKey: \"process\", value: \"tunnel\")",
+                    "nothing distinguishes this process's stream from the app's own on the "
+                  + "same device now that both carry platform/device")
     }
 
 }

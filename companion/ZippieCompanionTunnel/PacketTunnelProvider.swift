@@ -163,7 +163,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
         // BEFORE anything else in this function, so the first heartbeat tick
         // never finds the SDK uninitialised and drops a report on the floor.
-        TunnelObservability.start()
+        TunnelObservability.start(legName: config.legName)
 
         let relay = CellularRelay(config: config.relayConfig)
         self.relay = relay

@@ -83,7 +83,16 @@ enum TunnelObservability {
     /// guard means only the FIRST call in this process does anything, so a
     /// tunnel that stops and starts again without the extension being
     /// relaunched never re-initialises the SDK a second time.
-    static func start() {
+    ///
+    /// `legName` is `RelayConfiguration.legName` - the SAME identity string
+    /// the app already resolved via `LegName.resolve` and the router already
+    /// keys this leg's table entry by (#74). Not re-derived here: re-deriving
+    /// would mean importing UIKit for `UIDevice.current.name` in a process
+    /// that has none today, and a SECOND resolution risks a SECOND string if
+    /// it ever raced the app's own write to the same App Group key. Passed
+    /// in because it is already sitting on the `RelayConfiguration` this
+    /// function's only caller holds - there is nothing to derive.
+    static func start(legName: String) {
         lock.lock()
         defer { lock.unlock() }
         guard !started else { return }
@@ -97,7 +106,6 @@ enum TunnelObservability {
         guard RelayTelemetry.isTelemetryEnabled(in: RelayConfiguration.sharedDefaults) else {
             return
         }
-        enabled = true
         Datadog.initialize(
             with: Datadog.Configuration(
                 clientToken: clientToken,
@@ -120,6 +128,33 @@ enum TunnelObservability {
             trackingConsent: .granted
         )
         Logs.enable()
+        // MANDATORY globals, mirroring `Observability.start()` in the app
+        // target exactly (#74) - every line this process logs carries both,
+        // the same way every line the app logs does, so a query for one
+        // device's stream returns both processes' reports and a query
+        // distinguishing them can still tell which is which.
+        Logs.addAttribute(forKey: "platform", value: "ios")
+        Logs.addAttribute(forKey: "device", value: legName)
+        // NOT on the app's stream, and that asymmetry IS the distinction
+        // (#74's "should something tell the two streams on one phone
+        // apart" question): the app target is not this PR's file to touch,
+        // so rather than add a matching "app" tag there and risk the two
+        // drifting out of sync in two different files, this key's ABSENCE
+        // already means "the app process wrote this line" and its presence
+        // means this one did. A future change to the app side should add
+        // the matching tag explicitly rather than rely on continued
+        // absence, and a source tripwire below is what would need updating
+        // if it ever does.
+        Logs.addAttribute(forKey: "process", value: "tunnel")
+        // LAST, not first - Grug flagged this (#73 PR review): the ORIGINAL
+        // ordering set `enabled = true` before `Datadog.initialize` and
+        // `Logs.enable` returned. Unreachable today - `report()`'s only
+        // caller is the heartbeat `Task` created in `startContributor`
+        // AFTER this synchronous function has already returned - but
+        // unreachable-today is not the same guarantee as
+        // impossible-tomorrow, and moving one line to strictly follow SDK
+        // bring-up costs nothing.
+        enabled = true
     }
 
     /// One log line for one relay snapshot. Never called more often than
