@@ -36,12 +36,19 @@ tries to identify or install a specific alternate interface - see
 net.ZIPPIE_ROUTE_METRIC's own docstring: netifd's physical-WAN defaults already
 sit in the kernel's routing table UNDERNEATH zippie's metric-1 route, so
 withdrawing ours is the entire mechanism; the kernel does the rest with no
-action required from us. That answer is correct even when the alternate route
-rides the exact same physical interface as the surviving bond leg - the travel router's own
-incident: apclix0 carried both the tunnelled hotspot leg AND netifd's own
-untunnelled default. So this file never asserts about WHICH interface ends up
-carrying traffic, only that our own route is (or is not) installed - see
-test_standdown_never_substitutes_a_specific_interface.
+action required from us. So this file never asserts about WHICH interface
+ends up carrying traffic once a standdown DOES fire, only that our own route
+is (or is not) installed - see test_standdown_never_substitutes_a_specific_interface.
+
+BUT THAT MECHANISM IS ONLY CORRECT WHEN THE ALTERNATE ROUTE IS A GENUINELY
+DIFFERENT PATH (#70). The travel router's own incident: apclix0 carried BOTH
+the tunnelled hotspot leg AND netifd's own untunnelled default at metric 20.
+Standing aside there does not reach a different radio - it drops every OTHER
+leg and keeps this one, unbonded, which is worse than the bond it replaced.
+foreign_default_route_exists's `exclude_interfaces` (#70) is what stops that:
+a route on one of the bond's OWN matched interfaces no longer counts as a
+fallback, so `_install_default_route` HOLDS instead - see
+test_standdown_holds_when_the_only_fallback_is_a_bond_legs_own_interface.
 """
 from __future__ import annotations
 
@@ -227,9 +234,15 @@ def test_ordinary_degraded_legs_never_trip_standdown(tmp_path, spy):
 def test_standdown_never_substitutes_a_specific_interface(tmp_path, spy):
     """Standing down means withdrawing OUR route, never installing a
     different one. The kernel's own netifd defaults sit underneath ours at a
-    higher metric (net.ZIPPIE_ROUTE_METRIC) and take over unassisted - even
-    when, as on the travel router, that route rides the SAME physical interface as the
-    dying bond leg. There is deliberately no code path that picks a WAN."""
+    higher metric (net.ZIPPIE_ROUTE_METRIC) and take over unassisted. There is
+    deliberately no code path that picks a WAN.
+
+    This does not construct a route on the bond's own interface (`net.run` is
+    unmocked here, so foreign_default_route_exists reads the sandbox's
+    missing `ip` binary as "unknown, assume a fallback exists" and never
+    reaches the interface check at all) - for the case where it genuinely
+    does, and the agent holds instead, see
+    test_standdown_holds_when_the_only_fallback_is_a_bond_legs_own_interface."""
     agent = _agent(tmp_path)
     now = _clocked(agent)
     _kill(agent.paths[0])
@@ -248,6 +261,75 @@ def test_standdown_never_substitutes_a_specific_interface(tmp_path, spy):
         assert installed == [] or all(
             dev in ("pb0", "pb1") for dev, _w in installed
         )
+
+
+class _RouteProc:
+    def __init__(self, stdout: str) -> None:
+        self.stdout = stdout
+        self.returncode = 0
+
+
+def test_standdown_holds_when_the_only_fallback_is_a_bond_legs_own_interface(
+    tmp_path, spy, monkeypatch,
+):
+    """THE #70 FIX ITSELF. The travel router's own incident, replayed exactly:
+    ethernet gone, hotspot (interface apclix0) the sole survivor and running
+    hot and sustained - and the ONLY foreign default route in the table also
+    rides apclix0. Standing aside there does not reach a different radio, so
+    the bond must hold rather than withdraw its route and strand every
+    other leg for nothing."""
+    monkeypatch.setattr(
+        net, "run",
+        lambda *a, **k: _RouteProc(
+            '[{"dst":"default","dev":"apclix0","gateway":"192.0.2.1","metric":20}]'
+        ),
+    )
+    agent = _agent(tmp_path)
+    now = _clocked(agent)
+    _kill(agent.paths[0])                     # ethernet: gone
+    agent.paths[1].rtt_ms = 661.0              # hotspot (apclix0): alive, terrible
+    agent.paths[1].rtt_tail_ms = 661.0
+
+    agent.apply_policy()
+    now[0] += agent.config.policy.standdown_enter_after_s + 1.0
+    agent.apply_policy()
+
+    assert spy.routes[-1] != [], (
+        "the bond stood down for a route riding the same interface as its "
+        "own surviving leg - that drops every other leg for no real "
+        "fallback, the exact #70 incident"
+    )
+    assert agent._standdown.holds >= 1, (
+        "a held standdown must be counted the same way the sole-uplink hold is"
+    )
+
+
+def test_standdown_still_fires_for_a_genuinely_different_interface(
+    tmp_path, spy, monkeypatch,
+):
+    """The exclusion must not swallow every fallback - only ones that are
+    actually a bond leg's own interface. A real independent WAN beside the
+    same dying leg must still let the bond stand aside for it."""
+    monkeypatch.setattr(
+        net, "run",
+        lambda *a, **k: _RouteProc(
+            '[{"dst":"default","dev":"eth1","gateway":"192.0.2.1","metric":20}]'
+        ),
+    )
+    agent = _agent(tmp_path)
+    now = _clocked(agent)
+    _kill(agent.paths[0])
+    agent.paths[1].rtt_ms = 661.0
+    agent.paths[1].rtt_tail_ms = 661.0
+
+    agent.apply_policy()
+    now[0] += agent.config.policy.standdown_enter_after_s + 1.0
+    agent.apply_policy()
+
+    assert spy.routes[-1] == [], (
+        "a genuinely different interface was excluded too, suppressing a "
+        "standdown that should have fired"
+    )
 
 
 def test_an_idle_reserve_legs_stale_tail_does_not_stop_the_bond_standing_down(

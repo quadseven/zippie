@@ -2969,10 +2969,23 @@ class BondAgent:
         #
         # The fact goes INTO evaluate rather than gating the withdrawal here, so
         # the verdict and the state cannot disagree.
+        #
+        # EXCLUDE OUR OWN LEGS' PHYSICAL INTERFACES (#70). Measured live
+        # 2026-09-11: apclix0 carried both the tunnelled hotspot leg AND
+        # netifd's own untunnelled default at metric 20 - foreign_default_
+        # route_exists counted that as a fallback, so standing down dropped
+        # two clean cellular legs and kept only that one, unbonded, which is
+        # strictly worse than the bond it replaced. Every MATCHED leg
+        # (path.interface set at all), not only ones currently carrying: a
+        # leg held at weight 0 is still the same radio the fallback route
+        # would ride.
         if hops and self._standdown.evaluate(
             self._carrying_best_tail_ms(),
             fallback_exists=net.foreign_default_route_exists(
-                self.config.interface_prefix
+                self.config.interface_prefix,
+                exclude_interfaces=frozenset(
+                    p.interface for p in self.paths if p.interface
+                ),
             ),
         ):
             hops = []

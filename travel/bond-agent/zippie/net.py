@@ -964,8 +964,29 @@ def ip_route_replace_default(table: int, dev: str, metric: int = 10) -> None:
 ZIPPIE_ROUTE_METRIC = 1
 
 
-def foreign_default_route_exists(iface_prefix: str = "pb") -> bool:
-    """Is there a default route that is NOT ours to fall back to?
+def foreign_default_route_exists(
+    iface_prefix: str = "pb",
+    *,
+    exclude_interfaces: frozenset[str] = frozenset(),
+) -> bool:
+    """Is there a default route that is NOT ours, AND not one of our own legs'
+    physical interfaces, to fall back to?
+
+    `exclude_interfaces` is #70's fix: the travel router's 2026-09-11 incident
+    had `apclix0` carrying BOTH the tunnelled hotspot leg AND netifd's own
+    untunnelled default at metric 20. `foreign_default_route_exists` counted
+    that as a fallback because its device did not start with `iface_prefix` -
+    correct by the old question, wrong by the one that matters: standing aside
+    for a route that rides the SAME radio as one of the bond's own legs does
+    not reach a different path, it just drops every other leg and keeps the
+    bond's worst one, unbonded. Passing the bond's own matched interfaces here
+    makes such a route count the same as no fallback at all - the caller
+    (BondAgent._install_default_route) holds instead of standing down, exactly
+    as it already does for a true sole uplink (#202).
+
+    Deliberately every MATCHED leg, not only ones currently carrying: a leg
+    held at weight 0 or momentarily shed is still the same physical radio, and
+    the incident this exists for is about that radio, not this pass's weight.
 
     THE QUESTION EVERY REMEDY IN THIS SYSTEM HAS TO ASK. Withdrawing zippie's
     metric-1 route only helps if netifd's per-WAN default is sitting underneath
@@ -1005,7 +1026,7 @@ def foreign_default_route_exists(iface_prefix: str = "pb") -> bool:
         return True
     for r in routes:
         dev = (r or {}).get("dev") or ""
-        if dev.startswith(iface_prefix):
+        if dev.startswith(iface_prefix) or dev in exclude_interfaces:
             continue
         return True
     return False
