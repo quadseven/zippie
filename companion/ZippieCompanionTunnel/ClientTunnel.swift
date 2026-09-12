@@ -53,6 +53,21 @@ final class ClientTunnel {
     private let queue = DispatchQueue(label: "app.zippie.client", qos: .userInitiated)
     private var running = false
 
+    // MARK: - path observation (#64)
+
+    /// Watches the SAME thing `start()` reads once at startup - whether an
+    /// interface exists, is up, and what it is - but continuously, so an
+    /// Ethernet adapter arriving or leaving mid-drive is a recorded transition
+    /// rather than silence. Does not repin anything: that is #65's job, and
+    /// doing it here would blur which change fixed the reported freeze.
+    private let pathMonitor = NWPathMonitor()
+    private let pathQueue = DispatchQueue(label: "app.zippie.client.path")
+    private var lastPathSnapshot: PathSnapshot?
+    /// What `start()` actually admitted, kept for the path monitor's status
+    /// classification - the monitor fires on its own queue, arbitrarily long
+    /// after `start()` returns, and `admission` there was a local, gone by then.
+    private var admission = LegAdmission.none
+
     init(config: ClientConfig, packetFlow: NEPacketTunnelFlow) {
         self.config = config
         self.packetFlow = packetFlow
@@ -142,6 +157,8 @@ final class ClientTunnel {
         // indistinguishable from a dead network.
         guard admission.isStartable else { throw ClientTunnelError.noLegs }
         Self.log.log("client legs: \(admission.summary, privacy: .public)")
+        self.admission = admission
+        startPathObservation()
 
         var err: NSError?
         guard let client = MobileNewClient(config.datapathJSON, &err) else {
@@ -182,12 +199,46 @@ final class ClientTunnel {
 
     func stop() {
         running = false
+        pathMonitor.cancel()
         socket?.cancel()
         socket = nil
         #if canImport(Zippie)
         datapath?.stop()
         datapath = nil
         #endif
+    }
+
+    // MARK: - path observation (#64)
+
+    private func startPathObservation() {
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            self?.observed(path)
+        }
+        pathMonitor.start(queue: pathQueue)
+    }
+
+    /// Runs on `pathQueue` for every update `NWPathMonitor` delivers,
+    /// including the first one - which is why `PathObserver.transitions`
+    /// and `.status` both treat a nil previous snapshot as a baseline rather
+    /// than manufacturing a transition out of the tunnel simply starting up.
+    private func observed(_ path: Network.NWPath) {
+        let current = PathSnapshot.from(path)
+        let previous = lastPathSnapshot
+        let changes = PathObserver.transitions(from: previous, to: current)
+        let status = PathObserver.status(previous: previous, current: current, legs: admission)
+        lastPathSnapshot = current
+
+        // BOUNDED, deliberately: interface name and type, a satisfied bit, and
+        // a status word. No address, no route, no byte of user traffic - the
+        // same discipline `PathInterfaceSnapshot` enforces by never carrying
+        // more than that in the first place.
+        if !changes.isEmpty {
+            Self.log.log("""
+                path changed: \(String(describing: changes), privacy: .public) \
+                status=\(String(describing: status), privacy: .public) \
+                interfaces=\(current.interfaces.map(\.name).joined(separator: ","), privacy: .public)
+                """)
+        }
     }
 
     // MARK: - the two directions
