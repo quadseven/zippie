@@ -256,4 +256,50 @@ final class CallSiteWiringTests: XCTestCase {
                     "supervision decides in silence - the operator sees a relay reading "
                   + "Ready and no explanation of why nothing is being done")
     }
+
+    /// Datadog RESERVES `status` for the log level. An attribute by that name
+    /// is overwritten on ingest, so the tunnel's real state never arrives.
+    ///
+    /// This cost a live debugging session on 2026-09-11: a phone was flipping
+    /// through five tunnel states in under two seconds in a moving car, every
+    /// transition reached Datadog correctly timestamped, and every single one
+    /// read `status: info`. The instrumentation existed, looked healthy on a
+    /// dashboard, and could not answer the one question it was written for.
+    /// A rename back would be silent and total, so it is pinned here.
+    func testTheTunnelStatusIsNotLoggedUnderDatadogsReservedKey() throws {
+        let text = try source("ZippieCompanionApp/Observability.swift")
+        XCTAssertTrue(text.contains("\"tunnel_status\":"),
+                      "the tunnel's state must be logged under a key Datadog "
+                    + "does not reserve, or it is destroyed on ingest")
+        XCTAssertFalse(text.contains("\"status\": tunnelStatusName"),
+                       "`status` is Datadog's log level - an attribute of that "
+                    + "name is silently overwritten, which is worse than no "
+                    + "instrumentation because it looks like coverage")
+    }
+
+
+    /// The cellular Disconnect rule cannot be asserted by running code here:
+    /// NEOnDemandRuleInterfaceType.cellular is iOS-ONLY and this package's own
+    /// tests compile for macOS, where the case does not exist. (.ethernet is
+    /// the mirror image - macOS-only - and writing it here passed every local
+    /// check before failing the iOS app build.) So its presence is read from
+    /// the source instead, or dropping it would silently leave the tunnel
+    /// running on cellular all day after the phone leaves the router.
+    func testTheCellularDisconnectRuleStillExistsForIOS() throws {
+        let text = try source("ZippieCompanionKit/Sources/ZippieCompanionKit/TunnelProfile.swift")
+        XCTAssertTrue(text.contains("#if os(iOS)"),
+                      "the iOS-only rule must stay behind a platform guard")
+        XCTAssertTrue(text.contains("onCellular.interfaceTypeMatch = .cellular"),
+                      "a phone that walks away from the router onto cellular must "
+                    + "still be disconnected")
+        // CODE ONLY. The first version of this check failed on the comment
+        // that warns against the very thing it forbids - a text tripwire that
+        // cannot tell an instruction from a prohibition is worse than none.
+        let code = text.split(separator: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+        XCTAssertFalse(code.contains("interfaceTypeMatch = .ethernet"),
+                       "'ethernet' is unavailable in iOS and fails the app build")
+    }
+
 }

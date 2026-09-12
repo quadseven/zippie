@@ -215,8 +215,19 @@ enum Observability {
     /// "the relay stopped at some point overnight" is exactly the class of
     /// failure that a photo of a phone cannot answer.
     static func tunnelStatus(_ status: NEVPNStatus, error: String?) {
+        // NOT "status". Datadog RESERVES that key for the log level and
+        // overwrites the value on ingest, so every one of these arrived
+        // reading `status: info` and the tunnel's actual state was destroyed
+        // in flight. Found 2026-09-11 while trying to answer "what happened
+        // when I pressed the button" from an operator's phone in a moving
+        // car: the transitions were all there, timestamped to the
+        // millisecond, and not one of them said what it was. The whole point
+        // of this function, per the comment above, is that the relay now runs
+        // where the app cannot see it - an attribute name that silently eats
+        // the payload makes it worse than no instrumentation, because it
+        // looks like coverage.
         log.info("tunnel", attributes: [
-            "status": tunnelStatusName(status),
+            "tunnel_status": tunnelStatusName(status),
             "error": error ?? "",
         ])
         traceTunnelTransition(status, error: error)
