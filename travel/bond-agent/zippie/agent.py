@@ -2843,33 +2843,7 @@ class BondAgent:
         penalty = max(0.0, self.config.policy.join_streak_miss_penalty)
         for p in self.paths:
             if p.state is PathState.DOWN or p.effective_weight <= 0:
-                if p.name in self._join_streak or p.state is PathState.DOWN:
-                    self._flapped.add(p.name)
-                # DEBIT A PROVEN LEG, ERASE AN UNPROVEN ONE. The erase is what
-                # made the exclusion absorbing on a lossy uplink; the debit
-                # keeps the counter meaning "how much evidence has this leg
-                # accumulated" rather than "how lucky has it been lately".
-                #
-                # `held_out_since_ms` is deliberately untouched here. This
-                # branch runs on exactly the passes a lossy leg fails, so
-                # restarting the hold clock on it would rebuild the same
-                # unreachable bar one layer up - the leg would never reach the
-                # bound for the same reason it never reached the streak.
-                streak = self._join_streak.get(p.name, 0.0)
-                self._join_streak[p.name] = (
-                    max(0.0, streak - penalty) if p.has_ever_answered else 0.0
-                )
-                # This pass will not write a hold message - it falls straight
-                # through to the next leg - so a flag claiming last_error is
-                # still this gate's from an EARLIER pass is now stale. The
-                # DOWN/zero-weight verdict probe_paths wrote this tick is what
-                # a reader should see, not a leftover ownership claim (#26).
-                p.held_out_message_active = False
-                # NEVER ON PROBATION WHILE DOWN. The bound says how long a leg
-                # may be held out DESPITE looking usable; a leg that just read
-                # DOWN is not looking usable, and a timer must not be able to
-                # outvote a measurement.
-                p.on_probation = False
+                self._note_failed_pass(p, penalty)
                 continue
             streak = self._join_streak.get(p.name, 0.0)
             streak += 1.0 if p.state is PathState.UP else 0.5
@@ -2981,6 +2955,43 @@ class BondAgent:
                            "which starves the bond")
         log.warning("join gate released %s: all legs were held out and the bond "
                     "was carrying nothing", best.name)
+
+    def _note_failed_pass(self, p: PathRuntime, penalty: float) -> None:
+        """This leg is DOWN or carrying nothing this pass. Record it (#61).
+
+        DEBIT A PROVEN LEG, ERASE AN UNPROVEN ONE. The erase is what made the
+        exclusion absorbing on a lossy uplink - a missed keepalive reads DOWN,
+        so erasing here turned "eight passes of evidence" into "eight
+        consecutive lucky passes". The debit keeps the counter meaning "how
+        much evidence has this leg accumulated" rather than "how lucky has it
+        been lately", and a leg that has never round-tripped once has nothing
+        to be tolerant of, so it keeps the erase.
+
+        `held_out_since_ms` IS DELIBERATELY UNTOUCHED. This runs on exactly
+        the passes a lossy leg fails, so restarting the hold clock here would
+        rebuild the same unreachable bar one layer up: the leg would never
+        reach the bound for the same reason it never reached the streak.
+
+        Split out of `_gate_flapped_paths` so that loop reads as the four
+        states a leg can be in rather than as one of them inlined. Called with
+        self._lock held, from that loop only.
+        """
+        if p.name in self._join_streak or p.state is PathState.DOWN:
+            self._flapped.add(p.name)
+        streak = self._join_streak.get(p.name, 0.0)
+        self._join_streak[p.name] = (
+            max(0.0, streak - penalty) if p.has_ever_answered else 0.0
+        )
+        # This pass writes no hold message - the caller falls straight through
+        # to the next leg - so a flag claiming last_error is still this gate's
+        # from an EARLIER pass is now stale. The DOWN/zero-weight verdict
+        # probe_paths wrote this tick is what a reader should see, not a
+        # leftover ownership claim (#26).
+        p.held_out_message_active = False
+        # NEVER ON PROBATION WHILE DOWN. The bound says how long a leg may be
+        # held out DESPITE looking usable; a leg that just read DOWN is not
+        # looking usable, and a timer must not outvote a measurement.
+        p.on_probation = False
 
     def _end_hold(self, p: PathRuntime) -> None:
         """This leg is no longer being held out by the gate (#61).
