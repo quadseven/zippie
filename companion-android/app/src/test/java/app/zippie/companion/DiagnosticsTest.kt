@@ -66,6 +66,69 @@ class DiagnosticsTest {
         assertEquals("this phone is pixel-6a", row.hint)
     }
 
+    // ----- the derivation bug, found live 2026-09-12
+
+    // THE ONE THAT MATTERS. mdmHost has no default (#156) - it is blank on
+    // every shipped build - so the old inline `when` reported "Cannot reach
+    // the tailnet" on every phone without its own Tailscale, regardless of
+    // whether the router's forwarding actually worked. Confirmed live: an
+    // iPhone (same defect, mirrored on this platform) with a real bonded
+    // tunnel carrying traffic showed this exact screen.
+    @Test
+    fun `no mdm host configured reads as not checked not unreachable`() {
+        val path = DiagnosticsMeasurer.deriveTailnetPath(
+            tailnetAddr = null, mdm = DiagnosticState.NotChecked, routerHost = "suzu",
+        )
+        assertEquals(
+            "an unattempted probe was reported as a definite failure",
+            TailnetPath.NotChecked, path,
+        )
+    }
+
+    // The other half: a phone with its OWN real tailnet address was reported
+    // unreachable whenever the (unrelated, unrun) MDM probe had not succeeded
+    // - which, per the above, is every build.
+    @Test
+    fun `own tailnet address is sufficient proof regardless of the mdm probe`() {
+        assertEquals(
+            "this phone's own tailnet address is proof on its own",
+            TailnetPath.Direct("pixel-6a-own-tailscale"),
+            DiagnosticsMeasurer.deriveTailnetPath(
+                tailnetAddr = "pixel-6a-own-tailscale", mdm = DiagnosticState.NotChecked, routerHost = "suzu",
+            ),
+        )
+        assertEquals(
+            TailnetPath.Direct("pixel-6a-own-tailscale"),
+            DiagnosticsMeasurer.deriveTailnetPath(
+                tailnetAddr = "pixel-6a-own-tailscale",
+                mdm = DiagnosticState.Failed(DiagnosticFailure.TimedOut(12)),
+                routerHost = "suzu",
+            ),
+        )
+    }
+
+    @Test
+    fun `mdm probe succeeding proves via router`() {
+        assertEquals(
+            TailnetPath.ViaRouter("suzu"),
+            DiagnosticsMeasurer.deriveTailnetPath(
+                tailnetAddr = null, mdm = DiagnosticState.Ok(), routerHost = "suzu",
+            ),
+        )
+    }
+
+    @Test
+    fun `mdm probe genuinely failing is unreachable`() {
+        assertEquals(
+            TailnetPath.Unreachable(DiagnosticFailure.NoRoute),
+            DiagnosticsMeasurer.deriveTailnetPath(
+                tailnetAddr = null,
+                mdm = DiagnosticState.Failed(DiagnosticFailure.TimedOut(12)),
+                routerHost = "suzu",
+            ),
+        )
+    }
+
     // ----- the silent 401
 
     @Test

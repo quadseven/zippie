@@ -59,14 +59,14 @@ final class DiagnosticsModel: ObservableObject {
 
         // Direct vs via-router is decided by whether THIS phone runs Tailscale,
         // not by whether the tailnet answered. Both states answer; only one
-        // survives changing network, and conflating them is the bug.
-        if let node = TailnetPresence.address() {
-            d.tailnet = d.mdm.isOK ? .direct(nodeName: node) : .unreachable(.noRoute)
-        } else if d.mdm.isOK {
-            d.tailnet = .viaRouter(host: consoleHost ?? "this network's router")
-        } else {
-            d.tailnet = .unreachable(.noRoute)
-        }
+        // survives changing network, and conflating them was the bug -
+        // see TailnetPath.derive's own docstring for the 2026-09-12 defect
+        // this replaced.
+        d.tailnet = TailnetPath.derive(
+            ownAddress: TailnetPresence.address(),
+            mdm: d.mdm,
+            routerHost: consoleHost ?? "this network's router"
+        )
 
         d.measuredAt = Date()
         diagnostics = d

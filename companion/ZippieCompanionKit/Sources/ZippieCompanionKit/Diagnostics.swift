@@ -88,6 +88,43 @@ public enum TailnetPath: Equatable, Sendable {
         if case .direct = self { return true }
         return false
     }
+
+    /// Derives which of the four states applies, from what could actually be
+    /// measured this pass. IN THE KIT, NOT THE APP, same reasoning as
+    /// `TailnetAddress.isTailnetV4`: deciding what a measurement MEANS is the
+    /// part that can be wrong, so it lives where `swift test` can reach it.
+    ///
+    /// FIXES A REAL DEFECT FOUND LIVE 2026-09-12: the app's own derivation
+    /// read `d.mdm.isOK ? .direct(...) : .unreachable(.noRoute)` even when
+    /// this phone's OWN utun address was present, and fell to
+    /// `.unreachable(.noRoute)` whenever the MDM probe had never been
+    /// attempted at all (`mdmHost` blank, #156's own decision never to embed
+    /// one in a shipped build - the only value it has ever actually carried).
+    /// Both collapsed a genuinely UNMEASURED fact into a DEFINITE claim of
+    /// failure - exactly the lie `DiagnosticState.notChecked`'s own docstring
+    /// says a screen must never tell, just paid out through a derived field
+    /// instead of a rendered one. An iPhone with its own real Tailscale
+    /// client, or one on a network whose router forwards for it but has no
+    /// MDM host configured, reported "Cannot reach the tailnet" regardless.
+    ///
+    /// - `ownAddress` non-nil: THIS PHONE'S OWN utun ADDRESS IS THE PROOF, full
+    ///   stop. It does not need the MDM probe to also succeed - that probe
+    ///   tests a completely different path (via the router) that a phone
+    ///   with its own client never takes.
+    /// - Otherwise, `mdm` decides: `.ok` proves the router forwards for this
+    ///   network; `.failed` proves it does not; `.notChecked` (no MDM host
+    ///   configured to probe at all) proves nothing either way, and must stay
+    ///   `.notChecked` rather than guess.
+    public static func derive(
+        ownAddress: String?, mdm: DiagnosticState, routerHost: String,
+    ) -> TailnetPath {
+        if let node = ownAddress { return .direct(nodeName: node) }
+        switch mdm {
+        case .ok:         return .viaRouter(host: routerHost)
+        case .notChecked: return .notChecked
+        case .failed:     return .unreachable(.noRoute)
+        }
+    }
 }
 
 /// What DHCP said about DNS, which has THREE answers and not two.
