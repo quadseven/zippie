@@ -77,6 +77,10 @@ enum Observability {
         // trusting each call site to remember them.
         Logs.addAttribute(forKey: "platform", value: platform)
         Logs.addAttribute(forKey: "device", value: deviceIdentity)
+        // The TODO BuildInfo.swift left for this file (#75): a Datadog
+        // session traced back to a commit the same way the router's
+        // /api/status build.commit field already can.
+        Logs.addAttribute(forKey: "build_commit", value: BuildInfo.commitLabel)
         // Read ONCE and shared by both features. Two calls could disagree if
         // the operator edits the console address between them, and a request
         // that is first-party to RUM but third-party to Trace produces a
@@ -109,7 +113,9 @@ enum Observability {
         // Same guarantee as the two lines after Logs.enable() above, for RUM's
         // own attribute store: applies to every view/action/error/resource
         // from here on, not just the ones a call site remembers to tag (#74).
-        RUMMonitor.shared().addAttributes(["platform": platform, "device": deviceIdentity])
+        RUMMonitor.shared().addAttributes([
+            "platform": platform, "device": deviceIdentity, "build_commit": BuildInfo.commitLabel,
+        ])
         // APM. sampleRate 100 because this is a handful of users and a handful
         // of requests a minute; the default 20% would drop four out of five
         // console polls, and the whole point is being able to answer "what did
@@ -203,6 +209,7 @@ enum Observability {
         var merged = tags
         merged["platform"] = platform
         merged["device"] = deviceIdentity
+        merged["build_commit"] = BuildInfo.commitLabel
         return merged
     }
 

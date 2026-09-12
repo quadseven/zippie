@@ -29,12 +29,8 @@ enum BuildInfo {
     /// than silently dropping the one piece of information this change exists
     /// to add.
     ///
-    /// TODO(#75): once this is stable, wire this value into Observability.swift
-    /// as a Datadog RUM/log attribute (e.g. `build.commit`, matching the
-    /// router's `/api/status` field of the same name) so a Datadog session can
-    /// be traced back to a commit the same way the router already can.
-    /// Left as a TODO rather than done here: Observability.swift is owned by
-    /// other in-flight work against this same issue and is not touched here.
+    /// Wired into Observability.swift's Datadog attributes (`build_commit`,
+    /// alongside `platform`/`device`) - the TODO this file used to carry.
     static var commitLabel: String {
         (Bundle.main.infoDictionary?["ZippieGitCommit"] as? String).flatMap {
             $0.isEmpty ? nil : $0
