@@ -63,6 +63,29 @@ idle_persistent_keepalive = 25
 failover_rtt_ms = 1500
 degraded_rtt_ms = 250
 
+# BOND STANDDOWN (#70). Withdrawing zippie's metric-1 default route swings every
+# LAN client's egress onto the plain WAN, which loses all NAT state and kills
+# every established connection; recovering flips it back and kills them again.
+# That is not a cheap operation to perform on a latency reading.
+#
+# THE DEFAULT 500ms FLOOR WAS TOO LOW FOR THE PRODUCT'S OWN USE CASE.
+# test_standdown_needs_a_fallback.py already records that "700-850ms is ordinary
+# LTE in a moving car, which is the scenario this product exists for". Measured
+# 2026-09-11 behind an obstructed Starlink: 10 standdowns and 10 recoveries in a
+# single boot, 9 of them in one afternoon, 4 inside one hour - twenty path flips.
+# One of them froze CarPlay navigation on a wired phone, which cannot fall back
+# to cellular because iOS never demotes a wired interface (#70).
+#
+# 1500ms matches failover_rtt_ms directly above, so a leg bad enough to stand
+# the bond down is a leg already bad enough to fail over. 20s means SUSTAINED,
+# not a Starlink obstruction blip - those last seconds and there are hundreds a
+# day. Standing down should mean "the bond is broken", never "the bond is slow".
+#
+# Set to 0 to disable standdown entirely; agent.py treats a non-positive floor
+# as the explicit off switch rather than clamping it.
+standdown_rtt_ms = 1500
+standdown_enter_after_s = 20
+
 # HEADER MAC (#2172). Authenticates every frame of the bond with a shared
 # symmetric key, closing the tunnel hijack, the ~80x NACK reflector and the
 # stream-reset DoS that a public UDP port with no authentication allows.
