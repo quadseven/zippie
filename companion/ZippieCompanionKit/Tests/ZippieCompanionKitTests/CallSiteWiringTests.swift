@@ -289,7 +289,9 @@ final class CallSiteWiringTests: XCTestCase {
         let text = try source("ZippieCompanionKit/Sources/ZippieCompanionKit/TunnelProfile.swift")
         XCTAssertTrue(text.contains("#if os(iOS)"),
                       "the iOS-only rule must stay behind a platform guard")
-        XCTAssertTrue(text.contains("onCellular.interfaceTypeMatch = .cellular"),
+        // Matched on the ASSIGNMENT, not on a variable name - renaming the
+        // local should not read as deleting the rule.
+        XCTAssertTrue(text.contains("interfaceTypeMatch = .cellular"),
                       "a phone that walks away from the router onto cellular must "
                     + "still be disconnected")
         // CODE ONLY. The first version of this check failed on the comment

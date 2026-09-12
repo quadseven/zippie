@@ -64,81 +64,105 @@ public struct TunnelProfile: Sendable {
     public var onDemandRules: [NEOnDemandRule]? {
         guard plan.wantsRouterSSIDOnDemand,
               case let .contribute(config, _) = plan else { return nil }
-        // With no SSID configured the policy reports disabled and on-demand
-        // stays off. An empty settings field must never quietly become "match
-        // every network", which would hold a cellular socket open all day for
-        // a bond that cannot hear the phone.
         let policy = OnDemandPolicy(routerSSIDs: config.routerSSIDs)
-        guard policy.isEnabled else { return nil }
 
-        let connect = NEOnDemandRuleConnect()
-        connect.interfaceTypeMatch = .wiFi
-        connect.ssidMatch = policy.connectSSIDs
+        var rules: [NEOnDemandRule] = []
 
-        // A CABLE IS NOT "SOMEWHERE ELSE".
+        // THE WIFI CASE, unchanged and first because it is free. With no SSID
+        // configured the policy reports disabled and this rule is simply
+        // absent - an empty settings field must never quietly become "match
+        // every network".
+        if policy.isEnabled {
+            let onRouterWifi = NEOnDemandRuleConnect()
+            onRouterWifi.interfaceTypeMatch = .wiFi
+            onRouterWifi.ssidMatch = policy.connectSSIDs
+            rules.append(onRouterWifi)
+        }
+
+        // THE CABLE CASE, AND WHY IT NEEDS A DIFFERENT QUESTION.
         //
-        // This used to be Connect(wifi + SSID) followed by ONE catch-all
-        // Disconnect. A wired interface has no SSID and cannot match
-        // interfaceTypeMatch = .wiFi, so the Connect rule was unmatchable on a
-        // cable and the catch-all matched instead: iOS tore the tunnel down
-        // within two seconds of every manual start on a phone plugged into the
-        // router's LAN port.
+        // An SSID cannot identify the router's network over a wire: a wired
+        // interface has no SSID, and iOS does not even offer .ethernet in
+        // NEOnDemandRuleInterfaceType. So a phone on the router's LAN PORT
+        // matched no Connect rule, fell through to the catch-all Disconnect,
+        // and was switched off within two seconds of every manual start (#67).
         //
-        // MEASURED 2026-09-11, relay pressed twice: six status transitions in
-        // 1.72s, then five in 1.79s, with an EMPTY error string at every step,
-        // on a phone whose Local Network and Cellular permissions were both
-        // granted and whose app was polling the router's console successfully
-        // over that same cable throughout. Nothing was failing. The tunnel was
-        // being switched off on policy, and the operator saw "it connects for
-        // a split second and says Off again".
+        // ASK THE ROUTER INSTEAD OF ASKING THE INTERFACE. `probeURL` matches
+        // only when the URL returns 200, so this is a POSITIVE test that the
+        // router is genuinely on the other end - which is exactly the question
+        // "am I on the router's network?", and it does not care what kind of
+        // cable or radio carries the answer. The same rule therefore covers
+        // ethernet adapters, a future USB tethering interface, and any wifi
+        // the operator has not listed by name.
         //
-        // SO THE CATCH-ALL IS SPLIT INTO THE TWO CASES IT WAS WRITTEN FOR -
-        // some other wifi, or out on cellular - and a cable falls through to
-        // an explicit Ignore instead of being swept up as "away from home".
+        // This is the same reasoning the router already applies in the other
+        // direction: `_announce_host_for` dials the address an announce
+        // actually ARRIVED from rather than the one a phone claims, because
+        // "the packet beats the claim" (#252). A probe is that principle
+        // pointed back at the phone.
         //
-        // NOT interfaceTypeMatch = .ethernet, WHICH DOES NOT EXIST HERE.
-        // NEOnDemandRuleInterfaceType.ethernet is macOS-only; on iOS the enum
-        // offers .any, .wiFi and .cellular and nothing else. This was written
-        // with .ethernet first and every local check passed - `swift test`
-        // builds this package for MACOS, where the case exists - and it failed
-        // only in `xcodebuild` for the iOS app with "'ethernet' is unavailable
-        // in iOS". Any NetworkExtension API used in this Kit has to exist on
-        // iOS, and the Kit's own test run is not evidence that it does.
-        //
-        // IGNORE, NOT CONNECT, and that distinction is the honest one. Nothing
-        // here can tell the router's LAN from a hotel's, so this deliberately
-        // does NOT start the tunnel on any cable it happens to find - that
-        // would be the unconditional on-demand the SSID scoping exists to
-        // avoid, wearing a different hat. It only stops the system from
-        // undoing a start the operator explicitly asked for. Auto-connect on a
-        // RECOGNISED wired network needs a positive test of the network's
-        // identity - the router's console answering on the LAN - which is #65.
+        // interfaceTypeMatch = .any is deliberate and safe BECAUSE the probe
+        // is the real predicate: on a stranger's wifi or a hotel's ethernet
+        // the console does not answer, the rule does not match, and the
+        // disconnects below get their say.
+        if let probe = Self.consoleProbeURL(config.consoleHost) {
+            let onRouterNetwork = NEOnDemandRuleConnect()
+            onRouterNetwork.interfaceTypeMatch = .any
+            onRouterNetwork.probeURL = probe
+            rules.append(onRouterNetwork)
+        }
+
+        // Nothing to key on at all - no SSID and no console address - so the
+        // tunnel stays manual. Returning rules here would mean an
+        // unconditional on-demand, which is the behaviour all of this exists
+        // to avoid.
+        guard !rules.isEmpty else { return nil }
+
+        // Some OTHER wifi: the router is not here, stop.
         let otherWifi = NEOnDemandRuleDisconnect()
         otherWifi.interfaceTypeMatch = .wiFi
+        rules.append(otherWifi)
 
-        var rules: [NEOnDemandRule] = [connect, otherWifi]
-
-        // .cellular IS iOS-ONLY, the exact mirror of .ethernet above. This
-        // package compiles for MACOS under `swift test` and for IOS in the
-        // app, and the two platforms publish DIFFERENT cases of this enum -
-        // only .any and .wiFi exist in both. So the cellular rule is built
-        // only where the case exists, and its presence is pinned by a source
-        // read in CallSiteWiringTests, because a macOS test run cannot compile
-        // this line to assert on it.
+        // .cellular IS iOS-ONLY - the mirror of .ethernet, which is macOS-only.
+        // This package compiles for MACOS under `swift test` and for IOS in the
+        // app, and only .any and .wiFi exist in both. Writing .ethernet here
+        // passed every local check and failed the iOS app build. Its presence
+        // is pinned by a source read in CallSiteWiringTests, because a macOS
+        // test run cannot compile this line to assert on it.
         #if os(iOS)
-        let onCellular = NEOnDemandRuleDisconnect()
-        onCellular.interfaceTypeMatch = .cellular
-        rules.append(onCellular)
+        let awayOnCellular = NEOnDemandRuleDisconnect()
+        awayOnCellular.interfaceTypeMatch = .cellular
+        rules.append(awayOnCellular)
         #endif
 
-        // Explicit, not a fallthrough. The single rule this replaced carried a
-        // comment about not leaving behaviour "to an implicit default that has
-        // changed between iOS releases", and an unmatched interface would be
-        // exactly that - so the last word is stated rather than assumed.
+        // Explicit, not a fallthrough. An unmatched interface would be left to
+        // "an implicit default that has changed between iOS releases", which
+        // the rule this replaced was written to avoid - so the last word is
+        // stated. A cable somewhere the console does not answer is left
+        // exactly as the operator set it.
         let anythingElse = NEOnDemandRuleIgnore()
         anythingElse.interfaceTypeMatch = .any
         rules.append(anythingElse)
         return rules
+    }
+
+    /// `http://<console>/api/status`, or nil when there is no console to ask.
+    ///
+    /// Built here rather than stored so there is one definition of "where the
+    /// router answers", and it is the address the operator already configured
+    /// for the console the app polls - not a guess derived from the phone's own
+    /// address. Settings.swift makes that argument at length: deriving the
+    /// router from your own IP is right on this network and wrong on a hotel's,
+    /// and a wrong guess means probing a stranger's device.
+    static func consoleProbeURL(_ consoleHost: String) -> URL? {
+        let trimmed = consoleHost.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+        // A scheme already present is honoured; a bare host:port is http,
+        // which is what the console speaks on the LAN.
+        let base = trimmed.contains("://") ? trimmed : "http://" + trimmed
+        guard let url = URL(string: base + "/api/status"),
+              url.host?.isEmpty == false else { return nil }
+        return url
     }
 
     /// Put this plan on the manager, replacing whatever the last start left.
