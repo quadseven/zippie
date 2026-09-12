@@ -473,4 +473,47 @@ final class CallSiteWiringTests: XCTestCase {
         }
     }
 
+    /// THE KILL SWITCH. Whether `DatadogCore` actually fits inside this
+    /// process's jetsam ceiling is not knowable without a device; if it
+    /// does not, iOS kills the extension silently, the on-demand rule
+    /// restarts it, and the same SDK pushes it over the same ceiling again
+    /// - a loop whose only other exit is a new TestFlight build. The escape
+    /// hatch only works if the check runs BEFORE `Datadog.initialize`, so
+    /// this proves both that `start()` asks and that it asks first.
+    func testTheExtensionConsultsTheKillSwitchBeforeInitialisingDatadog() throws {
+        let text = try source("ZippieCompanionTunnel/TunnelObservability.swift")
+        guard let fn = text.range(of: "static func start()") else {
+            return XCTFail("TunnelObservability.start() is gone - if it moved, move this check")
+        }
+        let bodyEnd = text.range(of: "\n    static func report(",
+                                 range: fn.upperBound..<text.endIndex)?.lowerBound
+            ?? text.endIndex
+        let body = String(text[fn.lowerBound..<bodyEnd])
+
+        guard let check = body.range(of: "RelayTelemetry.isTelemetryEnabled(in:") else {
+            return XCTFail("start() never asks the kill switch - an operator has no way to "
+                         + "turn this off without shipping a new build")
+        }
+        guard let initCall = body.range(of: "Datadog.initialize(") else {
+            return XCTFail("Datadog.initialize is gone from start() - if it moved, move this "
+                         + "check")
+        }
+        XCTAssertTrue(check.lowerBound < initCall.lowerBound,
+                      "the kill switch is checked AFTER Datadog.initialize - by then the SDK "
+                    + "is already up and the switch cannot prevent the very thing it exists "
+                    + "to prevent")
+        assertCalls(body, "RelayConfiguration.sharedDefaults",
+                    "the kill switch reads something other than the shared App Group, which "
+                    + "is the one channel an operator can write without a new profile install "
+                    + "or a rebuild")
+
+        // The switch must also gate REPORTING, not just initialisation - a
+        // process that skipped `Datadog.initialize` must not go on to call
+        // `Logger.create` (via `log`) from `report` either, or disabling
+        // the switch would still wake Datadog's Logger machinery.
+        assertCalls(text, "guard enabled else { return }",
+                    "report() no longer checks whether the switch was engaged at startup, so "
+                  + "a disabled process would still touch Datadog's Logger machinery")
+    }
+
 }

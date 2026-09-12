@@ -82,4 +82,62 @@ final class RelayTelemetryTests: XCTestCase {
         let attrs = RelayTelemetry.attributes(for: CellularRelay.Stats())
         XCTAssertEqual(attrs["last_error"] as? String, "")
     }
+
+    // MARK: - the kill switch
+    //
+    // A disposable App Group suite per test, the same pattern
+    // `RelaySupervisionTests` uses for its own App-Group-backed marker.
+
+    func testANilSuiteReadsAsEnabled() {
+        // The suite itself can be nil when the App Group entitlement is
+        // missing (see `RelayConfiguration.sharedDefaults`) - that failure
+        // must not ALSO silence the telemetry this issue exists to add.
+        XCTAssertTrue(RelayTelemetry.isTelemetryEnabled(in: nil))
+    }
+
+    func testAFreshInstallThatHasNeverWrittenTheKeyReadsAsEnabled() {
+        let suite = "zippie.tests.\(UUID().uuidString)"
+        let d = UserDefaults(suiteName: suite)!
+        defer { d.removePersistentDomain(forName: suite) }
+
+        XCTAssertTrue(RelayTelemetry.isTelemetryEnabled(in: d),
+                      "a fresh install must ship telemetry, not silently opt out")
+    }
+
+    func testAnExplicitFalseDisables() {
+        let suite = "zippie.tests.\(UUID().uuidString)"
+        let d = UserDefaults(suiteName: suite)!
+        defer { d.removePersistentDomain(forName: suite) }
+
+        RelayTelemetry.setTelemetryEnabled(false, in: d)
+        XCTAssertFalse(RelayTelemetry.isTelemetryEnabled(in: d))
+    }
+
+    func testTheSwitchRoundTripsBothWays() {
+        let suite = "zippie.tests.\(UUID().uuidString)"
+        let d = UserDefaults(suiteName: suite)!
+        defer { d.removePersistentDomain(forName: suite) }
+
+        RelayTelemetry.setTelemetryEnabled(false, in: d)
+        XCTAssertFalse(RelayTelemetry.isTelemetryEnabled(in: d))
+        RelayTelemetry.setTelemetryEnabled(true, in: d)
+        XCTAssertTrue(RelayTelemetry.isTelemetryEnabled(in: d),
+                      "an operator must be able to turn it back on, not just off")
+    }
+
+    /// `bool(forKey:)` returns `false` for a key that was never written,
+    /// which is indistinguishable from a deliberate opt-out - the same
+    /// class of trap `RelaySupervisionStore` avoids by reading with
+    /// `object(forKey:)` rather than a typed accessor. A corrupt, non-Bool
+    /// value at this key must read the same way an absent key does:
+    /// enabled.
+    func testACorruptNonBoolValueReadsAsEnabledNotDisabled() {
+        let suite = "zippie.tests.\(UUID().uuidString)"
+        let d = UserDefaults(suiteName: suite)!
+        defer { d.removePersistentDomain(forName: suite) }
+
+        d.set("not a bool", forKey: RelayTelemetry.killSwitchKey)
+        XCTAssertTrue(RelayTelemetry.isTelemetryEnabled(in: d),
+                      "a value that fails to cast to Bool must not read as an explicit false")
+    }
 }
