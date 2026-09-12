@@ -797,11 +797,20 @@ def test_a_leg_shed_for_latency_is_a_link_with_a_weight_and_carries_nothing(tmp_
     transport. A report that read `in_bond` or `effective_weight` alone would
     call this leg carrying, which is exactly the reading that put four
     carrying legs on a console while the transport held one.
+
+    leg0's rtt SPIKES on the last pass rather than sitting flat at 300 (#82):
+    shedding now also requires a leg's own tail to have diverged from its own
+    EWMA (bufferbloat_spread_ratio), and a perfectly flat signal - whatever its
+    absolute value - never diverges from itself. This is not what the test is
+    about; it is what makes the harness actually produce a shed leg, so the
+    observability invariants below have something to check.
     """
-    t, ctl = _control(tmp_path, rx_age={0: 0.1, 1: 0.1}, rtt={0: 300.0, 1: 0.4},
+    t, ctl = _control(tmp_path, rx_age={0: 0.1, 1: 0.1}, rtt={0: 50.0, 1: 0.4},
                       shed_ratio=5.0)
-    for _ in range(3):
-        ctl.pass_once()
+    ctl.pass_once()
+    ctl.pass_once()
+    t.rtt[0] = 300.0
+    ctl.pass_once()
 
     assert ctl.shed_names() == ["leg0"]
     assert "leg0" in ctl.in_bond()

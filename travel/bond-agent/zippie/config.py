@@ -200,6 +200,12 @@ def parse_config(data: dict[str, Any], *, private_key: str = "", public_key: str
         bufferbloat_shed_ratio=float(
             policy_raw.get("bufferbloat_shed_ratio", 5.0)
         ),
+        # The self-referential half of the shed test (#82). Not validated
+        # here - 0 or below disables it, degrading toward the cross-leg ratio
+        # alone, same direction every other knob in this block degrades.
+        bufferbloat_spread_ratio=float(
+            policy_raw.get("bufferbloat_spread_ratio", 1.5)
+        ),
         sticky_primary_ms=int(policy_raw.get("sticky_primary_ms", 3000)),
         sticky_rtt_slack_ms=float(policy_raw.get("sticky_rtt_slack_ms", 40.0)),
         on_all_paths_down=str(policy_raw.get("on_all_paths_down", "degrade")),

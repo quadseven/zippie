@@ -233,6 +233,60 @@ class PolicyConfig:
     # A value between 0 and 1 is meaningless (it would ask a leg to beat the
     # best leg) and clamps to 1.0. Only 0 and below disable.
     bufferbloat_shed_ratio: float = 5.0
+    # HOW MANY TIMES A LEG'S OWN rtt_ewma_ms ITS OWN rtt_tail_ms MAY REACH
+    # BEFORE THAT LEG'S TAIL IS TRUSTED AS BUFFERBLOAT (#82) - the other half
+    # of the answer bufferbloat_shed_ratio's own comment gives ("the harm is
+    # being much worse than the leg NEXT to you, not being slow"), because that
+    # comment's fix protects two SIMILAR legs from shedding each other and does
+    # nothing when the leg next to you is a satellite uplink.
+    #
+    # Measured live 2026-09-11 (#82): a cellular leg carrying normally with a
+    # 266 ms tail sat shed beside a 38 ms Starlink leg - a cross-leg ratio of
+    # 7x, past bufferbloat_shed_ratio's default of 5.0, every time the
+    # satellite leg was merely healthy. Nothing about that leg's OWN behaviour
+    # said bufferbloat; only its distance from a much faster neighbour did.
+    #
+    # THE DEFAULT IS 1.5, NOT A ROUNDER-LOOKING NUMBER, because both bounds it
+    # sits between were COMPUTED, not estimated: replaying #81's own incident
+    # profile through update_rtt_ewma/update_rtt_tail (test_bufferbloat_leg_is_
+    # shed.py's BLOATED_PROFILE) never lets that leg's own spread drop below
+    # 1.86x at any point in the run, transients included; replaying ordinary
+    # steady-state cellular jitter (test_slow_but_healthy_leg_is_not_shed.py's
+    # STEADY_CELLULAR_PROFILE) never lets it exceed 1.14x. 1.5 sits with
+    # roughly a third of headroom on both sides of that gap - see those two
+    # files for the numbers this was tuned against, and re-tune here rather
+    # than trusting a number that looks more precise than it is.
+    #
+    # A cross-leg ratio alone cannot tell these apart - a slow leg beside a
+    # fast one and a bufferbloating leg beside a fast one look identical on
+    # that axis - so this is ANDED with the cross-leg ratio
+    # deliberately, not swapped in for it: bufferbloat_shed_ratio still asks
+    # "is this leg much worse than its neighbour", and this asks "is this
+    # leg's tail much worse than the SAME leg's own recent typical latency".
+    # A leg that is merely far from its neighbour (ordinary cellular beside a
+    # satellite uplink) fails this second test and is spared; a leg actively
+    # bufferbloating (#81's ethernet) fails both and is still shed.
+    #
+    # rtt_ewma_ms, NOT rtt_ms: rtt_ms is the single latest sample and would
+    # make this test as noisy as the thing it exists to filter out;
+    # rtt_ewma_ms is already this leg's smoothed baseline, computed for
+    # weighting, reused here rather than adding a second smoothed value that
+    # could drift out of step with it.
+    #
+    # ABSENT EWMA NEVER ADDS SHEDDING. A leg with no rtt_ewma_ms yet (just
+    # joined, or between samples) is treated as passing this test - i.e. the
+    # decision is left to bufferbloat_shed_ratio alone, exactly as it worked
+    # before this field existed - because "we cannot tell if this is
+    # bufferbloat" must never make shedding MORE aggressive than "we can tell
+    # it is not". Same rule join_streak's has_ever_answered and the standdown
+    # gate's None-is-never-bad already follow.
+    #
+    # Every out-of-range value degrades toward LESS shedding, never more, the
+    # same rule bufferbloat_shed_ratio and probation_after_ms already follow:
+    # 0 or below disables this test entirely (equivalent to "no leg is ever
+    # bufferbloated by this measure"), which falls back to the cross-leg ratio
+    # alone rather than the reverse.
+    bufferbloat_spread_ratio: float = 1.5
     # How much better than the threshold a path must get before it is allowed
     # to climb back out of DEGRADED or DOWN. 0.8 = "20% clear of the line".
     # See policy.classify_state; without it a leg whose average sits near a
