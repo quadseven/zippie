@@ -875,6 +875,63 @@ def _paced_upstream(sock, dest, payload_len, count, pps, ack_every, burst=0):
     return sent, time.monotonic() - t0
 
 
+def _delivery_breakdown(home: dict, travel: dict) -> dict:
+    """Three axes of "why did delivery suffer", read from counters that
+    already exist rather than computed by a new one (#63).
+
+    `loss_pct` - payload bytes the datapath never got back at all
+    (`lost_estimate`), as a fraction of what reassembly ever saw. This is
+    what an impaired leg's DROP fraction shows up as.
+
+    `reorder_deadline_expired_pct` - of every gap that needed a NACK at all,
+    the fraction asked for anyway because the reorder deadline ran out before
+    a leg's own reply closed it for free (`nacks_capped` versus
+    `nacks_reordered` + `nacks_capped`). This is what an impaired leg's DELAY
+    (bufferbloat) shows up as, and it can be nonzero while `loss_pct` is
+    exactly zero (#81's own measured incident).
+
+    `worst_leg_withdrawn_pct` - None unless `--control policy` ran the real
+    admission gate. The largest, over every leg, of the fraction of passes it
+    was NOT in the carrying set (`policy.report()["carrying_passes"]` versus
+    `policy.report()["passes"]`) - what a leg being shed, held out, or on
+    probation for part of the run shows up as.
+
+    Reported side by side rather than collapsed into one "likely cause":
+    more than one axis can move in the same run, and picking a single winner
+    would be guessing exactly when that happens.
+    """
+    reassembly = home["reassembly"]
+    delivered_or_lost = reassembly["delivered"] + reassembly["lost_estimate"]
+    loss_pct = (100.0 * reassembly["lost_estimate"] / delivered_or_lost
+                if delivered_or_lost else 0.0)
+
+    nacks = home["nacks"]
+    gaps_needing_a_nack = nacks["reordered"] + nacks["capped"]
+    reorder_deadline_expired_pct = (
+        100.0 * nacks["capped"] / gaps_needing_a_nack
+        if gaps_needing_a_nack else 0.0
+    )
+
+    policy = travel["policy"]
+    worst_leg_withdrawn_pct = None
+    if policy and policy["passes"]:
+        carrying_passes = policy["carrying_passes"]
+        worst_leg_withdrawn_pct = max(
+            (100.0 * (policy["passes"] - carried) / policy["passes"]
+             for carried in carrying_passes.values()),
+            default=0.0,
+        )
+
+    return {
+        "loss_pct": round(loss_pct, 3),
+        "reorder_deadline_expired_pct": round(reorder_deadline_expired_pct, 3),
+        "worst_leg_withdrawn_pct": (
+            round(worst_leg_withdrawn_pct, 3)
+            if worst_leg_withdrawn_pct is not None else None
+        ),
+    }
+
+
 def run_impaired(legs, payload_len, *, seed, impair_legs, loss, delay_ms,
                  fanout=DEFAULT_DUPLICATE_FANOUT, duplicate=True,
                  shed_ratio=0.0, payloads=DEFAULT_IMPAIR_PAYLOADS,
@@ -962,6 +1019,13 @@ def run_impaired(legs, payload_len, *, seed, impair_legs, loss, delay_ms,
         # harness's assumption dressed as a measurement.
         "policy": travel["policy"],
         "loop_us": travel["loop_us"],
+        # THE THREE THINGS "WHY DID DELIVERY SUFFER" CAN MEAN, REPORTED
+        # SEPARATELY RATHER THAN COLLAPSED TO ONE GUESS (#63). A single
+        # "likely cause" label would have to pick a winner when more than one
+        # axis moved at once, and would be wrong exactly when that happens -
+        # the same reason nacks_reordered and capped are already reported next
+        # to each other rather than merged into one number.
+        "delivery_breakdown": _delivery_breakdown(home, travel),
     }
 
 
@@ -1000,6 +1064,17 @@ def _fmt_impair(row: dict) -> str:
         "    shed {shed} tails_ms {tails}".format(
             shed=row["shed"] or "none", tails=row["tails_ms"]),
     ]
+    brk = row["delivery_breakdown"]
+    withdrawn = ("n/a (--control policy not run)"
+                 if brk["worst_leg_withdrawn_pct"] is None
+                 else f"{brk['worst_leg_withdrawn_pct']:.1f}%")
+    lines.append(
+        "    breakdown: loss {loss:.1f}%  reorder-deadline-expired {rde:.1f}% "
+        "of gaps needing a NACK  worst-leg withdrawn {wd}".format(
+            loss=brk["loss_pct"], rde=brk["reorder_deadline_expired_pct"],
+            wd=withdrawn,
+        )
+    )
     pol = row.get("policy")
     if pol:
         lines.append(
@@ -1136,6 +1211,15 @@ def main(argv=None) -> int:
     imp.add_argument("--repeat", type=int, default=1,
                      help="run the same configuration N times. A single run "
                           "over real sockets and a real clock is not a result")
+    imp.add_argument("--min-delivered-pct", type=float, default=None,
+                     help="#63: turn this run into a PASS/FAIL check. Exits "
+                          "1 if delivered_pct on ANY repeat falls below this "
+                          "(the worst repeat, not the average - a soak that "
+                          "only has to clear its bar most of the time is a "
+                          "soak with a snooze button). Omit to keep the old "
+                          "report-only behaviour: this tool cannot regress "
+                          "an existing caller's exit code by adding a check "
+                          "nobody asked for.")
     args = ap.parse_args(argv)
 
     fan = args.duplicate_fanout
@@ -1154,13 +1238,41 @@ def main(argv=None) -> int:
                 pps=args.offered_pps, reorder_ms=args.reorder_deadline_ms,
                 ack_every=args.ack_every, control=args.control,
             ))
+        verdict = None
+        if args.min_delivered_pct is not None:
+            worst = min(row["delivered_pct"] for row in rows)
+            passed = worst >= args.min_delivered_pct
+            verdict = {
+                "min_delivered_pct": args.min_delivered_pct,
+                "worst_delivered_pct": round(worst, 3),
+                "passed": passed,
+                "repeats": len(rows),
+            }
+
         if args.json:
-            print(json.dumps(rows, indent=2))
+            # BARE LIST, UNCHANGED, when nobody asked for a verdict - the
+            # shape every existing caller of --json already gets. Wrapping
+            # is additive: it only happens once there is a second thing (the
+            # verdict) to sit beside the rows.
+            out = rows if verdict is None else {"rows": rows, "verdict": verdict}
+            print(json.dumps(out, indent=2))
         else:
             print(f"zippie packet datapath, loopback, IMPAIRED, seed={seed}, "
                   f"payload={args.payload} bytes")
             for row in rows:
                 print(_fmt_impair(row))
+            if verdict is not None:
+                status = "PASS" if verdict["passed"] else "FAIL"
+                print(
+                    f"\nVERDICT: {status} - worst of {verdict['repeats']} "
+                    f"repeat(s) delivered {verdict['worst_delivered_pct']:.3f}%, "
+                    f"threshold {verdict['min_delivered_pct']:.3f}%"
+                )
+        # PRINT FIRST, THEN DECIDE THE EXIT CODE - a FAIL that also failed to
+        # print its own numbers would send someone straight to re-running it
+        # instead of reading why.
+        if verdict is not None and not verdict["passed"]:
+            return 1
         return 0
 
     if args.mode == "up":
