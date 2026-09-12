@@ -117,6 +117,34 @@ Until that gap is closed (#38), the name check is you. Grep before you push, and
 write "the travel router" - which is also what its certificate says, so the
 scrubbed form is the accurate one rather than a euphemism.
 
+## There is a shaper on the bond, and its rate is a guess
+
+`sqm-scripts` runs cake on `pbz0` - the bond, after decryption, where every
+client flow is visible. On `apclix0` the traffic is one WireGuard conversation,
+so cake would see a single flow and could not do the one thing it is there for.
+
+Measured 2026-08-31 on a repeater'd house wifi, same 50 MB fetch with a ping
+beside it: **85 / 355 / 920 ms at 143 KB/s without it, 24 / 78 / 281 ms at
+403 KB/s with it.** Both numbers improved, because the upstream buffer had been
+so full the link was carrying packets that were already too late to be useful.
+
+**The rate is wrong somewhere else and you should expect that.** A shaper only
+controls a queue while its rate is below what the path can actually carry, so
+`download 5000` is right behind one house wifi and wrong on a motorway. cake's
+`autorate-ingress` was tried and estimated 65 Mbit/s against a real 5, so it
+barely shaped at all. zippie already measures per-leg capacity and should be
+setting this itself - #41.
+
+Until then: `uci set sqm.pbz0.download=<kbit>; uci commit sqm;
+/etc/init.d/sqm restart`. The deploy CREATES the section and never re-pins it,
+so a rate tuned at the roadside survives the next merge.
+
+**Check the qdisc, not the config.** `uci get` proves a file was written. sqm
+silently does nothing when its interface is absent at start, which on this box
+is every boot where the bond comes up after the init script - and a shaper that
+is configured and not running looks exactly like a working one until somebody
+starts a download. `tc qdisc show dev pbz0` is the only proof.
+
 ## The router renews its own certificate
 
 `travel/gl-mt3000/muster-refresh.sh` runs hourly and does three things: checks
