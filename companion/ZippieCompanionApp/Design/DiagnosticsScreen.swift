@@ -10,6 +10,9 @@ import ZippieCompanionKit
 /// exists because a sentence computed inside a SwiftUI view shipped wrong and
 /// could not be tested.
 struct DiagnosticsScreen: View {
+    /// #77: see `RelayScreen.rumViewName` for why this is named once, here.
+    private static let rumViewName = "Diagnostics"
+
     @StateObject private var model: DiagnosticsModel
 
     init(consoleHost: String?) {
@@ -23,6 +26,11 @@ struct DiagnosticsScreen: View {
             refresh
         }
         .task { await model.measure() }
+        // #77: this screen exists because something is wrong - its own RUM
+        // events, including whatever the operator taps next, were attributing
+        // to ApplicationLaunch like every screen was before this.
+        .onAppear { Observability.viewAppeared(Self.rumViewName) }
+        .onDisappear { Observability.viewDisappeared(Self.rumViewName) }
     }
 
     private var header: some View {

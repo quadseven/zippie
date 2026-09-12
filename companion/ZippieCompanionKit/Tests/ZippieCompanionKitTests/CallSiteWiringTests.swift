@@ -597,4 +597,36 @@ final class CallSiteWiringTests: XCTestCase {
                   + "embed-build-info.sh actually stamps")
     }
 
+    /// #77's own remaining box: only `RelayScreen` was named when #83 shipped
+    /// the mechanism, by explicit scope - Bond, Diagnostics, NextDNS settings
+    /// and Probe all still attributed every RUM event to `ApplicationLaunch`.
+    /// One tripwire per screen, plus a distinctness check: two screens
+    /// sharing a name would merge their sessions on the RUM timeline, which
+    /// is a subtler version of the exact bug #77 was filed to end.
+    func testEveryMainScreenNamesItsOwnRUMView() throws {
+        let screens: [(file: String, name: String)] = [
+            ("ZippieCompanionApp/Design/RelayScreen.swift", "Relay"),
+            ("ZippieCompanionApp/Design/BondScreen.swift", "Bond"),
+            ("ZippieCompanionApp/Design/DiagnosticsScreen.swift", "Diagnostics"),
+            ("ZippieCompanionApp/Design/NextDNSSettingsScreen.swift", "NextDNS Settings"),
+            ("ZippieCompanionApp/Design/ProbeScreen.swift", "Probe"),
+        ]
+        var seenNames = Set<String>()
+        for (file, name) in screens {
+            let text = try source(file)
+            assertCalls(text, "Observability.viewAppeared(Self.rumViewName)",
+                        "\(file) never starts a RUM view - its events still attribute to "
+                      + "ApplicationLaunch")
+            assertCalls(text, "Observability.viewDisappeared(Self.rumViewName)",
+                        "\(file) starts a RUM view and never stops it - the next screen's "
+                      + "events would still attribute here")
+            assertCalls(text, "= \"\(name)\"",
+                        "\(file)'s rumViewName is not literally \"\(name)\" - if it moved, "
+                      + "move this check with it")
+            XCTAssertTrue(seenNames.insert(name).inserted,
+                          "\"\(name)\" is used by more than one screen - two screens sharing a "
+                        + "RUM view name merge their sessions on the timeline")
+        }
+    }
+
 }
