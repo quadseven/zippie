@@ -562,4 +562,39 @@ final class CallSiteWiringTests: XCTestCase {
                   + "same device now that both carry platform/device")
     }
 
+    /// #75's own TODO: `BuildInfo.commitLabel` existed, was shown on the Bond
+    /// screen, and was never wired into Datadog - "are we running the fix?"
+    /// was answerable by eye on the phone and not by a query. Checks all
+    /// three Datadog surfaces the app instruments (Logs, RUM, Trace), the
+    /// same three `platform`/`device` already reach - a build tag on only
+    /// one of them would say "traceable" for a log line and not for the
+    /// span or RUM session sitting right next to it.
+    func testTheAppsBuildCommitReachesAllThreeDatadogSurfaces() throws {
+        let text = try source("ZippieCompanionApp/Observability.swift")
+        assertCalls(text, "Logs.addAttribute(forKey: \"build_commit\", value: BuildInfo.commitLabel)",
+                    "logs carry no build_commit tag - \"are we running the fix\" is answerable "
+                  + "by eye on the phone and not by a Datadog query")
+        assertCalls(text, "\"build_commit\": BuildInfo.commitLabel",
+                    "RUM sessions carry no build_commit attribute")
+        assertCalls(text, "merged[\"build_commit\"] = BuildInfo.commitLabel",
+                    "APM spans carry no build_commit tag - the one surface with per-request "
+                  + "detail would be the one surface that cannot be traced to a commit")
+    }
+
+    /// The extension's own stream (#75, mirroring #74's platform/device
+    /// wiring for the same reason): the background relay is the process that
+    /// actually carries traffic, and it is a SEPARATE bundle with its own
+    /// Info.plist stamped by the same build phase - nothing here can import
+    /// `BuildInfo` from the app target, so this checks the duplicated read
+    /// directly rather than a shared symbol.
+    func testTheExtensionsStreamCarriesTheBuildCommitTagToo() throws {
+        let text = try source("ZippieCompanionTunnel/TunnelObservability.swift")
+        assertCalls(text, "forKey: \"build_commit\"",
+                    "the extension's logs carry no build_commit tag - the background relay "
+                  + "cannot be traced to a commit even though the app's own stream now can")
+        assertCalls(text, "infoDictionary?[\"ZippieGitCommit\"]",
+                    "the extension reads something other than the Info.plist key "
+                  + "embed-build-info.sh actually stamps")
+    }
+
 }

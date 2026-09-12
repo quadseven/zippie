@@ -135,6 +135,17 @@ enum TunnelObservability {
         // distinguishing them can still tell which is which.
         Logs.addAttribute(forKey: "platform", value: "ios")
         Logs.addAttribute(forKey: "device", value: legName)
+        // Same Info.plist key `BuildInfo.commitLabel` reads in the app
+        // target (#75) - duplicated rather than imported, the same reason
+        // `clientToken` above is a second literal rather than a shared
+        // constant: this is a separate bundle with its own Info.plist,
+        // stamped by the same embed-build-info.sh build phase, and cannot
+        // import the app target's module to read the type back.
+        Logs.addAttribute(
+            forKey: "build_commit",
+            value: (Bundle.main.infoDictionary?["ZippieGitCommit"] as? String)
+                .flatMap { $0.isEmpty ? nil : $0 } ?? "unknown"
+        )
         // NOT on the app's stream, and that asymmetry IS the distinction
         // (#74's "should something tell the two streams on one phone
         // apart" question): the app target is not this PR's file to touch,
