@@ -280,14 +280,40 @@ def update_shed_state(paths: list[PathRuntime], policy: PolicyConfig) -> None:
     # couple of probes, which is worse than never shedding it.
     margin = min(1.0, max(0.1, policy.recovery_margin))
 
+    # THE SELF-REFERENTIAL HALF OF THE TEST (#82). A cross-leg ratio cannot
+    # tell "this leg is slow" from "this leg is bufferbloating next to a fast
+    # one" - both look like a large tail-to-best-leg ratio. What tells them
+    # apart is whether THIS leg's own tail has diverged from THIS leg's own
+    # recent typical latency: ordinary radio distance raises rtt_ewma_ms and
+    # rtt_tail_ms together, bufferbloat raises rtt_tail_ms while rtt_ewma_ms
+    # stays low (#81's measured 159 ms EWMA under a 524 ms tail).
+    #
+    # 0 OR BELOW DISABLES THIS HALF, falling back to the cross-leg ratio alone
+    # - the behaviour before this field existed - never the reverse.
+    spread_ratio = max(0.0, policy.bufferbloat_spread_ratio)
+
     for path, tail in measured:
-        # BOTH TESTS STAY RELATIVE, and that is the fix for a leg getting stuck
-        # out. An absolute-only rejoin bar meant a leg that recovered to 250 ms
-        # while its neighbour degraded to 900 ms stayed shed even though it was
-        # now the BEST leg in the bond - shedding became absorbing, which is the
-        # failure this whole mechanism is supposed to prevent.
+        # BOTH CROSS-LEG TESTS STAY RELATIVE, and that is the fix for a leg
+        # getting stuck out. An absolute-only rejoin bar meant a leg that
+        # recovered to 250 ms while its neighbour degraded to 900 ms stayed
+        # shed even though it was now the BEST leg in the bond - shedding
+        # became absorbing, which is the failure this whole mechanism is
+        # supposed to prevent.
         bar = best * ratio * (margin if path.shed_for_latency else 1.0)
-        path.shed_for_latency = tail > bar and tail > floor
+        cross_leg_says_bad = tail > bar and tail > floor
+
+        # ABSENCE OF A BASELINE IS NEVER EVIDENCE OF BUFFERBLOAT. A leg with
+        # no rtt_ewma_ms yet (just joined, between samples) cannot fail this
+        # test - deferring entirely to the cross-leg result, exactly as this
+        # ran before the field existed - because "we cannot tell" must never
+        # shed MORE readily than "we can tell it is fine".
+        self_says_bad = (
+            spread_ratio <= 0.0
+            or path.rtt_ewma_ms is None
+            or tail > path.rtt_ewma_ms * spread_ratio
+        )
+
+        path.shed_for_latency = cross_leg_says_bad and self_says_bad
 
 
 def shed_bufferbloated(
