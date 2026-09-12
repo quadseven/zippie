@@ -328,6 +328,20 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _elapsed_s(since_ms: int | None) -> float | None:
+    """Seconds since a published wall-clock mark, or None if there is no mark.
+
+    NONE IS NOT ZERO, and that is the only reason this is a function rather
+    than a subtraction at each call site. "This leg is not waiting for
+    anything" and "this leg has been waiting for no time at all" are different
+    facts, and a console that renders them the same way is the shape of defect
+    both of its callers exist to fix (#26, #61).
+    """
+    if since_ms is None:
+        return None
+    return round((_now_ms() - since_ms) / 1000.0, 1)
+
+
 class BondStanddown:
     """"A bond with one dying leg beats an idle healthy WAN, and takes the
     LAN with it" (#124). Decides whether the CARRYING SET, as a whole, is
@@ -3145,6 +3159,81 @@ class BondAgent:
             "the carrier, NOT through home, and is no longer inside the tunnel."
         )
 
+    def _leg_activity_facts(
+        self, path: PathRuntime, pid: int | None
+    ) -> dict[str, Any]:
+        """Is this leg in the bond, is it doing any work, and for how long not.
+
+        One block, lifted out of `_path_status` on Elder's complexity finding
+        against PR #84. These fields are not merely adjacent - they are the
+        answer to a single question a reader asks about a row, derived from
+        each other in order, and every one of them exists because some surface
+        got that answer wrong on its own.
+
+        IN_BOND IS MEMBERSHIP, NOT WEIGHT, and conflating them is why the phone
+        app showed four legs carrying while the transport held exactly one. A
+        tier-gated leg keeps whatever weight the policy last computed - the
+        weight is real, it is just not being used - so any reader deciding
+        "carrying" from weight alone reports legs that are switched off.
+        Membership is the transport's own link table, which is the only place
+        that knows. ...AND NOT HELD OUT FOR LATENCY: link membership alone
+        stopped being sufficient when shedding arrived (#81), because a shed
+        leg deliberately STAYS a link so it keeps getting keepalives and can
+        measure its way back - removing it freezes its tail and it never
+        recovers. It carries nothing, though, so reporting it as in the bond is
+        this module's own failure from the other side. Observed live
+        2026-08-09: `ethernet degraded rtt=2847.9 shed=True in_bond=True`.
+
+        CONTRIBUTING IS ITS OWN FACT, computed exactly once (#26). A leg can be
+        `in_bond=True` and `state="degraded"` while moving zero traffic - held
+        to weight 0 by the anti-flap gate, or shed for latency, or simply
+        demoted - and "degraded" reads as "still helping, a bit" to a human
+        scanning the row. It is not. Every consumer of this status (the
+        dashboard, the fleet hub, a phone) was re-deriving that distinction
+        independently and inconsistently; this is the one place it is decided.
+
+        ACTIVITY IS THE SAME FACT IN ONE WORD, because a reader scanning a list
+        of legs does not combine two booleans (#26). WORK, NOT HEALTH, and that
+        is the whole distinction: `state` answers "how is this leg", and its
+        vocabulary - up, degraded, down - has no word for "fine, present, and
+        moving nothing", so a leg held at weight 0 came out as `degraded`. Live
+        on 2026-08-29 that was a leg with a slot in the bond, no RTT and zero
+        weight for an hour of streaming, listed among the legs while the
+        console said "2 of 4 carrying". The two fields stay orthogonal and both
+        are published: a leg can be `degraded` AND `carrying` (12% loss and
+        doing the work, which is one row, not two), or `up` AND `idle` (healthy
+        and held out), and collapsing either pair loses the half a reader
+        needs.
+
+            carrying - in the bond with a real weight, probation included
+            idle     - in the bond, holding a slot, contributing nothing
+            out      - not in the bond at all; `state` says why
+
+        AND HOW LONG, IN SECONDS, NOT IN PASSES. A reader should not have to
+        know the probe interval to tell whether "no reply" means five seconds
+        or an hour (#26), and the streak fraction in a hold message says how
+        much evidence has been gathered but nothing about how long the
+        gathering has been going on - on 2026-09-11 the answer was "all day"
+        for a fraction that read 1/8 (#61). Both are None when the leg is not
+        in that state at all, never 0, because "not waiting" and "waiting for
+        no time" are different things.
+        """
+        in_bond = (pid is not None and pid in self._transport_links
+                   and not path.shed_for_latency)
+        contributing = in_bond and path.effective_weight > 0
+        return {
+            "in_bond": in_bond,
+            "contributing": contributing,
+            "activity": ("carrying" if contributing
+                         else "idle" if in_bond else "out"),
+            # NOT the same as `state`. A leg here is not having a bad day, it
+            # has never had a good one - see _flag_never_handshaked.
+            "never_handshaked": path.never_handshaked,
+            "no_reply_probes": path.no_reply_probes,
+            "no_reply_elapsed_s": _elapsed_s(path.no_reply_since_ms),
+            "held_out_elapsed_s": _elapsed_s(path.held_out_since_ms),
+        }
+
     def _path_status(self, path: PathRuntime) -> dict[str, Any]:
         """to_dict() plus the two facts that were only visible by hand.
 
@@ -3208,39 +3297,7 @@ class BondAgent:
         # failure from the other side. Observed live 2026-08-09:
         # `ethernet degraded rtt=2847.9 shed=True in_bond=True`.
         pid = self._transport_ids.get(path.name)
-        d["in_bond"] = (pid is not None and pid in self._transport_links
-                        and not path.shed_for_latency)
-        # CONTRIBUTING, as its own fact, and computed exactly once (#26). A
-        # leg can be `in_bond=True` and `state="degraded"` while moving zero
-        # traffic - held to weight 0 by this same anti-flap gate, or shed for
-        # latency, or simply demoted - and "degraded" reads as "still helping,
-        # a bit" to a human scanning the row. It is not. Every consumer of
-        # this status (the dashboard, the fleet hub, a phone) was re-deriving
-        # that distinction independently and inconsistently (D29's shape,
-        # repeated); this is the one place it is computed so every consumer
-        # can just read it.
-        d["contributing"] = bool(d["in_bond"]) and path.effective_weight > 0
-        # THE SAME FACT IN ONE WORD, because a reader scanning a list of legs
-        # does not combine two booleans (#26).
-        #
-        # WORK, NOT HEALTH, and that is the whole distinction. `state` answers
-        # "how is this leg", and its vocabulary - up, degraded, down - has no
-        # word for "fine, present, and moving nothing", so a leg held at
-        # weight 0 by the anti-flap gate came out as `degraded`, which reads
-        # as "still helping, a bit". Live on 2026-08-29 that was a leg with a
-        # slot in the bond, no RTT and zero weight for an hour of streaming,
-        # listed among the legs while the console said "2 of 4 carrying".
-        #
-        # The two fields are deliberately orthogonal and both are published: a
-        # leg can be `degraded` AND `carrying` (12% loss and doing the work,
-        # which is one row, not two), or `up` AND `idle` (healthy and held
-        # out), and collapsing either pair loses the half a reader needs.
-        #
-        #   carrying - in the bond with a real weight, probation included
-        #   idle     - in the bond, holding a slot, contributing nothing
-        #   out      - not in the bond at all; `state` says why
-        d["activity"] = ("carrying" if d["contributing"]
-                         else "idle" if d["in_bond"] else "out")
+        d.update(self._leg_activity_facts(path, pid))
         # The RAW counters usage is derived from, and the id they are keyed by.
         # Published because the first version of the accounting under-counted a
         # 20 MB transfer as 100 KB, and there was no way to see whether the
@@ -3266,28 +3323,6 @@ class BondAgent:
         d["dynamic"] = lease is not None
         if lease is not None:
             d["lease_s"] = round(lease, 1)
-        # NOT the same as `state`. A leg here is not having a bad day, it has
-        # never had a good one - see _flag_never_handshaked.
-        d["never_handshaked"] = path.never_handshaked
-        # ELAPSED TIME, not just a probe count (#26's second acceptance
-        # criterion) - a reader should not have to know the probe interval to
-        # tell whether "no reply" means five seconds or an hour. None while
-        # the leg has answered, or has not yet spent a pass in the hold gate.
-        d["no_reply_probes"] = path.no_reply_probes
-        d["no_reply_elapsed_s"] = (
-            round((time.time() * 1000 - path.no_reply_since_ms) / 1000.0, 1)
-            if path.no_reply_since_ms is not None else None
-        )
-        # HOW LONG THIS LEG HAS BEEN HELD OUT (#61), on the same terms and for
-        # the same reason. The streak fraction in the hold message says how
-        # much evidence has been gathered but nothing about how long the
-        # gathering has been going on, and on 2026-09-11 the answer was "all
-        # day" for a fraction that read 1/8. None while the leg is not being
-        # held out at all.
-        d["held_out_elapsed_s"] = (
-            round((_now_ms() - path.held_out_since_ms) / 1000.0, 1)
-            if path.held_out_since_ms is not None else None
-        )
         # A usable uplink this leg's pattern matched and nobody took (#212).
         # Empty for every correctly-configured leg, so a non-empty list is
         # always a real finding.

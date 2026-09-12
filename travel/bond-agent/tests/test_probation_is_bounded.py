@@ -110,8 +110,14 @@ def _agent(tmp_path, **policy) -> BondAgent:
     # What match_interfaces would have bound on a real pass. The valve's
     # candidate list requires it, so without this every valve test silently
     # asserts against an empty bond.
-    for leg, iface in zip(a.paths, ("eth0", "eth1", "eth2")):
-        leg.interface = iface
+    #
+    # Keyed by name rather than zipped positionally: `zip` cannot be made
+    # strict on Python 3.9 (the interpreter the router runs and this suite
+    # pins), so a zipped pair would silently drop a leg if the two sequences
+    # ever fell out of step.
+    ifaces = {"lossy": "eth0", "steady": "eth1", "ghost": "eth2"}
+    for leg in a.paths:
+        leg.interface = ifaces[leg.name]
     return a
 
 
