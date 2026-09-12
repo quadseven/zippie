@@ -3182,6 +3182,27 @@ class BondAgent:
         # repeated); this is the one place it is computed so every consumer
         # can just read it.
         d["contributing"] = bool(d["in_bond"]) and path.effective_weight > 0
+        # THE SAME FACT IN ONE WORD, because a reader scanning a list of legs
+        # does not combine two booleans (#26).
+        #
+        # WORK, NOT HEALTH, and that is the whole distinction. `state` answers
+        # "how is this leg", and its vocabulary - up, degraded, down - has no
+        # word for "fine, present, and moving nothing", so a leg held at
+        # weight 0 by the anti-flap gate came out as `degraded`, which reads
+        # as "still helping, a bit". Live on 2026-08-29 that was a leg with a
+        # slot in the bond, no RTT and zero weight for an hour of streaming,
+        # listed among the legs while the console said "2 of 4 carrying".
+        #
+        # The two fields are deliberately orthogonal and both are published: a
+        # leg can be `degraded` AND `carrying` (12% loss and doing the work,
+        # which is one row, not two), or `up` AND `idle` (healthy and held
+        # out), and collapsing either pair loses the half a reader needs.
+        #
+        #   carrying - in the bond with a real weight, probation included
+        #   idle     - in the bond, holding a slot, contributing nothing
+        #   out      - not in the bond at all; `state` says why
+        d["activity"] = ("carrying" if d["contributing"]
+                         else "idle" if d["in_bond"] else "out")
         # The RAW counters usage is derived from, and the id they are keyed by.
         # Published because the first version of the accounting under-counted a
         # 20 MB transfer as 100 KB, and there was no way to see whether the

@@ -469,6 +469,20 @@ def _path_samples(p: dict, mode: str, primary: str | None,
     # table exists - see the docstring.
     if membership_known:
         out.append(("path.in_bond", 1 if p.get("in_bond") else 0, tags))
+        # 1 while a leg holds a slot in the bond and moves NOTHING (#26) -
+        # `activity == "idle"`, the state that is worse than being absent
+        # because it is ambiguous: the leg is counted as a member, so the
+        # bond's usable capacity reads higher than it is.
+        #
+        # Its own series rather than an inference from path.weight == 0,
+        # because weight alone cannot tell an idle member from a leg that is
+        # not a member at all, and those want opposite responses. Flat at 0 on
+        # a healthy bond; a series that sits at 1 is capacity nobody has.
+        out.append((
+            "path.idle_in_bond",
+            1 if p.get("activity") == "idle" else 0,
+            tags,
+        ))
     # THE RAW BYTES USAGE IS DERIVED FROM, per leg.
     #
     # In packet mode there is no per-leg wg interface, so tx_bytes/rx_bytes read
