@@ -716,6 +716,15 @@ class BondAgent:
         # pure policy layer, because it is stateful across loop passes.
         self._join_streak: dict[str, float] = {}
         self._flapped: set[str] = set()
+        # Legs whose probation release has already been logged, so the line is
+        # written ONCE PER HOLD rather than once per pass (#61). A leg on
+        # probation behind a lossy uplink goes DOWN and comes back constantly,
+        # and `on_probation` is a per-pass fact that follows it - it is False
+        # while the leg is DOWN, because the leg is carrying nothing while it
+        # is DOWN. Keying the log line off that would bury the transition it
+        # reports under a line every couple of seconds. Cleared wherever the
+        # hold itself ends - see _end_hold.
+        self._probation_logged: set[str] = set()
         # apply_policy passes: every 30th forces a firewall rebuild (self-heal).
         self._fw_pass = 0
         # Last nexthop set actually installed. Guards the route replace so an
@@ -2857,12 +2866,18 @@ class BondAgent:
                 self._flapped.discard(p.name)
                 p.no_reply_probes = 0
                 p.no_reply_since_ms = None
-                # THE HOLD IS OVER, so the clock it was measured against goes
-                # with it (#61). Leaving it set would date the NEXT hold from
-                # this one and put the leg straight onto probation the moment
-                # it failed again, skipping the anti-flap wait entirely.
-                p.held_out_since_ms = None
-                p.on_probation = False
+                self._end_hold(p)
+                # SPENT, NOT BANKED. The streak is evidence gathered toward
+                # THIS admission, and it has now bought it; carrying it
+                # forward would let a leg accumulate credit while it is
+                # perfectly healthy and then pay for the NEXT failure out of
+                # savings. That is the anti-flap gate with its teeth pulled: a
+                # leg sitting on eight banked points loses one to a failed
+                # pass and is back at full weight two passes later, which is
+                # the 2026-07-30 yo-yo exactly. The old code got this for free
+                # from the erase-on-DOWN that #61 had to remove, so it has to
+                # be said out loud now.
+                self._join_streak[p.name] = 0.0
                 # Clear the hold message on the tick that re-admits, ON
                 # OWNERSHIP - NOT by matching its text (#26 REGRESSION,
                 # confirmed live: a leg carrying 473 MB still read "no reply
@@ -2895,8 +2910,13 @@ class BondAgent:
                 # wrote for it this tick, and a stale hold clock would date a
                 # future hold from a hold that ended (#61).
                 p.held_out_message_active = False
-                p.held_out_since_ms = None
-                p.on_probation = False
+                self._end_hold(p)
+                # A LEG THAT IS NOT BEING JUDGED HOLDS NO EVIDENCE, for the
+                # same reason the re-admission branch spends it: a healthy leg
+                # that quietly banks a point a pass would arrive at its next
+                # failure pre-paid, and the wait this gate exists to impose
+                # would never happen.
+                self._join_streak[p.name] = 0.0
 
         # THE GATE MUST NEVER STARVE THE BOND.
         #
@@ -2942,12 +2962,25 @@ class BondAgent:
         best.no_reply_probes = 0
         best.no_reply_since_ms = None
         best.held_out_message_active = False
-        best.held_out_since_ms = None
-        best.on_probation = False
+        self._end_hold(best)
         best.last_error = ("released to carry - every leg was held out at once, "
                            "which starves the bond")
         log.warning("join gate released %s: all legs were held out and the bond "
                     "was carrying nothing", best.name)
+
+    def _end_hold(self, p: PathRuntime) -> None:
+        """This leg is no longer being held out by the gate (#61).
+
+        ONE PLACE, THREE CALLERS - re-admission, the all-legs valve, and the
+        not-gated branch. Every one of them has to retire the same three
+        pieces of hold state, and the failure mode of forgetting one is
+        silent: a stale `held_out_since_ms` would date the NEXT hold from a
+        hold that already ended and put the leg straight onto probation the
+        moment it failed again, skipping the anti-flap wait entirely.
+        """
+        p.held_out_since_ms = None
+        p.on_probation = False
+        self._probation_logged.discard(p.name)
 
     def _hold_out(self, p: PathRuntime, streak: float, threshold: float) -> None:
         """Hold one leg out of the bond, or put it on probation (#61).
@@ -2996,7 +3029,12 @@ class BondAgent:
             # waits on the streak, which is what keeps a genuinely oscillating
             # leg capped here for as long as it keeps oscillating.
             p.effective_weight = max(1, policy.weight_floor_for(p, self.config.policy))
-            if not p.on_probation:
+            # ONCE PER HOLD, not once per pass: a leg on probation behind a
+            # lossy uplink drops in and out of DOWN constantly, and a line on
+            # every re-entry would bury the transition it is reporting. Same
+            # rule BondStanddown._hold_sole_uplink already follows.
+            if p.name not in self._probation_logged:
+                self._probation_logged.add(p.name)
                 log.warning(
                     "path %s put on probation at weight %d after %.0fs held out "
                     "(streak %g/%g): a leg that has answered before must not be "

@@ -382,6 +382,53 @@ def test_a_genuinely_oscillating_leg_never_regains_its_full_weight(tmp_path, clo
     assert a._join_streak.get(leg.name, 0.0) < a.config.policy.join_streak_min
 
 
+def test_a_leg_that_proves_itself_then_starts_yo_yoing_is_damped_again(
+    tmp_path, clock
+):
+    """THE 2026-07-30 INCIDENT, in the order it actually happens.
+
+    That leg was not broken from the start - it worked, then began bouncing
+    between healthy and dead, and every bounce re-hashed the household's
+    long-lived connections. So the interesting case is a leg with a FINISHED
+    streak behind it, not one that never had one.
+
+    The trap this pins is credit that is banked rather than spent. If a leg
+    kept the evidence it had gathered, a single failed pass would cost one
+    point out of eight and it would be back at full weight two passes later,
+    on every bounce, forever. Found by the test below it while writing #61:
+    the anti-flap gate used to get this for free from the erase-on-DOWN that
+    #61 had to remove.
+    """
+    a = _agent(tmp_path)
+    _steady(a)
+    leg = _proven(a)
+
+    for _ in range(8):
+        leg.state = PathState.UP
+        leg.effective_weight = 40
+        a._gate_flapped_paths()
+        clock()
+    assert leg.name not in a._flapped, "test setup: the leg must be re-admitted"
+
+    # Now it starts bouncing: alive, gone, alive, gone.
+    full_weight_passes = 0
+    for i in range(LONG_RUN_PASSES):
+        if i % 2 == 0:
+            leg.state = PathState.DOWN
+            leg.effective_weight = 0
+        else:
+            leg.state = PathState.UP
+            leg.effective_weight = 40
+        a._gate_flapped_paths()
+        full_weight_passes += 1 if leg.effective_weight > a.config.policy.weight_floor else 0
+        clock()
+
+    assert full_weight_passes == 0, (
+        f"a yo-yoing leg took its full share on {full_weight_passes} of "
+        f"{LONG_RUN_PASSES} passes; the anti-flap gate is not damping a leg "
+        f"that had already proven itself once"
+    )
+
 # ================================================ the bond-wide safety valve
 def test_the_all_legs_held_out_valve_still_fires(tmp_path, clock):
     """Every leg held out at once is an outage, not caution - and a leg can
@@ -468,6 +515,77 @@ def test_a_never_proven_leg_does_not_ride_along_with_a_probation_release(
         f"({proven.last_error!r}), not because the bound expired"
     )
 
+
+def test_the_probation_release_is_logged_once_per_hold_not_once_per_pass(
+    tmp_path, clock, caplog
+):
+    """A line on every re-entry would bury the transition it reports.
+
+    `on_probation` is a per-pass fact and correctly goes False whenever the
+    leg reads DOWN - which, on the uplink this whole issue is about, is every
+    few passes. Keying the log line off it would write one every couple of
+    seconds for as long as the leg stays lossy, which is how a real event
+    becomes noise nobody reads.
+    """
+    a = _agent(tmp_path)
+    _steady(a)
+    leg = _proven(a)
+
+    with caplog.at_level("WARNING", logger="zippie.agent"):
+        for i in range(LONG_RUN_PASSES):
+            _lossy_pass(leg, i, miss_every=3)
+            a._gate_flapped_paths()
+            clock()
+
+    lines = [r for r in caplog.records if "put on probation" in r.getMessage()]
+    assert len(lines) == 1, (
+        f"{len(lines)} probation lines over {LONG_RUN_PASSES} passes; one "
+        f"hold is one event"
+    )
+    assert leg.on_probation is True or leg.state is PathState.DOWN
+
+
+def test_a_re_admitted_leg_can_be_put_on_probation_again_later(tmp_path, clock):
+    """The hold state has to RETIRE, not merely stop being read.
+
+    A leg that finished its streak and was re-admitted, then failed again, has
+    to serve the full anti-flap wait a second time. If the clock from the
+    first hold survived, the second hold would expire the instant it began and
+    the gate would have no teeth at all after the first recovery.
+    """
+    a = _agent(tmp_path)
+    _steady(a)
+    leg = _proven(a)
+
+    # Prove itself outright: eight clean UP passes, no misses.
+    for _ in range(8):
+        leg.state = PathState.UP
+        leg.effective_weight = 40
+        a._gate_flapped_paths()
+        clock()
+    assert leg.name not in a._flapped, "test setup: the leg must be re-admitted"
+    assert leg.held_out_since_ms is None, (
+        "the hold clock survived a re-admission; the next failure would skip "
+        "the anti-flap wait entirely"
+    )
+
+    # Fail, then come back lossy. The bound must be served again from scratch.
+    leg.state = PathState.DOWN
+    leg.effective_weight = 0
+    a._gate_flapped_paths()
+    clock()
+
+    carried_early = 0
+    for i in range(1, 40):
+        _lossy_pass(leg, i, miss_every=3)
+        a._gate_flapped_paths()
+        carried_early += 1 if leg.effective_weight > 0 else 0
+        clock()
+
+    assert carried_early == 0, (
+        f"carried on {carried_early} of the first 40 passes of a SECOND hold; "
+        f"the anti-flap wait is not being served again"
+    )
 
 # ============================================================== the knobs
 def test_the_knobs_are_readable_from_the_config_file(tmp_path):
