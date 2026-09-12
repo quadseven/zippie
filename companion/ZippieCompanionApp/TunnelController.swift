@@ -177,6 +177,12 @@ final class TunnelController: ObservableObject {
             installed = true
             onDemandArmed = m.isOnDemandEnabled
             observeStatus()
+            // #76: marks the moment a connect is REQUESTED, before iOS has
+            // necessarily delivered even one `.connecting` notification - see
+            // `Observability.tunnelConnectRequested`. Ordered right before the
+            // call it is marking, not after: the flap this exists for can
+            // outrun the app inside the same run loop turn.
+            Observability.tunnelConnectRequested()
             try m.connection.startVPNTunnel()
         } catch {
             lastError = Self.describe(error)
@@ -405,6 +411,11 @@ final class TunnelController: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.status = self.manager?.connection.status ?? .invalid
+                // #76: the ONLY channel that reaches Observability for a
+                // transition the SYSTEM delivered, rather than a snapshot
+                // read after the fact - see `Observability.tunnelStatus` and
+                // `traceTunnelTransition`.
+                Observability.tunnelStatus(self.status, error: self.lastError)
                 await self.refreshReport()
             }
         }
