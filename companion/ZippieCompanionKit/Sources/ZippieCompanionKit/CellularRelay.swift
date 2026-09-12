@@ -169,17 +169,59 @@ public actor CellularRelay {
             stats.cellularReady = false
             stats.lastError = "cellular: \(e.localizedDescription)"
             stats.errors += 1
-        case .waiting:
-            // With requiredInterfaceType set, `.waiting` means cellular is not
-            // usable right now - aeroplane mode, no data plan, Low Data Mode.
-            // Surface it instead of sitting silently in a state that looks
-            // like "starting".
+        case let .waiting(reason):
+            // THE STATE CARRIES THE REASON AND THIS USED TO THROW IT AWAY.
+            //
+            // It reported a fixed string, "cellular unavailable (interface not
+            // usable)", and the comment here guessed at three causes:
+            // aeroplane mode, no data plan, Low Data Mode. On 2026-09-11 a
+            // phone sat in this state indefinitely with 5G showing in the
+            // status bar, the app granted cellular (9.69 GB attributed to it
+            // in Settings) and Local Network granted - all three guesses
+            // false, and the true cause sitting unread in the NWError that
+            // `.waiting` hands over.
+            //
+            // `.waiting` is also not necessarily fatal: Network.framework uses
+            // it for "cannot be satisfied YET" and retries on its own, so the
+            // wording no longer implies a permanent verdict.
             stats.cellularReady = false
-            stats.lastError = "cellular unavailable (interface not usable)"
+            stats.lastError = "cellular not usable yet: " + Self.describe(reason)
         default:
             break
         }
         publish()
+    }
+
+    /// Why Network.framework is holding this connection, in words that name
+    /// the actual fault rather than a list of suspects.
+    ///
+    /// Deliberately `static` and non-private: it is the only seam through
+    /// which a test can pin this mapping, because `NWConnection` state
+    /// delivery needs a device and a live radio.
+    static func describe(_ error: NWError) -> String {
+        switch error {
+        case let .posix(code):
+            switch code {
+            case .ENETDOWN:     return "the cellular interface is down"
+            case .ENETUNREACH:  return "no route over cellular"
+            case .EHOSTUNREACH: return "the home end is unreachable over cellular"
+            case .ETIMEDOUT:    return "cellular timed out reaching the home end"
+            case .EPERM, .EACCES:
+                return "cellular is not permitted for this process "
+                     + "(check Settings > Cellular and Low Data Mode)"
+            default:            return "cellular error \(code.rawValue)"
+            }
+        case let .dns(code):
+            // The one this design invites: with requiredInterfaceType set,
+            // the HOSTNAME has to resolve over cellular too, so a home host
+            // that only resolves through the router's resolver never comes
+            // up here - and looks exactly like "no signal".
+            return "cannot resolve the home host over cellular (DNS \(code))"
+        case let .tls(code):
+            return "TLS refused over cellular (\(code))"
+        @unknown default:
+            return error.localizedDescription
+        }
     }
 
     private func receiveFromHome(_ conn: NWConnection) {
