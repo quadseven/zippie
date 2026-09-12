@@ -397,6 +397,14 @@ def _path_samples(p: dict, mode: str, primary: str | None,
     # answers "is the damper doing anything on this bond at all", which is the
     # question a tuning change has to be judged on.
     out.append(("path.weight_rises_in_window", p.get("weight_rises_in_window", 0), tags))
+    # 1 while a leg is carrying a PROBATION share - a bounded, minimal slice
+    # granted because the anti-flap gate had held it out for longer than
+    # `probation_after_ms`, not because it finished its streak (#61). Flat at 0
+    # on a bond whose legs are either proven or genuinely broken, so any
+    # excursion is a real finding; a series that stays at 1 is a leg that keeps
+    # failing its streak and keeps being let back in on the bound, which is the
+    # bond quietly running on a floor share.
+    out.append(("path.on_probation", 1 if p.get("on_probation") else 0, tags))
     out.append(("path.tx_bytes", p.get("tx_bytes", 0), tags))
     out.append(("path.rx_bytes", p.get("rx_bytes", 0), tags))
     # Rates, not just totals: the counters are per-wg-interface and RESET on

@@ -251,14 +251,60 @@ class PolicyConfig:
     # entirely is worse than temporarily losing the home exit (Operator, 2026-07-27).
     # Choose killswitch if never leaking outside the tunnel matters more.
     on_all_paths_down: str = "degrade"
-    # A leg that FAILED must prove itself healthy for this many consecutive
-    # probe passes before rejoining the bond (UP counts 1.0, degraded-but-
-    # carrying 0.5; DOWN resets). First join at startup is exempt - only
-    # RE-joins after a failure pay the toll. Leaving is always instant.
-    # This is the anti-flap gate: every membership change re-hashes client
-    # flows, so a yo-yoing leg breaks long-lived connections over and over
-    # (2026-07-30: a flapping hotspot leg made the bond unusable).
+    # A leg that FAILED must prove itself healthy for this many probe passes
+    # before rejoining the bond (UP counts 1.0, degraded-but-carrying 0.5).
+    # First join at startup is exempt - only RE-joins after a failure pay the
+    # toll. Leaving is always instant. This is the anti-flap gate: every
+    # membership change re-hashes client flows, so a yo-yoing leg breaks
+    # long-lived connections over and over (2026-07-30: a flapping hotspot leg
+    # made the bond unusable).
     join_streak_min: float = 8.0
+    # WHAT A FAILED PASS COSTS A LEG THAT HAS BEEN ANSWERED, instead of
+    # costing it everything.
+    #
+    # The streak used to be erased on any pass a leg read DOWN, which made it
+    # a demand for eight CONSECUTIVE lucky passes rather than for eight passes
+    # of evidence. A missed keepalive reads DOWN, so behind an obstructed
+    # Starlink (2026-09-11: 17% loss, 578 outage events in 12 hours) a leg that
+    # had carried all day could not reach 8 and was excluded indefinitely -
+    # live, at 62.5% loss, the console read "held out of bond until proven
+    # (1/8)" pass after pass while the fraction never climbed.
+    #
+    # One point per failed pass makes the streak a random walk whose drift IS
+    # the flap discriminator: a leg up 5 passes in 6 climbs steadily and
+    # finishes, a leg up half the time nets zero and never does. That is the
+    # 2026-07-30 yo-yoing hotspot, still damped, by the same number.
+    #
+    # ONLY A LEG THE FAR END HAS ANSWERED gets this. A leg that has never
+    # round-tripped once has proven nothing to be tolerant of, and keeps the
+    # erase - see `has_ever_answered`.
+    #
+    # NEGATIVE CLAMPS TO ZERO, i.e. to "a miss costs nothing", which is the
+    # most tolerant setting rather than the least: every out-of-range value
+    # here degrades toward holding a proven leg out LESS, the same rule
+    # weight_rises_per_window and bufferbloat_shed_ratio already follow.
+    join_streak_miss_penalty: float = 1.0
+    # THE LONGEST A LEG THE FAR END HAS ANSWERED MAY BE HELD AT ZERO before
+    # the gate gives it a probation share. 30 s = 60 passes at the default
+    # probe.
+    #
+    # A BOUND, BECAUSE THE ALTERNATIVE IS UNBOUNDED. The only escape the gate
+    # had was the all-legs-held-out valve below it, and that fires by
+    # definition only once the bond is ALREADY carrying nothing - an outage
+    # guard, not a per-leg bound. Live on 2026-09-11 it was the thing holding
+    # the household up while two proven legs sat at weight 0.
+    #
+    # The share granted is `weight_floor_for` - a real but minimal slice, the
+    # same one the valve hands out - so this bounds the STARVATION without
+    # restoring a leg that has not finished proving itself. Full weight still
+    # needs the streak.
+    #
+    # ZERO OR NEGATIVE MEANS PROBATION AT ONCE, not "off". Read literally, a
+    # maximum hold of zero is no hold, which is the less-damping direction
+    # every other knob in this file degrades toward; a value that meant "hold
+    # forever" would be the exact defect this exists to end. To lengthen the
+    # hold, lengthen it - there is no value that removes the bound.
+    probation_after_ms: int = 30_000
     # THE ROUTER'S OWN RESOLVER, restarted whenever the default route MOVES
     # (#21). On 2026-08-02 installing `default dev pbz0` on the travel router killed the
     # router's DNS outright while the tunnel underneath it was perfectly
@@ -566,6 +612,27 @@ class PathRuntime:
     # moment a third is added or one is reworded; tracking who wrote the
     # field does not.
     held_out_message_active: bool = False
+    # WALL-CLOCK MS THE CURRENT HOLD BEGAN, or None when this leg is not
+    # being held out by the anti-flap gate at all (#61).
+    #
+    # DELIBERATELY NOT CLEARED BY A FAILED PASS, which is the whole point.
+    # `join_streak` is the evidence counter and a failed pass debits it; this
+    # is the elapsed time the leg has spent excluded, and a leg behind a lossy
+    # uplink fails passes constantly. Restarting the clock on each one would
+    # reproduce the defect this field exists to bound, one layer up: the leg
+    # would never reach the bound for the same reason it never reached the
+    # streak. Cleared only when the hold genuinely ends - the leg is
+    # re-admitted, released by the all-legs valve, or was never gated.
+    held_out_since_ms: int | None = None
+    # TRUE while this leg is carrying a PROBATION share: a real but minimal
+    # slice granted because the hold above hit `probation_after_ms`, not
+    # because the leg finished its streak (#61).
+    #
+    # Published rather than inferred from "weight is small". A floor-weight
+    # leg and a leg whose measurements merely earned a floor weight are
+    # indistinguishable from the number alone, and they mean opposite things:
+    # one is still being judged, the other has been judged.
+    on_probation: bool = False
     # HOW MANY PASSES AGO each recent weight RISE happened, one entry per rise,
     # dropped once it ages past policy.weight_rise_window_passes. The list IS the
     # rolling window: its length is the budget spent, and ageing it one step per
@@ -717,6 +784,12 @@ class PathRuntime:
             # being held looks exactly like a weight with nothing to say. At the
             # cap, this leg's weight is pinned until the window rolls.
             "weight_rises_in_window": len(self.weight_rise_ages),
+            # A SMALL WEIGHT AND A PROBATION WEIGHT LOOK IDENTICAL as numbers
+            # and mean opposite things - one is a measurement, the other is a
+            # leg still being judged (#61). Published for the same reason
+            # weight_rises_in_window is: a weight that is deliberately being
+            # held reads as a weight with nothing to say.
+            "on_probation": self.on_probation,
             "config_weight": self.config.weight,
             # auto_label wins over the configured/overridden label -
             # see its own docstring on why it is a separate field - but only
