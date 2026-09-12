@@ -256,6 +256,46 @@ jobs:
             OTHER_CODE_SIGN_FLAGS="--keychain $CI_KEYCHAIN"
           test -d build/Zippie.xcarchive
 
+      - name: Verify the archive carries this commit (#75)
+        # READ IT BACK OUT OF THE ARCHIVE, rather than trusting that the
+        # postbuild script (companion/scripts/embed-build-info.sh) ran and
+        # wrote what it claims - same reasoning as
+        # companion-android/ci/build-signed-apk.sh reading versionCode/
+        # versionName back out of the built APK instead of trusting the
+        # env vars it exported. A silent regression here (an Xcode upgrade
+        # that changes script-phase ordering, say) would otherwise ship a
+        # TestFlight build with a stale or missing commit stamp and nothing
+        # would say so until someone asked "are we running the fix" again.
+        run: |
+          set -euo pipefail
+          APP="build/Zippie.xcarchive/Products/Applications/ZippieCompanion.app"
+          PLIST="$APP/Info.plist"
+          test -f "$PLIST" || { echo "::error::no Info.plist at $PLIST"; exit 1; }
+
+          EMBEDDED="$(/usr/libexec/PlistBuddy -c 'Print :ZippieGitCommit' "$PLIST" 2>/dev/null || true)"
+          [ -n "$EMBEDDED" ] || { echo "::error::ZippieGitCommit is missing from $PLIST - embed-build-info.sh did not run or was skipped"; exit 1; }
+
+          # A real TestFlight archive must be a CLEAN, CI-produced build - if
+          # this ever reads "-local" or "-dirty" the runner's checkout is not
+          # what it should be (a stray edit, a rebase left mid-flight, or the
+          # CI-detection env vars not reaching the build phase the way this
+          # was verified to work when it was written) and uploading it would
+          # silently defeat the entire point of this change.
+          case "$EMBEDDED" in
+            *-local*|*-dirty*)
+              echo "::error::archive carries '$EMBEDDED', which is not a clean CI build - refusing to upload a build that cannot prove its own provenance"
+              exit 1
+              ;;
+          esac
+
+          EXPECTED="$(git rev-parse --short=7 HEAD)"
+          [ "$EMBEDDED" = "$EXPECTED" ] || { echo "::error::archive carries commit $EMBEDDED but this checkout is at $EXPECTED"; exit 1; }
+
+          echo "archive carries commit $EMBEDDED, matching this checkout"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            echo "Build commit: \`$EMBEDDED\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Export + sign the IPA (App Store, manual)
         run: |
           set -euo pipefail

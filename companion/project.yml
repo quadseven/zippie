@@ -174,6 +174,33 @@ targets:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Apple Distribution"
           PROVISIONING_PROFILE_SPECIFIER: "zippie companion AppStore"
+    # Stamps the built app with the commit it came from (#75). POST-build, not
+    # pre-build: it edits the Info.plist GENERATE_INFOPLIST_FILE already wrote
+    # into the built product, so it must run after that and before codesigning
+    # - see companion/scripts/embed-build-info.sh for the full reasoning,
+    # including why this reads git directly at build time instead of trusting
+    # a value passed in from outside (the TestFlight workflow's command line
+    # sets CURRENT_PROJECT_VERSION that way; a commit stamp cannot be, because
+    # a local archive-for-testing with uncommitted changes must not be able to
+    # hand it a real-looking SHA that does not match what was compiled).
+    postbuildScripts:
+      - path: scripts/embed-build-info.sh
+        name: "Embed build provenance (#75)"
+        # xcodegen defaults a script phase's shellPath to /bin/sh; the script
+        # uses bash arrays (its own #!/usr/bin/env bash shebang is not
+        # trustworthy here - Xcode's own invocation of a build phase script is
+        # what actually decides the interpreter, not the file's shebang line,
+        # and that is a build-phase-only distinction that only shows up on a
+        # full Xcode build, not on `xcodegen generate`). Pinned explicitly so
+        # it cannot silently run under a POSIX /bin/sh that rejects `${arr[@]}`.
+        shell: /bin/bash
+        # No declared outputs: this script does not produce a new artifact
+        # xcodebuild's dependency analysis can key a cache on, it mutates the
+        # Info.plist already inside the built product. Left to the default,
+        # a build whose other inputs are unchanged could skip this phase
+        # entirely and ship an app still carrying a PREVIOUS build's commit -
+        # exactly the stale-provenance bug this change exists to close.
+        basedOnDependencyAnalysis: false
 
   # The packet-tunnel extension - phase 2 of ADR 0020, and the difference
   # between a demo and a product.
