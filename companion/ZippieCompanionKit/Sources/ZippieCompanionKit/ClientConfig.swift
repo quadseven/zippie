@@ -255,6 +255,28 @@ public struct ClientConfig: Sendable, Equatable {
                             routes: routes)
     }
 
+    /// What the datapath needs told, given the legs it was last told about and
+    /// what `repinned(using:)` says should exist now (#65). Both sides are
+    /// keyed by `pathID`, which is stable across a repin - only a leg's
+    /// `device` (and therefore whether its role resolves at all) ever moves.
+    ///
+    /// A leg whose device did not change is in NEITHER list. The Go side's own
+    /// `AddLink` is documented safe mid-stream, but there is nothing to gain
+    /// from replacing a socket that is still bound to the interface it always
+    /// was - and every extra `AddLink` briefly closes and reopens that leg's
+    /// connection, which is real cost to pay for zero benefit.
+    public static func rebuildPlan(from previous: [Link], to current: [Link]) -> LegRebuildPlan {
+        let previousByID = Dictionary(uniqueKeysWithValues: previous.map { ($0.pathID, $0) })
+        let currentByID = Dictionary(uniqueKeysWithValues: current.map { ($0.pathID, $0) })
+
+        let toRemove = previousByID.keys.filter { currentByID[$0] == nil }.sorted()
+        let toAdd = currentByID.values
+            .filter { previousByID[$0.pathID]?.device != $0.device }
+            .sorted { $0.pathID < $1.pathID }
+
+        return LegRebuildPlan(toRemove: toRemove, toAdd: toAdd)
+    }
+
     /// The JSON the Go binding parses.
     ///
     /// Field names are the binding's, not Swift's. They are spelled here once
@@ -274,4 +296,19 @@ public struct ClientConfig: Sendable, Equatable {
         }
         return s
     }
+}
+
+/// The result of `ClientConfig.rebuildPlan(from:to:)` - which `pathID`s the
+/// datapath should drop, and which links (new or moved to a different
+/// device) it should (re)attach.
+public struct LegRebuildPlan: Sendable, Equatable {
+    public let toRemove: [Int]
+    public let toAdd: [ClientConfig.Link]
+
+    public init(toRemove: [Int], toAdd: [ClientConfig.Link]) {
+        self.toRemove = toRemove
+        self.toAdd = toAdd
+    }
+
+    public var isEmpty: Bool { toRemove.isEmpty && toAdd.isEmpty }
 }
