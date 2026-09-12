@@ -441,4 +441,45 @@ enum Observability {
         case .baselineFailed: return "baseline_failed"
         }
     }
+
+    // MARK: - RUM views and actions (#77)
+
+    /// Manual RUM view tracking, because `uiKitViewsPredicate:
+    /// DefaultUIKitRUMViewsPredicate()` above only fires when a
+    /// `UIViewController` is pushed - and this is a SwiftUI app with exactly
+    /// ONE, the hosting controller, for its entire lifetime. Every RUM event
+    /// landed on `ApplicationLaunch` because of that: 40 events in an hour of
+    /// real use, all `resource`/`long_task`, none attributed to a screen a
+    /// person could recognise. There is no `DatadogSwiftUI` package linked
+    /// here to do this automatically (see `project.yml`), so it is called by
+    /// hand from the screen's own appear/disappear.
+    ///
+    /// `key` and `name` are the same string on purpose - there is exactly one
+    /// instance of each named view in this app, so a second identifier would
+    /// only be one more thing that could disagree with the name.
+    static func viewAppeared(_ name: String) {
+        RUMMonitor.shared().startView(key: name, name: name)
+    }
+
+    static func viewDisappeared(_ name: String) {
+        RUMMonitor.shared().stopView(key: name)
+    }
+
+    /// A tap on a control that changes whether this phone is relaying - the
+    /// thing RUM could not answer at all (#77): zero `action` events in an
+    /// hour of active use, so "what did the operator press" had to be
+    /// reconstructed from unrelated log timing. `type: .tap` rather than
+    /// `.custom` (contrast `probeCompleted`'s action, which is not a tap on
+    /// anything): this literally is one.
+    ///
+    /// NO CONFIGURATION VALUE TRAVELS IN `attributes` - only which control and
+    /// which of start/stop, never a host, port or token. See #77's
+    /// "no payload, address or credential" acceptance criterion.
+    static func relayControlTapped(control: String, action: String) {
+        RUMMonitor.shared().addAction(
+            type: .tap,
+            name: "relay.\(control).\(action)",
+            attributes: ["control": control, "action": action]
+        )
+    }
 }
