@@ -244,6 +244,15 @@ struct RelayScreen: View {
             Readout(label: "Cellular",
                     value: shownStats.cellularReady ? "ready" : "not ready",
                     tone: shownStats.cellularReady ? Ink.primary : Ink.down)
+            // Shown only when non-zero (#92) - the same reason the rows below
+            // it are. A retry firing is evidence Network.framework's own
+            // .waiting recovery did not, so it belongs beside the other
+            // "something needed a hand" counters, not folded into "Cellular".
+            if shownStats.cellularRetries > 0 {
+                Hairline()
+                Readout(label: "Cellular retries", value: "\(shownStats.cellularRetries)",
+                        tone: Ink.degraded)
+            }
             // Shown only when non-zero. A permanent "Errors 0" row is a line of
             // furniture that trains the eye to skip the place a real number
             // would appear.
