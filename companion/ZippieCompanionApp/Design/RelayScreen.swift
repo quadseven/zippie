@@ -411,7 +411,19 @@ struct RelayScreen: View {
             // already prefers over `startError` - so the plan's own sentence
             // reaches the screen without a second copy of it here.
             await tunnel.startTunnel(with: config, decision: bond.decision, client: nil)
-            Observability.tunnelStatus(tunnel.status, error: tunnel.lastError)
+            // #76: ONLY the failure case, and only because
+            // `TunnelController.observeStatus` now forwards every REAL
+            // transition to Observability itself (see there). Reporting
+            // `tunnel.status` here unconditionally used to race that: this
+            // line runs the instant `startTunnel` returns, which for a
+            // successful start is before iOS has changed anything yet, so an
+            // unconditional call here tagged a still-pending attempt as an
+            // instant failure. A synchronous failure (bad config, a save that
+            // threw) never reaches NEVPNConnection at all, so it is the one
+            // case this screen has to report itself.
+            if let error = tunnel.lastError {
+                Observability.tunnelStatus(tunnel.status, error: error)
+            }
         }
     }
 

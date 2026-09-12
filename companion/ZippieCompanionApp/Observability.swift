@@ -301,6 +301,35 @@ enum Observability {
     private static let connectLock = NSLock()
     private static var connectStartedAt: Date?
 
+    /// When the app last ASKED iOS to connect, regardless of whether
+    /// `.connecting` was ever subsequently observed for it.
+    ///
+    /// #76: measured 2026-09-11, two taps of "Start relaying" on a phone
+    /// whose tunnel was being torn down by an on-demand rule produced 6
+    /// transitions in 1.72s and 5 in 1.79s, and the app recorded `.connecting`
+    /// for NEITHER - `NEVPNStatusDidChangeNotification` carries no status
+    /// payload, so the handler reads `connection.status` at the moment IT
+    /// runs, and a burst this fast can race ahead of the handler and land on
+    /// a later state before `.connecting` is ever read. Without a signal set
+    /// at REQUEST time, `traceTunnelTransition` cannot tell "iOS just failed a
+    /// real connect attempt this fast" from "somebody pressed Stop" - both
+    /// produce the identical `.disconnected` transition with no recorded
+    /// start.
+    private static var attemptRequestedAt: Date?
+
+    /// Call the moment the app asks iOS to connect - see `attemptRequestedAt`.
+    /// `TunnelController.startTunnel` is the one call site (its own doc
+    /// comment: "THE MODE IS DECIDED HERE AND NOWHERE ELSE").
+    ///
+    /// A second call before the first attempt resolves (a double-tap) does
+    /// NOT restart the clock, for the same reason `connectStartedAt` does
+    /// not: the first request is still the one in flight.
+    static func tunnelConnectRequested() {
+        connectLock.lock()
+        if attemptRequestedAt == nil { attemptRequestedAt = Date() }
+        connectLock.unlock()
+    }
+
     /// Turn the tunnel's status transitions into one span per connect attempt.
     ///
     /// WHY THIS IS WORTH A SPAN. "The tunnel takes ages to come up sometimes"
@@ -317,6 +346,28 @@ enum Observability {
     /// Back-dated rather than held open: an OTSpan kept alive across app
     /// suspension is a span that never finishes if the app is killed, and this
     /// app is expected to be backgrounded for hours.
+    ///
+    /// #76: A SPAN EVEN WHEN `.connecting` WAS NEVER OBSERVED. The old guard
+    /// here - `guard let startedAt else { return }` - silently dropped every
+    /// terminal transition whose `.connecting` never reached this function,
+    /// which is exactly the fast-flap case measured 2026-09-11 (see
+    /// `attemptRequestedAt`): zero `zippie.tunnel.connect` spans recorded that
+    /// hour, from six transitions in 1.72s and five in 1.79s.
+    ///
+    /// A connect attempt that fails this fast is STILL a connect attempt, so
+    /// a span still forms when `attemptRequestedAt` shows one was asked for -
+    /// but with NO INVENTED DURATION. `duration_measured` says which kind
+    /// this is: `true` with a real `duration_s` when `.connecting` was
+    /// actually seen (unchanged from before), `false` with none at all
+    /// otherwise, so nothing downstream can mistake an unmeasured span's own
+    /// start/end (necessarily the same instant - there is no real start to
+    /// back-date to) for a measured connect time.
+    ///
+    /// NEITHER signal set means this transition was not a connect attempt at
+    /// all - a plain stop, most obviously, which also lands on `.disconnected`
+    /// with no recorded start. Spanning that as a failed CONNECT would be
+    /// mislabelling an ordinary stop, so it still produces no span, same as
+    /// before.
     private static func traceTunnelTransition(_ status: NEVPNStatus, error: String?) {
         switch status {
         case .connecting:
@@ -328,21 +379,31 @@ enum Observability {
         case .connected, .disconnected, .invalid:
             connectLock.lock()
             let startedAt = connectStartedAt
+            let wasRequested = attemptRequestedAt != nil
             connectStartedAt = nil
+            attemptRequestedAt = nil
             connectLock.unlock()
-            // No recorded start means this is a status we did not see begin -
-            // app launched with the tunnel already up, for instance. Inventing
-            // a start time would be fabricating a duration.
-            guard let startedAt else { return }
+
+            guard startedAt != nil || wasRequested else { return }
+
             let finishedAt = Date()
+            var tags: [String: Encodable] = [
+                "outcome": tunnelStatusName(status),
+                "error_message": error ?? "",
+            ]
+            let spanStart: Date
+            if let startedAt {
+                tags["duration_measured"] = true
+                tags["duration_s"] = finishedAt.timeIntervalSince(startedAt)
+                spanStart = startedAt
+            } else {
+                tags["duration_measured"] = false
+                spanStart = finishedAt
+            }
             let span = Tracer.shared().startSpan(
                 operationName: "zippie.tunnel.connect",
-                tags: spanTags([
-                    "outcome": tunnelStatusName(status),
-                    "error_message": error ?? "",
-                    "duration_s": finishedAt.timeIntervalSince(startedAt),
-                ]),
-                startTime: startedAt
+                tags: spanTags(tags),
+                startTime: spanStart
             )
             if status != .connected { span.setTag(key: OTTags.error, value: true) }
             span.finish(at: finishedAt)
