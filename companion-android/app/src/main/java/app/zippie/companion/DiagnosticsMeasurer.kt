@@ -93,14 +93,10 @@ class DiagnosticsMeasurer(
 
         // Direct vs via-router is decided by whether THIS phone holds a tailnet
         // address, not by whether the tailnet answered. Both states answer; only
-        // one survives changing network.
+        // one survives changing network. See deriveTailnetPath for why this used
+        // to get that wrong.
         val tailnetAddr = tailnetAddress()
-        val tailnet = when {
-            tailnetAddr != null && mdm.isOk -> TailnetPath.Direct(tailnetAddr)
-            tailnetAddr != null -> TailnetPath.Unreachable(DiagnosticFailure.NoRoute)
-            mdm.isOk -> TailnetPath.ViaRouter(routerHost ?: "this network's router")
-            else -> TailnetPath.Unreachable(DiagnosticFailure.NoRoute)
-        }
+        val tailnet = deriveTailnetPath(tailnetAddr, mdm, routerHost ?: "this network's router")
 
         Diagnostics(
             ssid = ssid,
@@ -214,6 +210,41 @@ class DiagnosticsMeasurer(
             val parts = ip.split(".").mapNotNull { it.toIntOrNull() }
             if (parts.size != 4 || parts.any { it !in 0..255 }) return false
             return parts[0] == 100 && parts[1] in 64..127
+        }
+
+        /**
+         * Derives which of the four [TailnetPath] states applies, from what could
+         * actually be measured this pass. A pure decision, not a probe, so it is
+         * unit-tested directly - mirrors the iOS Kit's `TailnetPath.derive`.
+         *
+         * FIXES A REAL DEFECT FOUND LIVE 2026-09-12: the old inline `when` read
+         * `tailnetAddr != null && mdm.isOk -> Direct` and fell to
+         * `Unreachable(NoRoute)` both when this phone's own tailnet address was
+         * present but the (never-configured, `mdmHost` blank) MDM probe had not
+         * run, AND whenever that probe simply had not been attempted at all. Both
+         * turned a genuinely UNMEASURED fact into a DEFINITE claim of failure -
+         * every phone without its own Tailscale, on every build (mdmHost has no
+         * default), read "Cannot reach the tailnet" regardless of whether the
+         * router's forwarding actually worked.
+         *
+         * - `tailnetAddr` non-null: THIS PHONE'S OWN ADDRESS IS THE PROOF, full
+         *   stop - it does not need the MDM probe to also succeed, since that
+         *   probe tests a completely different path (via the router) this phone
+         *   never takes.
+         * - Otherwise `mdm` decides: `Ok` proves the router forwards for this
+         *   network; `Failed` proves it does not; `NotChecked` (no MDM host
+         *   configured to probe at all) proves nothing either way and must stay
+         *   `NotChecked` rather than guess.
+         */
+        fun deriveTailnetPath(
+            tailnetAddr: String?,
+            mdm: DiagnosticState,
+            routerHost: String,
+        ): TailnetPath = when {
+            tailnetAddr != null -> TailnetPath.Direct(tailnetAddr)
+            mdm is DiagnosticState.Ok -> TailnetPath.ViaRouter(routerHost)
+            mdm is DiagnosticState.NotChecked -> TailnetPath.NotChecked
+            else -> TailnetPath.Unreachable(DiagnosticFailure.NoRoute)
         }
     }
 }

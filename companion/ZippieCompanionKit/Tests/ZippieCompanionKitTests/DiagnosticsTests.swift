@@ -46,6 +46,49 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertEqual(row.hint, "this phone is pixel-6a")
     }
 
+    // MARK: - the derivation bug, found live 2026-09-12
+
+    /// THE ONE THAT MATTERS. Every shipped build has a blank mdmHost (#156: no
+    /// default is ever embedded), so `d.mdm` is ALWAYS `.notChecked` in
+    /// practice - which means the old `d.mdm.isOK ? .direct : .unreachable`
+    /// derivation reported "Cannot reach the tailnet" on every phone without
+    /// its own Tailscale, regardless of whether the router's forwarding
+    /// actually worked. Confirmed live: an iPhone on the travel router's wifi,
+    /// with a real bonded tunnel carrying traffic, showed this exact screen.
+    func testNoMdmHostConfiguredReadsAsNotCheckedNotUnreachable() {
+        let path = TailnetPath.derive(ownAddress: nil, mdm: .notChecked, routerHost: "suzu")
+        XCTAssertEqual(path, .notChecked, "an unattempted probe was reported as a definite failure")
+    }
+
+    /// The other half of the same bug: a phone with its OWN real Tailscale
+    /// client was reported as unreachable whenever the (unrelated, unrun) MDM
+    /// probe had not succeeded - which, per the above, is every build.
+    func testOwnTailscaleAddressIsSufficientProofRegardlessOfTheMdmProbe() {
+        XCTAssertEqual(
+            TailnetPath.derive(ownAddress: "pixel-6a-own-tailscale", mdm: .notChecked, routerHost: "suzu"),
+            .direct(nodeName: "pixel-6a-own-tailscale"),
+            "this phone's own tailnet address is proof on its own; it must not need a second, unrelated probe to also succeed"
+        )
+        XCTAssertEqual(
+            TailnetPath.derive(ownAddress: "pixel-6a-own-tailscale", mdm: .failed(.timedOut(seconds: 12)), routerHost: "suzu"),
+            .direct(nodeName: "pixel-6a-own-tailscale")
+        )
+    }
+
+    func testMdmProbeSucceedingProvesViaRouter() {
+        XCTAssertEqual(
+            TailnetPath.derive(ownAddress: nil, mdm: .ok(detail: nil), routerHost: "suzu"),
+            .viaRouter(host: "suzu")
+        )
+    }
+
+    func testMdmProbeGenuinelyFailingIsUnreachable() {
+        XCTAssertEqual(
+            TailnetPath.derive(ownAddress: nil, mdm: .failed(.timedOut(seconds: 12)), routerHost: "suzu"),
+            .unreachable(.noRoute)
+        )
+    }
+
     // MARK: - the silent 401
 
     func testARefusedAnnounceSaysWhyAndWhatToDo() {
