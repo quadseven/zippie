@@ -4,6 +4,7 @@ import DatadogRUM
 import DatadogTrace
 import Foundation
 import NetworkExtension
+import UIKit
 import ZippieCompanionKit
 
 /// Datadog wiring, so results reach an operator without a screenshot.
@@ -23,6 +24,42 @@ enum Observability {
     static let rumApplicationID = "99fa2439-5397-43a0-a6dd-9f127878eb7a"
     static let service = "zippie-companion"
 
+    /// #74 DECISION, RECORDED HERE BECAUSE THE ISSUE ASKED FOR IT IN WRITING.
+    ///
+    /// The other option was a separate service per platform. Rejected: every
+    /// dashboard and monitor that exists today is built against
+    /// `service:zippie-companion`, this change has no channel into Datadog's
+    /// live config to update them, and #74 requires "keep them working or
+    /// update them in the same change" - a change with no way to reach the
+    /// thing it would need to update cannot satisfy that. A platform tag
+    /// keeps every existing query working unchanged and ADDS the split as
+    /// `@platform:ios` / `@platform:android`, rather than replacing one
+    /// working query with two unproven ones.
+    ///
+    /// Android's `ddsource` has always read `"android"` (hardcoded in
+    /// `CellularLogShipper.event`), and the Datadog mobile SDKs are expected
+    /// to stamp iOS logs `ddsource:"ios"` the same way - but that is an SDK
+    /// internal, not something this app DECLARES, and relying on it is
+    /// exactly the "guessing from attributes" #74 was filed to end. `platform`
+    /// is set explicitly, by this app, so it is documented rather than
+    /// inherited.
+    static let platform = "ios"
+
+    /// The per-device identifier #74 asked for - reusing `LegName`, NOT a
+    /// second identity invented for Datadog. `LegName` is already this
+    /// phone's identity to the router (base name + 4 persisted hex chars, so
+    /// two same-model phones never collide - see `LegName.swift`), and it is
+    /// already computed the same way on Android (`RelayService.legName`).
+    /// Reusing it means a phone's Datadog stream and its leg in the bond read
+    /// the SAME string, which is what would have made the 2026-09-11
+    /// misdiagnosis impossible: "relay heartbeat" could not have looked like
+    /// one continuous stream from an iPhone when every line said which of
+    /// several Pixels it actually came from.
+    static let deviceIdentity: String = {
+        let defaults = RelayConfiguration.sharedDefaults ?? .standard
+        return LegName.resolve(in: defaults, deviceName: UIDevice.current.name)
+    }()
+
     static func start() {
         Datadog.initialize(
             with: Datadog.Configuration(
@@ -33,6 +70,13 @@ enum Observability {
             trackingConsent: .granted
         )
         Logs.enable()
+        // MANDATORY, not opt-in per call site (#74): every logger created
+        // from this point on - including `log` below - carries `platform`
+        // and `device` on every single line, the same way Android's
+        // `CellularLogShipper` bakes its tags into the class rather than
+        // trusting each call site to remember them.
+        Logs.addAttribute(forKey: "platform", value: platform)
+        Logs.addAttribute(forKey: "device", value: deviceIdentity)
         // Read ONCE and shared by both features. Two calls could disagree if
         // the operator edits the console address between them, and a request
         // that is first-party to RUM but third-party to Trace produces a
@@ -62,6 +106,10 @@ enum Observability {
                 return event
             }
         ))
+        // Same guarantee as the two lines after Logs.enable() above, for RUM's
+        // own attribute store: applies to every view/action/error/resource
+        // from here on, not just the ones a call site remembers to tag (#74).
+        RUMMonitor.shared().addAttributes(["platform": platform, "device": deviceIdentity])
         // APM. sampleRate 100 because this is a handful of users and a handful
         // of requests a minute; the default 20% would drop four out of five
         // console polls, and the whole point is being able to answer "what did
@@ -145,6 +193,19 @@ enum Observability {
         with: Logger.Configuration(service: service, networkInfoEnabled: true)
     )
 
+    /// `platform` and `device` on every span (#74). Trace has no
+    /// global-attribute call like `Logs.addAttribute` / `RUMMonitor.
+    /// addAttributes` above, so a span is the one signal that would otherwise
+    /// need every call site to remember these two tags by hand. Merged in
+    /// here instead, once, so a third `startSpan` added later gets them for
+    /// free rather than by copying the two lines correctly.
+    private static func spanTags(_ tags: [String: Encodable]) -> [String: Encodable] {
+        var merged = tags
+        merged["platform"] = platform
+        merged["device"] = deviceIdentity
+        return merged
+    }
+
     /// A probe run. The verdict is a first-class attribute so it can be graphed
     /// and alerted on - "did the last probe prove the pin" should be a monitor,
     /// not a memory.
@@ -175,7 +236,7 @@ enum Observability {
         let finishedAt = Date()
         let span = Tracer.shared().startSpan(
             operationName: "zippie.probe",
-            tags: attrs,
+            tags: spanTags(attrs),
             startTime: finishedAt.addingTimeInterval(-seconds)
         )
         // Only the two verdicts that mean the probe could not answer. A
@@ -276,11 +337,11 @@ enum Observability {
             let finishedAt = Date()
             let span = Tracer.shared().startSpan(
                 operationName: "zippie.tunnel.connect",
-                tags: [
+                tags: spanTags([
                     "outcome": tunnelStatusName(status),
                     "error_message": error ?? "",
                     "duration_s": finishedAt.timeIntervalSince(startedAt),
-                ],
+                ]),
                 startTime: startedAt
             )
             if status != .connected { span.setTag(key: OTTags.error, value: true) }

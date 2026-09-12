@@ -248,10 +248,26 @@ class RelayService : Service() {
         // are already queued when cellular finally binds and the first flush
         // goes out. Built even when the token is empty: the shipper no-ops, and
         // a null-check at every call site would be one more thing to forget.
+        // #74 DECISION: ONE Datadog service across both platforms, with a
+        // MANDATORY `platform` tag rather than a second service name. Every
+        // existing dashboard and monitor is built against
+        // `service:zippie-companion`; splitting the service would silently
+        // break all of them with no channel from this repo to fix Datadog's
+        // live config in the same change. `platform:android` here is the
+        // iOS side's explicit `Observability.platform` mirrored back -
+        // declared, not inferred from `ddsource` (which this shipper already
+        // hardcodes to "android" below, but that is an SDK/implementation
+        // detail, not a fact this app asserts on purpose). The per-device
+        // identifier #74 also asked for is `leg:`, already here: it is the
+        // same identity the router knows this phone by, which is what would
+        // have made the 2026-09-11 misdiagnosis impossible - "relay
+        // heartbeat" could not have read as one continuous stream when every
+        // line already said which Pixel it came from.
         shipper = CellularLogShipper(
             clientToken = validated.ddClientToken,
             site = validated.ddSite,
-            tags = "leg:" + (legName ?: "unresolved") + ",device:" + Build.MODEL,
+            service = "zippie-companion",
+            tags = "platform:android,leg:" + (legName ?: "unresolved") + ",device:" + Build.MODEL,
         )
         ship(
             "relay starting",
