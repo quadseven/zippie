@@ -53,20 +53,24 @@ final class ClientTunnel {
     private let queue = DispatchQueue(label: "app.zippie.client", qos: .userInitiated)
     private var running = false
 
-    // MARK: - path observation (#64)
+    // MARK: - path observation (#64) and rebuild (#65)
 
     /// Watches the SAME thing `start()` reads once at startup - whether an
     /// interface exists, is up, and what it is - but continuously, so an
-    /// Ethernet adapter arriving or leaving mid-drive is a recorded transition
-    /// rather than silence. Does not repin anything: that is #65's job, and
-    /// doing it here would blur which change fixed the reported freeze.
+    /// Ethernet adapter arriving or leaving mid-drive is a recorded
+    /// transition rather than silence, and drives `rebuildLegs()` below.
     private let pathMonitor = NWPathMonitor()
-    private let pathQueue = DispatchQueue(label: "app.zippie.client.path")
     private var lastPathSnapshot: PathSnapshot?
-    /// What `start()` actually admitted, kept for the path monitor's status
-    /// classification - the monitor fires on its own queue, arbitrarily long
-    /// after `start()` returns, and `admission` there was a local, gone by then.
+    /// What `start()` actually admitted, or what the last rebuild left
+    /// admitted - kept for the path monitor's status classification.
     private var admission = LegAdmission.none
+    /// Every link the datapath currently has a socket for, keyed by the
+    /// `pathID`s `rebuildLegs()` last told it about. NOT the same as
+    /// `config.repinned(using:)`'s output: that is what SHOULD exist right
+    /// now, this is what the datapath was actually, successfully told -
+    /// a link whose `AddLink` failed is left out on purpose, so the next
+    /// path event retries it rather than never touching it again.
+    private var pinnedLinks: [ClientConfig.Link] = []
 
     init(config: ClientConfig, packetFlow: NEPacketTunnelFlow) {
         self.config = config
@@ -157,8 +161,6 @@ final class ClientTunnel {
         // indistinguishable from a dead network.
         guard admission.isStartable else { throw ClientTunnelError.noLegs }
         Self.log.log("client legs: \(admission.summary, privacy: .public)")
-        self.admission = admission
-        startPathObservation()
 
         var err: NSError?
         guard let client = MobileNewClient(config.datapathJSON, &err) else {
@@ -172,21 +174,12 @@ final class ClientTunnel {
         }
         datapath = client
 
-        for link in pinned.links {
-            do {
-                try client.addLink(link.pathID, name: link.name,
-                                   device: link.device, remote: config.homeEndpoint,
-                                   weight: link.weight)
-                Self.log.info("client leg up: \(link.name, privacy: .public) on \(link.device, privacy: .public)")
-            } catch {
-                // One leg failing is not fatal - a phone with no cellular
-                // signal still has wifi - but it must be visible, because a
-                // "bond" quietly running on one leg is this project's oldest
-                // failure mode. The device name is no longer a suspect here:
-                // it was resolved from the live interface list moments ago.
-                Self.log.error("client leg \(link.name, privacy: .public) refused: \(error.localizedDescription, privacy: .public)")
-            }
-        }
+        pinnedLinks = applyLinkAdditions(pinned.links)
+        // Reflects what actually attached, not the pre-attempt resolved set -
+        // the same thing `rebuildLegs()` keeps in sync from here on, so
+        // startup and every later rebuild report `admission` the same way.
+        self.admission = LegAdmission.admit(pinnedLinks.map(\.device))
+        startPathObservation()
         client.start()
 
         try openLoopback(port: Int(client.localPort()))
@@ -208,38 +201,103 @@ final class ClientTunnel {
         #endif
     }
 
-    // MARK: - path observation (#64)
+    // MARK: - path observation (#64) and rebuild (#65)
 
     private func startPathObservation() {
         pathMonitor.pathUpdateHandler = { [weak self] path in
             self?.observed(path)
         }
-        pathMonitor.start(queue: pathQueue)
+        // `queue` ON PURPOSE, the same one socket reads already run on: it
+        // already serializes every mutation this class makes to
+        // `datapath`/`pinnedLinks`/`admission`, and a second, independent
+        // queue for the path monitor would be the one place in this file
+        // racing everywhere else.
+        pathMonitor.start(queue: queue)
     }
 
-    /// Runs on `pathQueue` for every update `NWPathMonitor` delivers,
-    /// including the first one - which is why `PathObserver.transitions`
-    /// and `.status` both treat a nil previous snapshot as a baseline rather
-    /// than manufacturing a transition out of the tunnel simply starting up.
+    /// Runs on `queue` for every update `NWPathMonitor` delivers, including
+    /// the first one - which is why `PathObserver.transitions` and `.status`
+    /// both treat a nil previous snapshot as a baseline rather than
+    /// manufacturing a transition out of the tunnel simply starting up.
     private func observed(_ path: Network.NWPath) {
         let current = PathSnapshot.from(path)
         let previous = lastPathSnapshot
         let changes = PathObserver.transitions(from: previous, to: current)
-        let status = PathObserver.status(previous: previous, current: current, legs: admission)
         lastPathSnapshot = current
+        guard !changes.isEmpty else { return }
+
+        rebuildLegs()
+
+        // Computed AFTER rebuilding, from the `admission` rebuildLegs() just
+        // updated - the outcome of the attempt, not the pre-rebuild guess.
+        let status = PathObserver.status(previous: previous, current: current, legs: admission)
 
         // BOUNDED, deliberately: interface name and type, a satisfied bit, and
         // a status word. No address, no route, no byte of user traffic - the
         // same discipline `PathInterfaceSnapshot` enforces by never carrying
         // more than that in the first place.
-        if !changes.isEmpty {
-            Self.log.log("""
-                path changed: \(String(describing: changes), privacy: .public) \
-                status=\(String(describing: status), privacy: .public) \
-                interfaces=\(current.interfaces.map(\.name).joined(separator: ","), privacy: .public)
-                """)
-        }
+        Self.log.log("""
+            path changed: \(String(describing: changes), privacy: .public) \
+            status=\(String(describing: status), privacy: .public) \
+            interfaces=\(current.interfaces.map(\.name).joined(separator: ","), privacy: .public)
+            """)
     }
+
+    #if canImport(Zippie)
+    /// Repins from the CURRENT OS state - not from `PathSnapshot`, which only
+    /// proves something changed, not what the datapath should bind to next.
+    /// `LiveInterfaces` plus `ClientConfig.repinned(using:)` is the tested
+    /// source for that, the same one `start()` used once (#48); this calls
+    /// it again on every observed path change instead of only at startup.
+    private func rebuildLegs() {
+        let resolved = config.repinned(using: LiveInterfaces.resolved())
+        let plan = ClientConfig.rebuildPlan(from: pinnedLinks, to: resolved.links)
+        guard !plan.isEmpty else { return }
+
+        for pathID in plan.toRemove {
+            datapath?.removeLink(pathID)
+            Self.log.info("client leg removed: path \(pathID, privacy: .public)")
+        }
+        let added = applyLinkAdditions(plan.toAdd)
+
+        // Everything currently resolved that was NOT part of this plan's
+        // additions was already pinned correctly and needed no Go call -
+        // carry it forward untouched. Anything in `plan.toAdd` that failed
+        // to attach is simply absent from both `added` and this set, which
+        // is what makes the next path event retry it rather than never
+        // trying again.
+        let addedIDs = Set(plan.toAdd.map(\.pathID))
+        let unchanged = resolved.links.filter { !addedIDs.contains($0.pathID) }
+        pinnedLinks = unchanged + added
+        admission = LegAdmission.admit(pinnedLinks.map(\.device))
+    }
+
+    /// Adds every link in `links` to the datapath, logging each outcome, and
+    /// returns only the ones that actually attached.
+    private func applyLinkAdditions(_ links: [ClientConfig.Link]) -> [ClientConfig.Link] {
+        var attached: [ClientConfig.Link] = []
+        for link in links {
+            do {
+                try datapath?.addLink(link.pathID, name: link.name,
+                                      device: link.device, remote: config.homeEndpoint,
+                                      weight: link.weight)
+                Self.log.info("client leg up: \(link.name, privacy: .public) on \(link.device, privacy: .public)")
+                attached.append(link)
+            } catch {
+                // One leg failing is not fatal - a phone with no cellular
+                // signal still has wifi - but it must be visible, because a
+                // "bond" quietly running on one leg is this project's oldest
+                // failure mode. The device name is no longer a suspect here:
+                // it was resolved from the live interface list moments ago.
+                Self.log.error("client leg \(link.name, privacy: .public) refused: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        return attached
+    }
+    #else
+    private func rebuildLegs() {}
+    private func applyLinkAdditions(_ links: [ClientConfig.Link]) -> [ClientConfig.Link] { [] }
+    #endif
 
     // MARK: - the two directions
 

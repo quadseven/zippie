@@ -629,4 +629,34 @@ final class CallSiteWiringTests: XCTestCase {
         }
     }
 
+    /// #65: an observed path change must actually reach the datapath, not
+    /// only a log line (#64 shipped the observation; this is the fix on top
+    /// of it). And the two other guarantees the issue asked for by name:
+    /// contributor mode carries none of this, and the startup refusal for an
+    /// unpinnable config was not lost in the refactor that introduced it.
+    func testAnObservedPathChangeActuallyRebuildsLegs() throws {
+        let text = try source("ZippieCompanionTunnel/ClientTunnel.swift")
+        assertCalls(text, "rebuildLegs()",
+                    "observed(_:) no longer rebuilds legs - an Ethernet insertion would "
+                  + "log a transition and change nothing")
+        assertCalls(text, "ClientConfig.rebuildPlan(from: pinnedLinks, to: resolved.links)",
+                    "rebuildLegs() no longer asks the Kit's tested diff for what to add "
+                  + "or remove")
+        assertCalls(text, "datapath?.removeLink(pathID)",
+                    "a leg whose interface disappeared is never told to the datapath - "
+                  + "its socket would sit there stale")
+        assertCalls(text, "guard admission.isStartable else { throw ClientTunnelError.noLegs }",
+                    "client mode no longer refuses a config with no pinnable leg at "
+                  + "startup")
+    }
+
+    func testContributorModeCarriesNoClientPathRebuildMachinery() throws {
+        let text = try source("ZippieCompanionTunnel/PacketTunnelProvider.swift")
+        for needle in ["NWPathMonitor", "rebuildLegs", "ClientConfig.rebuildPlan"] {
+            assertDoesNotContain(text, needle,
+                                "the contributor path picked up client mode's path-rebuild "
+                              + "machinery - these two modes must stay independent")
+        }
+    }
+
 }
