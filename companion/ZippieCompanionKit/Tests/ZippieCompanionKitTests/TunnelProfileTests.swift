@@ -191,8 +191,8 @@ final class TunnelProfileTests: XCTestCase {
             ModeDecision(proximity: .local),
             relay: relay(["TravelRouter", "GL-MT3000-000"]), client: nil)))
         XCTAssertTrue(contributing.isOnDemandEnabled)
-        XCTAssertEqual(contributing.onDemandRules?.count, 3,
-                       "connect on the router's wifi, leave a cable alone, disconnect elsewhere")
+        XCTAssertTrue(contributing.onDemandRules?.first is NEOnDemandRuleConnect)
+        XCTAssertTrue(contributing.onDemandRules?.last is NEOnDemandRuleIgnore)
         let connect = try XCTUnwrap(contributing.onDemandRules?.first as? NEOnDemandRuleConnect)
         XCTAssertEqual(connect.ssidMatch, ["TravelRouter", "GL-MT3000-000"])
 
@@ -213,17 +213,28 @@ final class TunnelProfileTests: XCTestCase {
         let rules = try XCTUnwrap(installed(TunnelPlan.decide(
             ModeDecision(proximity: .local), relay: relay(), client: nil))?.onDemandRules)
 
-        let wired = rules.filter { $0.interfaceTypeMatch == .ethernet }
-        XCTAssertEqual(wired.count, 1, "exactly one rule speaks for a cable")
-        XCTAssertTrue(wired.first is NEOnDemandRuleIgnore,
+        // The last word belongs to an Ignore, so an interface that is neither
+        // the router's wifi nor cellular - a cable - keeps whatever state the
+        // operator put it in.
+        let last = try XCTUnwrap(rules.last)
+        XCTAssertTrue(last is NEOnDemandRuleIgnore,
                       "a cable must be IGNORED - disconnecting it is the bug, and "
                     + "connecting on it would auto-start on any hotel's ethernet")
+        XCTAssertEqual(last.interfaceTypeMatch, .any)
 
-        // Order is load-bearing: iOS takes the FIRST matching rule, so the
-        // ignore must come before the catch-all or it never gets a say.
-        let ignoreAt = try XCTUnwrap(rules.firstIndex { $0 is NEOnDemandRuleIgnore })
-        let disconnectAt = try XCTUnwrap(rules.firstIndex { $0 is NEOnDemandRuleDisconnect })
-        XCTAssertLessThan(ignoreAt, disconnectAt)
+        // Every Disconnect must now name the interface it speaks for. A
+        // catch-all Disconnect anywhere in the list would sweep a cable back
+        // up and reinstate the fault.
+        for rule in rules where rule is NEOnDemandRuleDisconnect {
+            XCTAssertNotEqual(rule.interfaceTypeMatch, .any,
+                              "an unscoped Disconnect is what killed the wired tunnel")
+        }
+        // Other wifi must still be disconnected on every platform. The
+        // cellular half is iOS-only and therefore uncompilable here - it is
+        // pinned by CallSiteWiringTests reading the source instead.
+        let disconnects = rules.filter { $0 is NEOnDemandRuleDisconnect }
+        XCTAssertTrue(disconnects.contains { $0.interfaceTypeMatch == .wiFi },
+                      "leaving the router's wifi for another must still stop the tunnel")
     }
 
     /// The wifi behaviour this change must not disturb: on the router's own
@@ -274,7 +285,7 @@ final class TunnelProfileTests: XCTestCase {
         TunnelProfile.disarmOnDemand(on: manager)
         XCTAssertFalse(manager.isOnDemandEnabled,
                        "a stop that leaves this true is a restart on the router's wifi")
-        XCTAssertEqual(manager.onDemandRules?.count, 3, "the rules are not the switch")
+        XCTAssertFalse(manager.onDemandRules?.isEmpty ?? true, "the rules are not the switch")
 
         _ = installed(TunnelPlan.decide(ModeDecision(proximity: .local),
                                         relay: relay(["TravelRouter"]), client: nil),

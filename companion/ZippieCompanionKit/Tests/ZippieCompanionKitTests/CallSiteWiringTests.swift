@@ -277,4 +277,29 @@ final class CallSiteWiringTests: XCTestCase {
                     + "instrumentation because it looks like coverage")
     }
 
+
+    /// The cellular Disconnect rule cannot be asserted by running code here:
+    /// NEOnDemandRuleInterfaceType.cellular is iOS-ONLY and this package's own
+    /// tests compile for macOS, where the case does not exist. (.ethernet is
+    /// the mirror image - macOS-only - and writing it here passed every local
+    /// check before failing the iOS app build.) So its presence is read from
+    /// the source instead, or dropping it would silently leave the tunnel
+    /// running on cellular all day after the phone leaves the router.
+    func testTheCellularDisconnectRuleStillExistsForIOS() throws {
+        let text = try source("ZippieCompanionKit/Sources/ZippieCompanionKit/TunnelProfile.swift")
+        XCTAssertTrue(text.contains("#if os(iOS)"),
+                      "the iOS-only rule must stay behind a platform guard")
+        XCTAssertTrue(text.contains("onCellular.interfaceTypeMatch = .cellular"),
+                      "a phone that walks away from the router onto cellular must "
+                    + "still be disconnected")
+        // CODE ONLY. The first version of this check failed on the comment
+        // that warns against the very thing it forbids - a text tripwire that
+        // cannot tell an instruction from a prohibition is worse than none.
+        let code = text.split(separator: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+        XCTAssertFalse(code.contains("interfaceTypeMatch = .ethernet"),
+                       "'ethernet' is unavailable in iOS and fails the app build")
+    }
+
 }

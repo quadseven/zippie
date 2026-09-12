@@ -77,37 +77,68 @@ public struct TunnelProfile: Sendable {
 
         // A CABLE IS NOT "SOMEWHERE ELSE".
         //
-        // An SSID cannot answer "am I on the router's network?" for a wired
-        // interface, because a wired interface has no SSID. So the Connect
-        // rule above can never match one, and the catch-all below matched
-        // instead: iOS tore the tunnel down within two seconds of every
-        // manual start on a phone plugged into the router's LAN port.
+        // This used to be Connect(wifi + SSID) followed by ONE catch-all
+        // Disconnect. A wired interface has no SSID and cannot match
+        // interfaceTypeMatch = .wiFi, so the Connect rule was unmatchable on a
+        // cable and the catch-all matched instead: iOS tore the tunnel down
+        // within two seconds of every manual start on a phone plugged into the
+        // router's LAN port.
         //
-        // MEASURED 2026-09-11, phone wired to the router, relay pressed
-        // twice: six status transitions in 1.72s, then five in 1.79s, with
-        // an EMPTY error string at every step, on a phone whose Local
-        // Network and Cellular permissions were both granted and whose app
-        // was polling the router's console successfully throughout. Nothing
-        // was failing. The tunnel was being switched off on policy, by the
-        // rule below, and the operator saw "it connects for a split second
-        // and says Off again".
+        // MEASURED 2026-09-11, relay pressed twice: six status transitions in
+        // 1.72s, then five in 1.79s, with an EMPTY error string at every step,
+        // on a phone whose Local Network and Cellular permissions were both
+        // granted and whose app was polling the router's console successfully
+        // over that same cable throughout. Nothing was failing. The tunnel was
+        // being switched off on policy, and the operator saw "it connects for
+        // a split second and says Off again".
         //
-        // IGNORE, NOT CONNECT, and that distinction is the honest one.
-        // Nothing here can tell the router's LAN from a hotel's from the
-        // interface type alone, so this deliberately does NOT start the
-        // tunnel on any cable it happens to find - that would be the
-        // unconditional on-demand the SSID scoping exists to avoid, wearing
-        // a different hat. It only stops the system from undoing a start the
-        // operator explicitly asked for. Auto-connect on a RECOGNISED wired
-        // network needs a positive test of the network's identity - the
-        // router's console answering on the LAN - which is #65.
-        let wired = NEOnDemandRuleIgnore()
-        wired.interfaceTypeMatch = .ethernet
+        // SO THE CATCH-ALL IS SPLIT INTO THE TWO CASES IT WAS WRITTEN FOR -
+        // some other wifi, or out on cellular - and a cable falls through to
+        // an explicit Ignore instead of being swept up as "away from home".
+        //
+        // NOT interfaceTypeMatch = .ethernet, WHICH DOES NOT EXIST HERE.
+        // NEOnDemandRuleInterfaceType.ethernet is macOS-only; on iOS the enum
+        // offers .any, .wiFi and .cellular and nothing else. This was written
+        // with .ethernet first and every local check passed - `swift test`
+        // builds this package for MACOS, where the case exists - and it failed
+        // only in `xcodebuild` for the iOS app with "'ethernet' is unavailable
+        // in iOS". Any NetworkExtension API used in this Kit has to exist on
+        // iOS, and the Kit's own test run is not evidence that it does.
+        //
+        // IGNORE, NOT CONNECT, and that distinction is the honest one. Nothing
+        // here can tell the router's LAN from a hotel's, so this deliberately
+        // does NOT start the tunnel on any cable it happens to find - that
+        // would be the unconditional on-demand the SSID scoping exists to
+        // avoid, wearing a different hat. It only stops the system from
+        // undoing a start the operator explicitly asked for. Auto-connect on a
+        // RECOGNISED wired network needs a positive test of the network's
+        // identity - the router's console answering on the LAN - which is #65.
+        let otherWifi = NEOnDemandRuleDisconnect()
+        otherWifi.interfaceTypeMatch = .wiFi
 
-        // Everything that is neither the router's wifi nor a cable explicitly
-        // disconnects, rather than being left to an implicit default that has
-        // changed between iOS releases.
-        return [connect, wired, NEOnDemandRuleDisconnect()]
+        var rules: [NEOnDemandRule] = [connect, otherWifi]
+
+        // .cellular IS iOS-ONLY, the exact mirror of .ethernet above. This
+        // package compiles for MACOS under `swift test` and for IOS in the
+        // app, and the two platforms publish DIFFERENT cases of this enum -
+        // only .any and .wiFi exist in both. So the cellular rule is built
+        // only where the case exists, and its presence is pinned by a source
+        // read in CallSiteWiringTests, because a macOS test run cannot compile
+        // this line to assert on it.
+        #if os(iOS)
+        let onCellular = NEOnDemandRuleDisconnect()
+        onCellular.interfaceTypeMatch = .cellular
+        rules.append(onCellular)
+        #endif
+
+        // Explicit, not a fallthrough. The single rule this replaced carried a
+        // comment about not leaving behaviour "to an implicit default that has
+        // changed between iOS releases", and an unmatched interface would be
+        // exactly that - so the last word is stated rather than assumed.
+        let anythingElse = NEOnDemandRuleIgnore()
+        anythingElse.interfaceTypeMatch = .any
+        rules.append(anythingElse)
+        return rules
     }
 
     /// Put this plan on the manager, replacing whatever the last start left.
