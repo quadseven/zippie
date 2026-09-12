@@ -353,14 +353,16 @@ def test_a_genuinely_oscillating_leg_never_regains_its_full_weight(tmp_path, clo
 
     The 2026-07-30 incident that produced this gate was a hotspot leg yo-yoing
     between healthy and dead, breaking every long-lived connection on each
-    bounce. That leg alternates: one pass up, one pass gone, forever.
+    bounce. Here it alternates every other pass: gone, alive, gone, alive.
 
-    The decay rate IS the discriminator, and that is why it is one point per
-    pass. A leg that is up half the time nets zero credit per cycle and can
-    never finish the streak, so it is capped at the probation floor for as
-    long as it keeps oscillating - it carries a little rather than nothing,
-    and it never gets its configured weight back. A leg that is up most of the
-    time drifts upward and finishes (the decay test above).
+    THE DECAY RATE IS THE DISCRIMINATOR, and that is why it is one point per
+    failed pass against the 0.5 a degraded-but-alive pass earns. This leg nets
+    -0.5 per cycle and can never finish the streak, so it is capped at the
+    probation floor for as long as it keeps oscillating: it carries a little
+    rather than nothing, and it never gets its configured weight back. A leg
+    that is alive five passes in six drifts upward and finishes outright -
+    that is the decay test above, and the two together are the whole
+    behaviour.
     """
     a = _agent(tmp_path)
     _steady(a)
@@ -392,12 +394,13 @@ def test_a_leg_that_proves_itself_then_starts_yo_yoing_is_damped_again(
     long-lived connections. So the interesting case is a leg with a FINISHED
     streak behind it, not one that never had one.
 
-    The trap this pins is credit that is banked rather than spent. If a leg
-    kept the evidence it had gathered, a single failed pass would cost one
-    point out of eight and it would be back at full weight two passes later,
-    on every bounce, forever. Found by the test below it while writing #61:
-    the anti-flap gate used to get this for free from the erase-on-DOWN that
-    #61 had to remove.
+    The trap this pins is credit that is BANKED rather than spent. A leg that
+    kept the evidence it gathered would arrive at its next failure holding a
+    point per pass it had been carrying, lose one to the failure, and be back
+    at full weight on the pass after - on every bounce, forever. The gate used
+    to get this for free from the erase-on-DOWN that #61 had to remove, so it
+    is now explicit. Found by
+    test_a_re_admitted_leg_can_be_put_on_probation_again_later below.
     """
     a = _agent(tmp_path)
     _steady(a)
