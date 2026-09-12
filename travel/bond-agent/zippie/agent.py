@@ -5,6 +5,7 @@ import gzip
 import json
 import logging
 import os
+import re
 import secrets
 import signal
 import ssl
@@ -17,7 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlparse
 
-from zippie import __version__, build, net, policy, telemetry, wifi, wifi_uci
+from zippie import __version__, build, net, policy, shaper, telemetry, wifi, wifi_uci
 from zippie.config import load_config, validate_dashboard_tls
 from zippie.counters import (
     DEFAULT_SERIES_MAX_RESPONSE_POINTS,
@@ -243,6 +244,16 @@ SQM_UCI_ENABLED = f"sqm.{PACKET_IFACE}.enabled"
 # same reason RESOLVER_KICK_TIMEOUT_S exists in net.py. On expiry the bond is
 # left up and unshaped, which is the state it was in before this ran.
 SQM_RESTART_TIMEOUT_S = 15.0
+# sqm-scripts' OWN naming convention for the ingress redirect - confirmed live
+# on the travel router (2026-09-12, `ip -o link show`), not assumed: `tc`
+# cannot shape ingress on a real interface directly, so sqm mirrors PACKET_
+# IFACE's inbound traffic onto this virtual device and puts cake's DOWNLOAD-
+# direction qdisc there. PACKET_IFACE's own root qdisc is upload. Both are
+# `tc qdisc change ... cake bandwidth`-able in place, confirmed live the same
+# day: the handle number is unchanged and every other cake parameter
+# (besteffort, triple-isolate, ...) survives untouched - the bandwidth alone
+# moves, with no drop in an already-carrying tunnel (#41).
+PACKET_IFACE_INGRESS = f"ifb4{PACKET_IFACE}"
 # THE ROUTE MUST BE EARNED WITH BULK, NOT WITH HELLO. Within this window the
 # datapath has to deliver both a minimum number of payloads AND a minimum byte
 # volume before the default route is installed. Counts alone cannot do it: the
@@ -685,6 +696,21 @@ class BondAgent:
         # tunnel rebuild: a wrecked pbz0 is rebuilt on every pass until it
         # holds, and the same INFO line on each of them is the #87 spam again.
         self._bond_unshaped_announced = False
+        # Adaptive cake rate (#41). Constructed unconditionally - the fields
+        # cost nothing idle - and consulted only when shaper_auto_rate is on,
+        # same pattern config-gated features already follow in this class.
+        self._shaper = shaper.ShaperRateController(
+            capacity_fraction=self.config.policy.shaper_capacity_fraction,
+            min_download_kbit=self.config.policy.shaper_min_download_kbit,
+            min_upload_kbit=self.config.policy.shaper_min_upload_kbit,
+            hysteresis_pct=self.config.policy.shaper_reapply_hysteresis_pct,
+            decay_s=self.config.policy.shaper_capacity_decay_s,
+        )
+        # Last rate this agent actually applied via `tc`, published in status
+        # so "what did the shaper pick" is answerable without SSHing in and
+        # running `tc qdisc show` by hand - the same reason path.weight and
+        # every other live-computed number in this class is exported.
+        self._shaper_applied_kbit: tuple[float, float] | None = None
         # SEEDED FROM DISK so a cold boot has somewhere to send keepalives
         # before DNS works at all (#182). Without this the agent cannot resolve
         # home without internet, cannot get internet without a carrying leg, and
@@ -1500,6 +1526,125 @@ class BondAgent:
                     and parts[1] == "cake" and "root" in parts):
                 return True
         return False
+
+    @staticmethod
+    def _read_cake_bandwidth_kbit(iface: str) -> float | None:
+        """The ROOT cake qdisc's actual `bandwidth`, in kbit, or `None`.
+
+        Reads the live number back from `tc` rather than trusting anything
+        this process last commanded - the same reason `_bond_qdisc_is_cake`
+        exists at all: only `tc` proves what is really on the interface.
+        `cake`'s own output uses `bit`/`Kbit`/`Mbit`/`Gbit`; sqm always
+        configures in kbit, so this returns that unit regardless of which one
+        `tc` chose to print.
+        """
+        proc = net.run_or_dry(["tc", "qdisc", "show", "dev", iface], check=False)
+        if proc.returncode != 0:
+            return None
+        scale = {"bit": 0.001, "Kbit": 1.0, "Mbit": 1_000.0, "Gbit": 1_000_000.0}
+        for line in (proc.stdout or "").splitlines():
+            parts = line.split()
+            if not (len(parts) >= 2 and parts[0] == "qdisc"
+                    and parts[1] == "cake" and "root" in parts):
+                continue
+            match = re.search(r"bandwidth\s+([\d.]+)(bit|Kbit|Mbit|Gbit)\b", line)
+            if not match:
+                return None
+            return float(match.group(1)) * scale[match.group(2)]
+        return None
+
+    def _update_bond_shaper_rate(self) -> None:
+        """Recompute the bond's cake rate from what the legs are carrying,
+        and apply it if the estimate moved enough to be worth it (#41).
+
+        GATED ON PACKET MODE, same as the shaper itself - #42's own "Out of
+        scope" note: route mode has no single interface both the flows and
+        the whole bond are visible on for cake to shape.
+
+        GATED ON CAKE ALREADY BEING THE ROOT QDISC. `_ensure_bond_shaped`
+        attaches it when `pbz0` first comes up; this runs every tick
+        regardless, so a bond that has not been shaped yet - or was never
+        enabled in uci - is silently skipped rather than logged as a
+        failure. `_ensure_bond_shaped` already owns announcing that state.
+
+        `tc qdisc change`, NOT `uci set` + a restart. This never writes uci,
+        so `sqm.pbz0.download`/`.upload` stay exactly what the operator (or
+        the deploy script, once) put there - the value a reboot falls back
+        to - and a live change here does not race `_ensure_bond_shaped`'s own
+        restart-based re-attachment, which only ever runs right after the
+        interface is (re)created, never on a steady tick. Confirmed live on
+        the travel router (2026-09-12): `change` updates the running qdisc's
+        `bandwidth` in place - same handle, every other cake parameter
+        untouched, no gap in an already-carrying tunnel.
+
+        BEST-EFFORT, LIKE `_ensure_bond_shaped`. A failed `tc` call leaves
+        the rate exactly where it was, which is always a previously-applied
+        (or the operator's original) number, never "unshaped" - and never
+        raises: a queue that is shaped at the wrong rate is a worse commute,
+        a bond that will not come up is a stranded router.
+        """
+        if not self.config.policy.shaper_auto_rate:
+            return
+        if self.config.policy.datapath is not Datapath.PACKET:
+            return
+        if not self._bond_qdisc_is_cake():
+            return
+
+        carrying: dict[str, tuple[float | None, float | None]] = {}
+        for path in self.paths:
+            pid = self._transport_ids.get(path.name)
+            if self._leg_activity_facts(path, pid)["contributing"]:
+                carrying[path.name] = (path.rx_bps, path.tx_bps)
+
+        result = self._shaper.update(carrying)
+        if result is None:
+            return
+        download_kbit, upload_kbit = result
+        self._apply_shaper_rate(download_kbit, upload_kbit)
+
+    def _apply_shaper_rate(self, download_kbit: float, upload_kbit: float) -> None:
+        try:
+            up_proc = net.run_or_dry(
+                ["tc", "qdisc", "change", "dev", PACKET_IFACE, "root", "cake",
+                 "bandwidth", f"{upload_kbit:.0f}kbit"],
+                check=False,
+            )
+            down_proc = net.run_or_dry(
+                ["tc", "qdisc", "change", "dev", PACKET_IFACE_INGRESS, "root",
+                 "cake", "bandwidth", f"{download_kbit:.0f}kbit"],
+                check=False,
+            )
+        except net.NetError as exc:
+            # Every call above is check=False; the only way here is a
+            # timeout. The qdisc keeps whatever rate it already had.
+            log.warning("could not apply adaptive shaper rate to %s: %s",
+                        PACKET_IFACE, exc)
+            self._shaper.force_reapply()  # retry next tick, not on next drift
+            return
+        # READ BACK, not trust the exit code - the same lesson
+        # _ensure_bond_shaped already learned from a restart that exited 0
+        # and changed nothing.
+        applied_down = self._read_cake_bandwidth_kbit(PACKET_IFACE_INGRESS)
+        applied_up = self._read_cake_bandwidth_kbit(PACKET_IFACE)
+        down_ok = applied_down is not None and abs(applied_down - download_kbit) < 1.0
+        up_ok = applied_up is not None and abs(applied_up - upload_kbit) < 1.0
+        if down_ok and up_ok:
+            self._shaper_applied_kbit = (download_kbit, upload_kbit)
+            log.info(
+                "%s shaper: download %.0f kbit, upload %.0f kbit (estimated from carrying legs)",
+                PACKET_IFACE, download_kbit, upload_kbit,
+            )
+        else:
+            log.warning(
+                "adaptive shaper rate did not take on %s: wanted down=%.0f "
+                "up=%.0f kbit, tc now reads down=%s up=%s (down: %s, up: %s)",
+                PACKET_IFACE, download_kbit, upload_kbit,
+                applied_down, applied_up,
+                _command_output(down_proc), _command_output(up_proc),
+            )
+            # So the next tick retries this rate rather than waiting for the
+            # estimate to drift past the hysteresis band again.
+            self._shaper.force_reapply()
 
     def ensure_tunnels(self) -> None:
         """Bring the per-leg tunnels into line with the config, leg by leg.
@@ -3690,6 +3835,21 @@ class BondAgent:
                 # "standdown is quiet" would hide a leg running hot.
                 "bond_standdown_held_sole_uplink": self._standdown.holds,
                 "bond_standdown_reason": self._standdown.reason,
+                # What the adaptive shaper (#41) last applied AND verified via
+                # `tc` (see _apply_shaper_rate) - None until the first
+                # successful apply, which on a fresh boot is ordinary: cake
+                # has to be attached (_ensure_bond_shaped) and at least one
+                # leg has to carry something before there is a rate to
+                # report. A wrong rate is otherwise invisible (#41's own
+                # words); this is the one place to see what it picked
+                # without SSHing in and running `tc qdisc show` by hand.
+                "shaper_auto_rate": self.config.policy.shaper_auto_rate,
+                "shaper_download_kbit": (
+                    self._shaper_applied_kbit[0] if self._shaper_applied_kbit else None
+                ),
+                "shaper_upload_kbit": (
+                    self._shaper_applied_kbit[1] if self._shaper_applied_kbit else None
+                ),
                 "pid": os.getpid(),
                 "config_path": self.config_meta.get("path"),
                 "config_sha256": self.config_meta.get("sha256"),
@@ -4625,6 +4785,12 @@ class BondAgent:
         self.probe_paths()
         self.sample_counters()
         self.apply_policy()
+        # AFTER apply_policy, same tick: needs this pass's contributing/
+        # effective_weight facts to know which legs to sum, and AFTER
+        # sample_counters so it sees this pass's rx_bps/tx_bps rather than
+        # lagging them by one tick, the same ordering apply_auto_cost_class
+        # above already follows for the same reason (#41).
+        self._update_bond_shaper_rate()
         self.sync_transport()
         # In the TICK, not inside sync_transport, which returns early in route
         # mode. Resolution health is exactly as interesting there - route mode
