@@ -8,6 +8,9 @@ import ZippieCompanionKit
 /// reads status back: iOS owns the resolver slot and remains the authority on
 /// whether this setting is in effect.
 struct NextDNSSettingsScreen: View {
+    /// #77: see `RelayScreen.rumViewName` for why this is named once, here.
+    private static let rumViewName = "NextDNS Settings"
+
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var controller = DNSSettingsController(
         manager: SystemDNSSettingsManager())
@@ -64,6 +67,10 @@ struct NextDNSSettingsScreen: View {
             guard phase == .active else { return }
             Task { await controller.refreshStatus() }
         }
+        // #77: "Use NextDNS" / "Stop using NextDNS" above were RUM actions
+        // with no view to attribute to but ApplicationLaunch.
+        .onAppear { Observability.viewAppeared(Self.rumViewName) }
+        .onDisappear { Observability.viewDisappeared(Self.rumViewName) }
     }
 
     private var status: some View {

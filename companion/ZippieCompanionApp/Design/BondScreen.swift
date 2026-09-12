@@ -13,6 +13,9 @@ import ZippieCompanionKit
 /// leg would add three edges and a shadow to say something the whitespace
 /// already says, and nested cards would be worse.
 struct BondScreen: View {
+    /// #77: see `RelayScreen.rumViewName` for why this is named once, here.
+    private static let rumViewName = "Bond"
+
     @ObservedObject var model: BondModel
 
     var body: some View {
@@ -52,6 +55,11 @@ struct BondScreen: View {
                     }
                 }
         }
+        // #77: this is the tab someone opens first, so its RUM events -
+        // including the two NavigationLinks above - were attributing to
+        // ApplicationLaunch like every other screen was before this.
+        .onAppear { Observability.viewAppeared(Self.rumViewName) }
+        .onDisappear { Observability.viewDisappeared(Self.rumViewName) }
     }
 
     private var content: some View {
