@@ -85,7 +85,18 @@ Residual risks are documented in the module rather than glossed: there is no
 replay protection (the MAC cannot cover a NAT-rewritten source address), an
 attacker who knows the current epoch can hold the takeover window shut against
 a genuine restart until `REQUIRE`, and there is no forward secrecy or automatic
-rotation. Rotation has no key overlap yet, so rotating is an outage.
+rotation.
+
+**Rotating the key is a four-step overlap, home first at every step.** An end
+signs with `<auth_key_file>` and also accepts `<auth_key_file>.previous` while
+that file exists; each step is a file change at one end followed by a restart
+of that end, because the key files are read once when the identity is built.
+Home: new key into `.previous`. Router: new key to current, old key to
+`.previous`. Home: new key to current, remove `.previous`. Router: remove
+`.previous`. The new key goes into `.previous` at home first rather than into
+current, because home moving its signing key first would have it signing with
+a key the router cannot yet verify. Removing `.previous` is the operator's
+act; the router's key refresh writes it and never deletes it.
 
 ## Working on it
 

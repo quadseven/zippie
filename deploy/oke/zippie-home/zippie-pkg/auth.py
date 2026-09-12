@@ -64,6 +64,50 @@ at every step, because home is reachable and the router may be in a moving car:
 AT ANY STEP, roll back by returning that end to the previous rung and
 restarting it. A rung is a flag, not a migration.
 
+ROTATING THE KEY AFTERWARDS (#13). The ladder covers turning authentication
+on; it says nothing about changing the secret once both ends sign. With one
+key per end there is no moment at which the old and the new key both verify,
+so a rotation is both ends changing at the same instant - and on the travel
+router the management path rides the very link the key protects, so a
+rotation that breaks the bond also removes the route to the fix. Measured
+while doing something else: an agent restart takes the router off the network
+for 30-60 seconds, and a failed one took it off for eleven and a half minutes
+until an armed rollback rescued it. A key that cannot be rotated without that
+is a key that never gets rotated.
+
+So an end may hold TWO keys: the one it signs with (`<auth_key_file>`) and a
+retired one it still accepts (`<auth_key_file>.previous`, same mode, same
+format, written beside the first by the router's own key refresh). The
+receive side accepts a MAC under either; the send side only ever uses
+current. That is the same asymmetry the ladder already uses between what a
+rung emits and what it accepts, and it is what lets the two ends move one at
+a time. The retired key stops being accepted when its file is removed, which
+is the operator's explicit act - the same shape as the ladder's last rung.
+
+THE ORDER, home first at every step for the reason the ladder gives. Each
+step is one file change at one end followed by rebuilding that end's
+identity, which means restarting it: the router's agent reads the key files
+once in `start_transport` and the home pod reads them once in
+`build_home_transport`, and neither re-reads on its own.
+
+    1. Home: write the NEW secret to `.previous`, current stays OLD. Restart
+       home. It now accepts both and still signs OLD, so the router, which
+       knows only OLD, notices nothing. Verify: home logs the retired key's
+       id beside the current one, and the router's auth.rejected stays flat.
+    2. Router: NEW to current, OLD to `.previous`. Restart the agent. The
+       router signs NEW, which home accepts under its `.previous`; home still
+       signs OLD, which the router accepts under its `.previous`. Verify:
+       auth.verified climbs at both ends and auth.rejected stays flat.
+    3. Home: NEW to current, remove `.previous`. Restart home. Both ends now
+       sign NEW and verify it as current. Verify as in step 2.
+    4. Router: remove `.previous`. Restart the agent. Only now is OLD refused
+       everywhere.
+
+The new key goes into `.previous` at home FIRST rather than into current,
+because home moving its signing key first would have it signing with a key
+the router cannot yet verify - which is the outage this exists to avoid. At
+any step, roll back by restoring that end's files and restarting it.
+
 WHAT THIS DOES NOT DO, stated plainly so nobody reads more into it than is
 there:
 
@@ -76,8 +120,9 @@ there:
     who can do worse things anyway. Closing it needs the roam to additionally
     require a sequence the stream has not seen; that is a separate change.
   - NO FORWARD SECRECY and no automatic rotation. Rotating the secret is an
-    operator action at both ends, and at the require rung it is an outage
-    window.
+    operator action at both ends, in the order above. The overlap makes it
+    performable without an outage; nothing here decides WHEN to rotate, and
+    a retired key stays accepted for exactly as long as its file exists.
   - NO CONFIDENTIALITY, on purpose. See new_bond_identity.
 """
 
@@ -85,6 +130,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import os
 import struct
 from dataclasses import dataclass
@@ -96,6 +142,8 @@ from enum import IntEnum
 # are private names in datapath.py; importing them is deliberate, because the
 # alternative is a second copy of the same two constants that can drift.
 from zippie.datapath import _MAGIC, _VERSION, DatapathError, Frame
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Wire v3
@@ -262,15 +310,59 @@ def load_bond_secret(path: str) -> bytes:
     return secret
 
 
+# Where the retired secret lives: beside the current one, under this suffix.
+# The router's key refresh (the module that talks to muster, which this one
+# must never import) writes it there at 0600 with nothing appended; a test runs
+# this reader against what that writer produces, because the two live in
+# different modules and only this one ships to the home end. If they ever
+# disagreed the retired key would be delivered and never read, which looks
+# exactly like a rotation that broke the bond.
+PREVIOUS_KEY_SUFFIX = ".previous"
+
+
+def load_previous_bond_secret(key_file: str) -> bytes | None:
+    """Read the RETIRED secret from `<key_file>.previous`, or None if there is
+    no such file.
+
+    ABSENT IS THE NORMAL STATE, not an error and not a warning. A previous key
+    exists only for the duration of a rotation, and a deployment that has
+    never rotated - which is every deployment before the first time - has no
+    such file and must start exactly as it always did. The one thing an absent
+    file must never be is quietly confused with a present one that cannot be
+    read: a file that exists but is readable by others, or is too short, is
+    refused with the same errors as the current key, because a retired key is
+    still a key that verifies frames and gets the same protection.
+
+    Takes the CURRENT key file's path rather than the previous one's, so the
+    naming convention lives here and in the writer and nowhere else; a caller
+    that could spell the suffix itself could also misspell it, and a misspelled
+    previous key reads as absent, which is the silent failure above.
+    """
+    try:
+        return load_bond_secret(key_file + PREVIOUS_KEY_SUFFIX)
+    except FileNotFoundError:
+        return None
+
+
 @dataclass(frozen=True)
 class Identity:
     """The wire credential: who this end says it is, and the key that proves it.
 
-    `key` is the DERIVED key (derive_bond_key), never the raw secret.
+    `key` is the DERIVED key (derive_bond_key), never the raw secret. It is
+    the ONLY key this end signs with.
+
+    `previous_key` is a retired key, derived the same way, that this end still
+    ACCEPTS on a frame it receives. None means there is none, which is the
+    steady state; it is not None only while a rotation is in progress (see the
+    module docstring). Verification tries `key` first and falls back to this;
+    signing never looks at it. Defaults to None so that every existing way of
+    constructing an Identity, and every existing frame on the wire, is
+    unchanged by the field's existence.
     """
 
     client_id: int
     key: bytes
+    previous_key: bytes | None = None
 
     def key_id(self) -> str:
         """A short, one-way name for the key, safe to log and to report.
@@ -290,10 +382,34 @@ class Identity:
         """
         return hashlib.sha256(_KEY_ID_LABEL + self.key).hexdigest()[:8]
 
+    def previous_key_id(self) -> str | None:
+        """The retired key's id, or None when there is no retired key.
 
-def new_bond_identity(peer_id: int, secret: bytes) -> Identity:
+        Derived exactly as key_id is, so the id home prints for its retired
+        key can be compared with the id the router prints for its current one
+        - which is the check that step 2 of a rotation rests on. None rather
+        than an empty string, and the callers that print it print nothing at
+        all when it is None, so a deployment that has never rotated reports
+        exactly the ids it always did and a log parser sees no new field.
+        """
+        if self.previous_key is None:
+            return None
+        return hashlib.sha256(_KEY_ID_LABEL + self.previous_key).hexdigest()[:8]
+
+
+def new_bond_identity(
+    peer_id: int, secret: bytes, previous_secret: bytes | None = None,
+) -> Identity:
     """The credential for the router-to-home bond: one shared symmetric key,
     used by both ends to sign and to verify.
+
+    `previous_secret`, when given, is a retired secret this end will still
+    accept; it is derived with the same label as the current one, because the
+    far end derived it that way when it was current. A previous secret that
+    equals the current one is NOT refused here: it verifies nothing extra and
+    is visible as two equal key ids in the log, and refusing it would stop the
+    agent on a router whose only route to the fix is the agent. The router's
+    key refresh refuses it at delivery time instead, where refusing is cheap.
 
     NOT SEALED, unlike the Go client-mode identity. The bond carries WireGuard
     ciphertext produced by the router, so a second encryption layer would spend
@@ -311,7 +427,12 @@ def new_bond_identity(peer_id: int, secret: bytes) -> Identity:
         raise ValueError("auth peer id must not be zero")
     if not 0 < peer_id <= 0xFFFFFFFF:
         raise ValueError(f"auth peer id out of range: {peer_id}")
-    return Identity(client_id=peer_id, key=derive_bond_key(secret))
+    return Identity(
+        client_id=peer_id,
+        key=derive_bond_key(secret),
+        previous_key=(None if previous_secret is None
+                      else derive_bond_key(previous_secret)),
+    )
 
 
 def compute_mac(key: bytes, signed_header: bytes, payload: bytes) -> bytes:
@@ -330,7 +451,14 @@ def compute_mac(key: bytes, signed_header: bytes, payload: bytes) -> bytes:
 
 
 def pack_as(frame: Frame, identity: Identity) -> bytes:
-    """Serialise `frame` as an authenticated v3 datagram."""
+    """Serialise `frame` as an authenticated v3 datagram.
+
+    SIGNED WITH THE CURRENT KEY ONLY. `identity.previous_key` is never
+    consulted here, whatever it holds: an end that signed with its retired key
+    would be moving the rotation backwards, and a far end that has already
+    dropped that key would refuse every frame - which is the outage the
+    overlap exists to prevent, arriving from the other direction.
+    """
     signed = _HEADER_V3_SIGNED.pack(
         _MAGIC, _VERSION_V3, frame.flags, frame.path_id, frame.seq,
         frame.epoch, identity.client_id,
@@ -345,6 +473,22 @@ def unpack_as(raw: bytes, identity: Identity) -> Frame:
     if presenting an old-format frame were enough to skip the check, the MAC
     would protect nothing. `unpack_auth` is what decides whether a v2 frame is
     offered to this function at all.
+
+    EITHER KEY VERIFIES while the identity holds two. The current key is tried
+    first, because outside a rotation it is the only one there is and during
+    one it is the key most frames arrive under; the retired key is tried only
+    when the current one fails. Both comparisons are constant-time for the
+    reason given inline. What this does leak is WHICH key a frame verified
+    under - a frame under the retired key costs one more HMAC - and that is
+    accepted: it tells an observer a rotation is in progress, which the two
+    ends' restarts already told him, and nothing about either key.
+
+    The retired key is accepted for as long as `Identity.previous_key` is
+    set, which is for as long as `<auth_key_file>.previous` existed when the
+    identity was built. Removing the file is the operator's explicit act, and
+    it takes effect when the identity is next rebuilt - a restart of that end
+    - and not before. A frame under the retired key is then refused with the
+    same single error as any other bad MAC.
 
     NOTE ON FLAG 0x20. Go's UnpackAs additionally refuses a frame whose flags
     carry FlagEncrypted (0x20) when the reader holds no sealer. That check is
@@ -369,10 +513,16 @@ def unpack_as(raw: bytes, identity: Identity) -> Frame:
 
     signed = raw[:_HEADER_V3_SIGNED.size]
     payload = raw[HEADER_LEN_V3:]
-    want = compute_mac(identity.key, signed, payload)
-    # Constant time: a byte-at-a-time comparison leaks the MAC one byte per
-    # forgery attempt, which is a practical attack on an open UDP port.
-    if not hmac.compare_digest(want, raw[_HEADER_V3_SIGNED.size:HEADER_LEN_V3]):
+    got = raw[_HEADER_V3_SIGNED.size:HEADER_LEN_V3]
+    # Constant time, for BOTH keys: a byte-at-a-time comparison leaks the MAC
+    # one byte per forgery attempt, which is a practical attack on an open UDP
+    # port, and a retired key that is still accepted is still a key that a
+    # forged MAC under it would steer the tunnel with.
+    verified = hmac.compare_digest(compute_mac(identity.key, signed, payload), got)
+    if not verified and identity.previous_key is not None:
+        verified = hmac.compare_digest(
+            compute_mac(identity.previous_key, signed, payload), got)
+    if not verified:
         raise UnauthenticatedError("frame failed authentication")
 
     return Frame(seq=seq, path_id=path_id, payload=payload, flags=flags,
@@ -435,6 +585,22 @@ def build_identity(
 
     Returns None only for the off rung, which is the one configuration that
     needs no credential.
+
+    THE RETIRED KEY IS LOADED HERE TOO, from `<key_file>.previous`, so that
+    both ends consume it through the one call they already make and neither
+    end can be the one that forgot. Its id is logged beside the current one
+    ONLY when it exists: a deployment that has never rotated prints the line
+    it always printed and nothing else. That log line is what step 1 of a
+    rotation is verified by (module docstring), and it is the only place the
+    retired key's presence is visible from outside the process - a rotation
+    whose overlap silently failed to load would look identical to one that
+    was never started, right up until the router moved and the bond dropped.
+
+    The files are read ONCE, here, when the identity is built. Neither the
+    agent nor the home pod rebuilds its identity while running, so a file
+    added or removed afterwards takes effect at that end's next restart. The
+    docstrings on unpack_as and load_previous_bond_secret say the same thing
+    from the other side.
     """
     if level is AuthLevel.OFF:
         if key_file:
@@ -444,4 +610,9 @@ def build_identity(
         return None
     if not key_file:
         raise ValueError(f"auth level {level} needs a key file")
-    return new_bond_identity(peer_id, load_bond_secret(key_file))
+    identity = new_bond_identity(
+        peer_id, load_bond_secret(key_file), load_previous_bond_secret(key_file))
+    if identity.previous_key is not None:
+        log.info("header MAC also accepts retired key %s (current %s)",
+                 identity.previous_key_id(), identity.key_id())
+    return identity

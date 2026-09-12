@@ -613,8 +613,9 @@ def test_keys_json_never_holds_the_secret(tmp_path, monkeypatch):
 
 
 def test_the_previous_key_lands_beside_the_current_one(tmp_path, monkeypatch):
-    """Nothing verifies against it yet - auth.py holds ONE key - but delivery
-    must not be the thing blocking a rotation when it can."""
+    """The overlap a rotation needs: auth.py accepts a MAC under this key for
+    as long as the file exists (zippie#13), so delivery and acceptance have to
+    agree on where it is."""
     bond = tmp_path / "bond.key"
     _fake_muster(
         monkeypatch,
@@ -628,6 +629,34 @@ def test_the_previous_key_lands_beside_the_current_one(tmp_path, monkeypatch):
     previous = tmp_path / ("bond.key" + musterwrt.PREVIOUS_SUFFIX)
     assert previous.read_text() == OTHER
     assert stat.S_IMODE(previous.stat().st_mode) == 0o600
+
+
+def test_the_previous_key_this_writes_is_the_one_auth_reads(tmp_path, monkeypatch):
+    """THE FAR SIDE OF THE BOUNDARY. The writer (this module) and the reader
+    (auth.py) live in different files and only the reader ships to the home
+    end, so each holds its own copy of the suffix. If they disagreed, the
+    retired key would be delivered at 0600 and never consulted - which from
+    the outside is a rotation that broke the bond, not a naming bug. So the
+    reader is run against what the writer produced, not against the constant.
+    """
+    from zippie import auth
+
+    bond = tmp_path / "bond.key"
+    _fake_muster(
+        monkeypatch,
+        app_config(
+            datapath_line("key.current", GOOD), datapath_line("key.previous", OTHER)
+        ),
+    )
+    musterwrt.refresh(
+        "https://m.invalid", tmp_path / "k.pem", "cert", tmp_path / "keys.json", bond
+    )
+    assert auth.PREVIOUS_KEY_SUFFIX == musterwrt.PREVIOUS_SUFFIX
+    assert auth.load_previous_bond_secret(str(bond)) == OTHER.encode()
+    identity = auth.build_identity(auth.AuthLevel.REQUIRE, str(bond), 7)
+    assert identity is not None
+    assert identity.previous_key_id() == auth.new_bond_identity(7, OTHER.encode()).key_id()
+    assert identity.key_id() == auth.new_bond_identity(7, GOOD.encode()).key_id()
 
 
 def test_a_retired_previous_key_is_reported_not_deleted(tmp_path, monkeypatch):

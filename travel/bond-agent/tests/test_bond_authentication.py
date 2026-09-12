@@ -33,13 +33,16 @@ import ipaddress
 
 import pytest
 
+import zippie.auth as auth_module
 from zippie.auth import (
+    PREVIOUS_KEY_SUFFIX,
     AuthLevel,
     Identity,
     UnauthenticatedError,
     build_identity,
     derive_bond_key,
     load_bond_secret,
+    load_previous_bond_secret,
     new_bond_identity,
     pack_as,
     pack_auth,
@@ -682,6 +685,230 @@ class TestTheGateHoldsAtTheTopRung:
         assert snap["level"] == "require"
         assert snap["key"] == bond().key_id()
         assert snap["verified"] == 0 and snap["legacy"] == 0
+
+
+class TestARetiredKeyStillVerifiesWhileItsFileIsPresent:
+    """Rotating the key without an outage (#13).
+
+    With one key per end there is no moment at which the old and the new key
+    both verify, so rotating means both ends changing at the same instant - and
+    on the travel router the management path rides the link the key protects,
+    so a rotation that breaks the bond also removes the route to the fix. The
+    overlap is a second file, `<auth_key_file>.previous`, that the receive side
+    accepts and the send side never uses. These pin each half of that, and the
+    two things it must NOT change: the wire when there is no previous key, and
+    the key that frames go out under when there is one.
+    """
+
+    OLD = b"the-secret-being-retired-long-enough"
+    NEW = b"the-secret-replacing-it-also-long-enough"
+
+    @staticmethod
+    def _write(path, secret: bytes) -> None:
+        path.write_bytes(secret)
+        path.chmod(0o600)
+
+    def _end(self, tmp_path, current: bytes, previous: bytes | None) -> Identity:
+        """One end's files on disk, then the identity the way the agent and the
+        home pod actually build it - through build_identity, so the test reads
+        the same file name and mode the writer produces, not a shortcut."""
+        key = tmp_path / "bond.key"
+        self._write(key, current)
+        prev = tmp_path / ("bond.key" + PREVIOUS_KEY_SUFFIX)
+        if previous is not None:
+            self._write(prev, previous)
+        elif prev.exists():
+            prev.unlink()
+        identity = build_identity(AuthLevel.REQUIRE, str(key), PEER_ID)
+        assert identity is not None
+        return identity
+
+    def test_a_frame_signed_with_the_retired_key_verifies_while_its_file_is_present(
+            self, tmp_path):
+        """Step 1 of a rotation: home holds NEW in `.previous` and the router,
+        which knows only OLD, must notice nothing."""
+        home = self._end(tmp_path, current=self.OLD, previous=self.NEW)
+        router_after_step_2 = new_bond_identity(PEER_ID, self.NEW)
+        frame, authed = unpack_auth(
+            pack_as(data_frame(seq=3), router_after_step_2), home, AuthLevel.REQUIRE)
+        assert authed and frame.seq == 3
+
+        # And the other direction of the same overlap: the router at step 2
+        # holds NEW as current and OLD as previous, while home still signs OLD.
+        router = self._end(tmp_path, current=self.NEW, previous=self.OLD)
+        home_still_on_old = new_bond_identity(PEER_ID, self.OLD)
+        frame, authed = unpack_auth(
+            pack_as(data_frame(seq=4), home_still_on_old), router, AuthLevel.REQUIRE)
+        assert authed and frame.seq == 4
+
+    def test_the_retired_key_is_refused_once_its_file_is_gone(self, tmp_path):
+        """Removing the file is the operator's explicit act, and it takes
+        effect when that end rebuilds its identity - a restart. Before the
+        rebuild the retired key is still accepted, which is also asserted, so
+        nobody reads "removed the file" as "took effect"."""
+        end = self._end(tmp_path, current=self.NEW, previous=self.OLD)
+        wire = pack_as(data_frame(), new_bond_identity(PEER_ID, self.OLD))
+        (tmp_path / ("bond.key" + PREVIOUS_KEY_SUFFIX)).unlink()
+
+        _frame, authed = unpack_auth(wire, end, AuthLevel.REQUIRE)
+        assert authed, "the file's removal took effect without a rebuild"
+
+        rebuilt = self._end(tmp_path, current=self.NEW, previous=None)
+        assert rebuilt.previous_key is None
+        with pytest.raises(UnauthenticatedError):
+            unpack_auth(wire, rebuilt, AuthLevel.REQUIRE)
+
+    def test_signing_only_ever_uses_the_current_key(self):
+        """A rotation cannot go backwards: an end holding both keys signs with
+        the current one only, so a peer that has already dropped the old key
+        verifies every frame and a peer that holds ONLY the old key verifies
+        none. If signing ever used the retired key, step 3 of a rotation would
+        take the bond down from the other direction."""
+        both = new_bond_identity(PEER_ID, self.NEW, previous_secret=self.OLD)
+        wire = pack_as(data_frame(seq=9), both)
+
+        only_new = new_bond_identity(PEER_ID, self.NEW)
+        frame, authed = unpack_auth(wire, only_new, AuthLevel.REQUIRE)
+        assert authed and frame.seq == 9
+
+        only_old = new_bond_identity(PEER_ID, self.OLD)
+        with pytest.raises(UnauthenticatedError):
+            unpack_auth(wire, only_old, AuthLevel.REQUIRE)
+
+        # Byte for byte the frame an identity without a previous key emits.
+        assert wire == pack_as(data_frame(seq=9), only_new)
+        assert pack_auth(data_frame(seq=9), both, AuthLevel.SIGN) == wire
+
+    def test_an_absent_previous_key_file_is_not_an_error(self, tmp_path, caplog):
+        """The normal steady state. A deployment that has never rotated must
+        start exactly as it always did, and report exactly the keys it always
+        did - no field, no line, no warning that a log parser has to learn."""
+        key = tmp_path / "bond.key"
+        self._write(key, SECRET)
+        assert load_previous_bond_secret(str(key)) is None
+
+        with caplog.at_level("DEBUG", logger=auth_module.log.name):
+            identity = build_identity(AuthLevel.OBSERVE, str(key), PEER_ID)
+        assert identity is not None
+        assert identity.previous_key is None
+        assert identity.previous_key_id() is None
+        assert identity.key_id() == bond().key_id()
+        assert caplog.records == [], "an absent previous key produced a log line"
+
+    def test_the_retired_key_is_logged_only_when_present(self, tmp_path, caplog):
+        """Step 1 of a rotation is verified by this line: the id home prints
+        for its retired key must be the id the router will print for its
+        current one after step 2. The id, never the key."""
+        with caplog.at_level("INFO", logger=auth_module.log.name):
+            end = self._end(tmp_path, current=self.OLD, previous=self.NEW)
+        lines = [r.getMessage() for r in caplog.records if "retired" in r.getMessage()]
+        assert len(lines) == 1
+        assert end.previous_key_id() in lines[0] and end.key_id() in lines[0]
+        assert end.previous_key_id() == new_bond_identity(PEER_ID, self.NEW).key_id()
+        assert end.previous_key_id() != end.key_id()
+        assert self.NEW.decode() not in lines[0] and self.OLD.decode() not in lines[0]
+
+    def test_the_wire_is_byte_identical_when_no_previous_key_is_configured(self):
+        """The field's existence must not move a byte: an identity built the
+        old way, one built with previous=None spelled out, and one whose
+        previous key is set all sign identically, and the first two are the
+        same object as far as the wire is concerned."""
+        f = data_frame(seq=77, payload=b"same-bytes")
+        plain = Identity(client_id=PEER_ID, key=derive_bond_key(SECRET))
+        spelled = Identity(client_id=PEER_ID, key=derive_bond_key(SECRET),
+                           previous_key=None)
+        assert plain == spelled
+        assert new_bond_identity(PEER_ID, SECRET) == spelled
+        assert pack_as(f, plain) == pack_as(f, spelled) == pack_as(f, bond())
+        assert len(pack_as(f, plain)) == len(f.pack()) + 12
+
+    def test_the_current_key_is_tried_first_and_the_retired_one_in_constant_time(
+            self, monkeypatch):
+        """A byte-at-a-time comparison leaks the MAC one byte per forgery
+        attempt, and a retired key that is still accepted is still a key a
+        forged MAC under it would steer the tunnel with. So the SECOND
+        comparison has to go through compare_digest as surely as the first,
+        and the first has to be the current key, because outside a rotation
+        it is the only key there is. Spied on rather than timed: a timing
+        assertion on a 16-byte compare is noise on any CI runner."""
+        seen: list[tuple[bytes, bytes]] = []
+        real = auth_module.hmac.compare_digest
+
+        def spy(a, b):
+            seen.append((bytes(a), bytes(b)))
+            return real(a, b)
+
+        monkeypatch.setattr(auth_module.hmac, "compare_digest", spy)
+        both = new_bond_identity(PEER_ID, self.NEW, previous_secret=self.OLD)
+        wire = pack_as(data_frame(), new_bond_identity(PEER_ID, self.OLD))
+        mac = wire[auth_module._HEADER_V3_SIGNED.size:auth_module.HEADER_LEN_V3]
+        signed, payload = wire[:auth_module._HEADER_V3_SIGNED.size], wire[auth_module.HEADER_LEN_V3:]
+
+        _frame, authed = unpack_auth(wire, both, AuthLevel.REQUIRE)
+        assert authed
+        assert seen == [
+            (auth_module.compute_mac(both.key, signed, payload), mac),
+            (auth_module.compute_mac(both.previous_key, signed, payload), mac),
+        ], "the retired key was not compared in constant time, or not second"
+
+        # A frame under the current key never reaches the second compare.
+        seen.clear()
+        unpack_auth(pack_as(data_frame(), new_bond_identity(PEER_ID, self.NEW)),
+                    both, AuthLevel.REQUIRE)
+        assert len(seen) == 1
+
+    def test_a_forgery_is_refused_under_both_keys(self):
+        """Holding two keys must not widen what a stranger can send: a
+        tampered frame and a frame under a third key fail exactly as before,
+        with the single error."""
+        both = new_bond_identity(PEER_ID, self.NEW, previous_secret=self.OLD)
+        wire = bytearray(pack_as(data_frame(), new_bond_identity(PEER_ID, self.OLD)))
+        wire[-1] ^= 0xFF
+        with pytest.raises(UnauthenticatedError):
+            unpack_auth(bytes(wire), both, AuthLevel.REQUIRE)
+        third = new_bond_identity(PEER_ID, b"a-third-secret-nobody-configured!")
+        with pytest.raises(UnauthenticatedError):
+            unpack_auth(pack_as(data_frame(), third), both, AuthLevel.REQUIRE)
+
+    def test_a_previous_key_file_gets_the_same_refusals_as_the_current_one(
+            self, tmp_path):
+        """Present-but-unreadable must never be confused with absent. A retired
+        key still verifies frames, so a world-readable one is refused (not
+        warned about) and a truncated one is refused, exactly as the current
+        key is - and a trailing newline is trimmed for the same reason."""
+        key = tmp_path / "bond.key"
+        self._write(key, self.NEW)
+        prev = tmp_path / ("bond.key" + PREVIOUS_KEY_SUFFIX)
+
+        prev.write_bytes(self.OLD)
+        prev.chmod(0o644)
+        with pytest.raises(PermissionError):
+            load_previous_bond_secret(str(key))
+        with pytest.raises(PermissionError):
+            build_identity(AuthLevel.REQUIRE, str(key), PEER_ID)
+
+        self._write(prev, b"tooshort")
+        with pytest.raises(ValueError):
+            load_previous_bond_secret(str(key))
+
+        self._write(prev, self.OLD + b"\n")
+        assert load_previous_bond_secret(str(key)) == self.OLD
+
+    def test_the_home_transport_accepts_the_retired_key_and_counts_it_verified(
+            self, tmp_path):
+        """Through the transport's receive loop, not the function: transport.py
+        calls unpack_auth with the identity it was given and nothing else, so
+        this is what proves the overlap is wired to the socket rather than
+        merely available to it."""
+        home = Home(auth_level=AuthLevel.REQUIRE,
+                    identity=self._end(tmp_path, current=self.OLD, previous=self.NEW))
+        router_on_new = new_bond_identity(PEER_ID, self.NEW)
+        home.arrive(pack_as(data_frame(seq=1, epoch=PEER_EPOCH), router_on_new), PEER)
+        assert home.t._peer_epoch == PEER_EPOCH
+        assert home.t.stats.mac_verified == 1 and home.t.stats.mac_rejected == 0
+        # The stats line reports the CURRENT key's id, as it always has.
+        assert home.t.stats_dict()["auth"]["key"] == new_bond_identity(
+            PEER_ID, self.OLD).key_id()
 
 
 class TestItInteroperatesWithTheGoDatapath:
