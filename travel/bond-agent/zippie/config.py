@@ -221,6 +221,26 @@ def parse_config(data: dict[str, Any], *, private_key: str = "", public_key: str
             policy_raw.get("join_streak_miss_penalty", 1.0)
         ),
         probation_after_ms=int(policy_raw.get("probation_after_ms", 30_000)),
+        # Adaptive cake rate (#41). Not validated here, same reasoning as the
+        # rest of this block: a bad value degrades toward less shaping or no
+        # auto-adjustment at all, never toward a wrong rate silently applied,
+        # and none of it may stop the agent booting on a router in a car.
+        shaper_auto_rate=bool(policy_raw.get("shaper_auto_rate", True)),
+        shaper_capacity_fraction=float(
+            policy_raw.get("shaper_capacity_fraction", 0.85)
+        ),
+        shaper_min_download_kbit=float(
+            policy_raw.get("shaper_min_download_kbit", 1000.0)
+        ),
+        shaper_min_upload_kbit=float(
+            policy_raw.get("shaper_min_upload_kbit", 500.0)
+        ),
+        shaper_reapply_hysteresis_pct=float(
+            policy_raw.get("shaper_reapply_hysteresis_pct", 20.0)
+        ),
+        shaper_capacity_decay_s=float(
+            policy_raw.get("shaper_capacity_decay_s", 300.0)
+        ),
         # Router DNS must survive a route flip (#21, the travel router 2026-08-02). The
         # OpenWrt path is only the DEFAULT - an empty string disables the kick,
         # and any other init script can be named instead, because this agent

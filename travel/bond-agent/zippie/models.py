@@ -359,6 +359,63 @@ class PolicyConfig:
     # forever" would be the exact defect this exists to end. To lengthen the
     # hold, lengthen it - there is no value that removes the bound.
     probation_after_ms: int = 30_000
+    # ADAPTIVE CAKE RATE (#41). #42 put a shaper on the bond and had to guess
+    # its rate, because nothing set it from what the legs actually carry.
+    # `True` computes and applies a rate from each carrying leg's own
+    # `rx_bps`/`tx_bps` (see shaper.py); `False` is #42's original behaviour
+    # unchanged - cake stays wherever `uci`/the operator left it, and this
+    # agent never touches its bandwidth.
+    #
+    # DEFAULT ON, same direction as bufferbloat_spread_ratio and
+    # probation_after_ms when this session shipped them: a hardcoded rate is
+    # already known-wrong everywhere except wherever it was measured (#41's
+    # own "Why"), so the safer default is the one that adapts, not the one
+    # frozen at a number nobody re-tuned for this trip. An operator who wants
+    # a fixed rate sets this to false in the same file they already edit for
+    # every other bond knob - this never writes uci, so their `sqm.pbz0`
+    # values are exactly what a reboot falls back to either way.
+    shaper_auto_rate: bool = True
+    # What fraction of the estimated combined capacity to shape at.
+    # Shaping AT capacity does nothing (#41's own point) - cake never sees a
+    # queue to manage if the rate matches what the legs can move exactly, so
+    # this must sit below 1.0 to do anything at all. 0.85 leaves headroom for
+    # the estimate being a peak-hold lagging a genuine further improvement,
+    # without giving away so much that the bond is capped well under what it
+    # can carry. Reasoned, not measured against an incident - there is no
+    # equivalent live episode to replay the way bufferbloat_spread_ratio's
+    # 1.5 was tuned.
+    shaper_capacity_fraction: float = 0.85
+    # FLOORS, so a bond with no throughput history yet - just booted, still
+    # idle - is not shaped down to the peak-hold's starting point of zero.
+    # Deliberately conservative rather than measured: roughly a weak single
+    # cellular leg's worst realistic floor, so the very first burst after a
+    # cold start is still shaped rather than left to queue unmanaged, and low
+    # enough that a genuinely poor link is not shaped as if it were healthy.
+    # Both are IN KBIT, matching sqm's own uci units, and rise at once as
+    # soon as any leg proves more.
+    shaper_min_download_kbit: float = 1000.0
+    shaper_min_upload_kbit: float = 500.0
+    # DEBOUNCE: how far the estimated rate must move, as a percentage of the
+    # last-applied one, before it is worth changing again. A shaper whose
+    # rate moves on every tick's throughput noise is its own source of
+    # latency, the same reason weight_quantum rounds path weights instead of
+    # installing every EWMA wobble as a new route. Applied live via
+    # `tc qdisc change`, not a config rewrite, so this bounds churn rather
+    # than a real cost - see agent.py's _update_bond_shaper_rate.
+    shaper_reapply_hysteresis_pct: float = 20.0
+    # How long a leg's peak-hold capacity estimate takes to decay toward its
+    # currently observed throughput once that throughput drops - see
+    # shaper.py's own module docstring for why a rise is trusted at once and
+    # only a fall needs a time constant. Five minutes, reasoned rather than
+    # measured: long enough that an ordinary pause between bursts does not
+    # erase a peak that is still real, short enough that a peak measured on
+    # one road does not linger for hours into a much worse one.
+    #
+    # ZERO OR NEGATIVE DISABLES THE DECAY, i.e. the estimate always reads as
+    # this pass's observed throughput with no memory of anything higher - the
+    # least adaptive-in-the-generous-direction setting, same rule every other
+    # knob in this file follows.
+    shaper_capacity_decay_s: float = 300.0
     # THE ROUTER'S OWN RESOLVER, restarted whenever the default route MOVES
     # (#21). On 2026-08-02 installing `default dev pbz0` on the travel router killed the
     # router's DNS outright while the tunnel underneath it was perfectly

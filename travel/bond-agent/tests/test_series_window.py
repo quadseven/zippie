@@ -173,6 +173,7 @@ def test_append_happens_once_per_control_loop_pass(monkeypatch):
         "ensure_tunnels",
         "probe_paths",
         "apply_policy",
+        "_update_bond_shaper_rate",
         "sync_transport",
         "_resolve_home_ip",
         "write_status_file",
