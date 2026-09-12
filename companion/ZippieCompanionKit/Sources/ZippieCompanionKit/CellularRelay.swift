@@ -75,6 +75,12 @@ public actor CellularRelay {
         /// bill arrives.
         public var budgetBlocked = 0
         public var lastError: String?
+        /// How many times the cellular `NWConnection` was torn down and
+        /// recreated because it sat in `.waiting` past
+        /// `cellularWaitingTimeout` (#92) - visible so a retry that fires is
+        /// provably observable rather than looking identical to one that
+        /// never needed to.
+        public var cellularRetries = 0
         /// When something last ARRIVED from the router, or nil if nothing ever
         /// has. The only evidence on this struct that the far end exists:
         /// every other field is a fact about this phone, and #44 shipped a
@@ -97,6 +103,30 @@ public actor CellularRelay {
         public var lastRouterInboundAt: Date?
 
         public init() {}
+
+        /// CUSTOM DECODE, ONE FIELD ONLY: `cellularRetries` (#92) is newer
+        /// than this struct's other counters, so an extension binary from
+        /// before this shipped writes a report with no such key - the same
+        /// upgrade window `lastRouterInboundAt`'s own doc describes. The
+        /// synthesized decoder does not apply a property's default for a
+        /// missing key, it throws `keyNotFound`; `decodeIfPresent` is what
+        /// makes an older report during that window still decode instead of
+        /// the app reading no report at all.
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            upDatagrams = try c.decode(Int.self, forKey: .upDatagrams)
+            upBytes = try c.decode(Int.self, forKey: .upBytes)
+            downDatagrams = try c.decode(Int.self, forKey: .downDatagrams)
+            downBytes = try c.decode(Int.self, forKey: .downBytes)
+            errors = try c.decode(Int.self, forKey: .errors)
+            cellularReady = try c.decode(Bool.self, forKey: .cellularReady)
+            rejectedSources = try c.decode(Int.self, forKey: .rejectedSources)
+            budgetExhausted = try c.decodeIfPresent(String.self, forKey: .budgetExhausted)
+            budgetBlocked = try c.decode(Int.self, forKey: .budgetBlocked)
+            lastError = try c.decodeIfPresent(String.self, forKey: .lastError)
+            cellularRetries = try c.decodeIfPresent(Int.self, forKey: .cellularRetries) ?? 0
+            lastRouterInboundAt = try c.decodeIfPresent(Date.self, forKey: .lastRouterInboundAt)
+        }
     }
 
     private let config: Config
@@ -115,6 +145,23 @@ public actor CellularRelay {
     private var ledger: BudgetLedger
     private var stats = Stats()
     private var onChange: (@Sendable (Stats) -> Void)?
+    /// The pure half of #92's fix - see that type for why it is separate.
+    private var waitingRetry = CellularWaitingRetry()
+
+    /// How long a stuck `.waiting` cellular connection is tolerated before
+    /// giving up on Network.framework's own automatic recovery and forcing a
+    /// fresh `NWConnection`. REASONED, not measured against a replayed
+    /// incident - there is no equivalent profile to tune this against the
+    /// way bufferbloat_spread_ratio's 1.5 was on the router side. 45s is long
+    /// enough that an ordinary interface handoff (wifi/cellular arbitration,
+    /// a brief radio state change) resolves on its own without a needless
+    /// reconnect, and short enough that a genuinely stuck connection - the
+    /// 2026-09-12 incident, 14+ minutes with strong signal - does not sit
+    /// unusable for anywhere near as long as it takes a person to notice and
+    /// go looking. #69 made the REASON legible; this makes the connection
+    /// stop trusting Network.framework's own retry indefinitely regardless
+    /// of what that reason turns out to be.
+    private static let cellularWaitingTimeout: TimeInterval = 45
 
     public init(config: Config) {
         self.config = config
@@ -134,6 +181,9 @@ public actor CellularRelay {
         cellular?.cancel(); cellular = nil
         routerPeer?.cancel(); routerPeer = nil
         stats.cellularReady = false
+        // Invalidate, not just clear: a retry already scheduled before this
+        // stop must not restart a relay that was deliberately shut down.
+        waitingRetry.invalidate()
         publish()
     }
 
@@ -165,10 +215,12 @@ public actor CellularRelay {
         case .ready:
             stats.cellularReady = true
             stats.lastError = nil
+            waitingRetry.leftWaiting()
         case let .failed(e):
             stats.cellularReady = false
             stats.lastError = "cellular: \(e.localizedDescription)"
             stats.errors += 1
+            waitingRetry.leftWaiting()
         case let .waiting(reason):
             // THE STATE CARRIES THE REASON AND THIS USED TO THROW IT AWAY.
             //
@@ -186,10 +238,43 @@ public actor CellularRelay {
             // wording no longer implies a permanent verdict.
             stats.cellularReady = false
             stats.lastError = "cellular not usable yet: " + Self.describe(reason)
+            // NOT NECESSARILY FATAL, #69's own words - but not necessarily
+            // TEMPORARY either. Live 2026-09-12, 14+ minutes stuck with none
+            // of the causes describe() now names actually present. Give
+            // Network.framework's own recovery a bounded amount of time, then
+            // stop trusting it and force a fresh connection.
+            let generation = waitingRetry.enteredWaiting(now: Date())
+            scheduleWaitingRetry(generation: generation)
         default:
             break
         }
         publish()
+    }
+
+    /// Waits `cellularWaitingTimeout`, then asks `waitingRetry` whether this
+    /// is still the same uninterrupted waiting period that scheduled it. One
+    /// `Task` per entry into `.waiting` - see `CellularWaitingRetry`'s own
+    /// doc for why a stale one is always safe to no-op rather than needing to
+    /// be cancelled explicitly.
+    private func scheduleWaitingRetry(generation: Int) {
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.cellularWaitingTimeout * 1_000_000_000))
+            await self?.retryCellularIfStillStuck(generation: generation)
+        }
+    }
+
+    private func retryCellularIfStillStuck(generation: Int) {
+        guard waitingRetry.shouldRetry(scheduledFor: generation, now: Date(),
+                                        timeout: Self.cellularWaitingTimeout)
+        else { return }
+        stats.cellularRetries += 1
+        cellular?.cancel()
+        do {
+            try startCellular()
+        } catch {
+            stats.lastError = "cellular retry failed: \(error.localizedDescription)"
+            publish()
+        }
     }
 
     /// Why Network.framework is holding this connection, in words that name

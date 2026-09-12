@@ -258,6 +258,7 @@ enum Observability {
             "up.datagrams": s.upDatagrams, "up.bytes": s.upBytes,
             "down.datagrams": s.downDatagrams, "down.bytes": s.downBytes,
             "errors": s.errors,
+            "cellular_retries": s.cellularRetries,
             "last_error": s.lastError ?? "",
             // The only field here that says anything about the FAR END. Logged
             // because #44 was diagnosed from a screenshot: with this, "the
