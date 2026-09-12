@@ -256,6 +256,107 @@ jobs:
             OTHER_CODE_SIGN_FLAGS="--keychain $CI_KEYCHAIN"
           test -d build/Zippie.xcarchive
 
+      - name: Verify the archive carries this commit (#75)
+        # READ IT BACK OUT OF THE ARCHIVE, rather than trusting that the
+        # postbuild script (companion/scripts/embed-build-info.sh) ran and
+        # wrote what it claims - same reasoning as
+        # companion-android/ci/build-signed-apk.sh reading versionCode/
+        # versionName back out of the built APK instead of trusting the
+        # env vars it exported.
+        #
+        # TWO DIFFERENT FAILURE SHAPES, ON PURPOSE - DO NOT COLLAPSE THEM.
+        # The Products/Applications/<name>.app layout this assumes was a
+        # reasonable but UNVERIFIED guess when this step was written: no
+        # signed archive had ever been produced in this repo yet. The very
+        # first one (build 19, the night this gate was added) went green end
+        # to end with NO gate at all, uploaded and distributed while the
+        # operator was relying on it from a moving vehicle on a metered
+        # cellular bond. A gate that can fail AFTER a full signed archive and
+        # BEFORE upload, for a reason that has nothing to do with whether the
+        # build is good (a wrong path guess, an Xcode layout change), is a
+        # worse outcome than the drift this gate exists to catch - it would
+        # be stopping a real release to guard against a hypothetical one.
+        #
+        # So: NOT FINDING THE THING TO INSPECT is not evidence the build is
+        # bad. If the .app is not where expected, or its Info.plist cannot be
+        # read at all, this warns loudly and lets the upload proceed -
+        # "could not check" is not "checked and failed". "Found and readable"
+        # is proven by reading CFBundleIdentifier, a key Xcode itself always
+        # writes, BEFORE ever touching this change's own ZippieGitCommit key -
+        # if THAT fails, the Info.plist itself was not parseable, which is a
+        # tooling/path problem, not a provenance defect. Only once the plist
+        # is proven genuinely readable does a missing ZippieGitCommit, a
+        # "-local"/"-dirty" build, or a SHA that does not match this checkout
+        # become the real defect this gate exists for - and THAT stays fatal.
+        # If a future edit ever "tidies" this into one hard failure, it puts
+        # a wrong path guess back in a position to strand a good release.
+        run: |
+          set -uo pipefail  # not -e: every command's exit status is handled
+                            # explicitly below, warn vs. fail is the point
+
+          APP="build/Zippie.xcarchive/Products/Applications/ZippieCompanion.app"
+          PLIST="$APP/Info.plist"
+
+          warn_and_continue() {
+              echo "::warning::$1"
+              echo "could not check build provenance - continuing the upload anyway, since not finding the thing to inspect is not evidence the build is bad"
+              exit 0
+          }
+
+          if [ ! -d "$APP" ]; then
+              echo "looked for the app bundle at: $APP"
+              echo "what is actually in build/Zippie.xcarchive/Products/Applications:"
+              ls -la "build/Zippie.xcarchive/Products/Applications" 2>&1 | awk '{print $1, $5, $9}' \
+                  || echo "  (that directory does not exist either)"
+              warn_and_continue "no app bundle at $APP"
+          fi
+
+          if [ ! -f "$PLIST" ]; then
+              echo "the app bundle exists but has no Info.plist at: $PLIST"
+              echo "what is actually in $APP:"
+              ls -la "$APP" 2>&1 | awk '{print $1, $5, $9}'
+              warn_and_continue "no Info.plist at $PLIST"
+          fi
+
+          # Proves the FILE is genuinely readable before this step trusts
+          # anything it says about our own key - CFBundleIdentifier is a
+          # property of any Info.plist Xcode ever produced, not of this
+          # change, so its absence means PlistBuddy could not parse the file.
+          CFBUNDLEID_OUT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST" 2>&1)"
+          CFBUNDLEID_STATUS=$?
+          if [ "$CFBUNDLEID_STATUS" -ne 0 ]; then
+              echo "PlistBuddy could not read CFBundleIdentifier (a key Xcode always writes) from $PLIST:"
+              echo "$CFBUNDLEID_OUT"
+              warn_and_continue "$PLIST exists but PlistBuddy could not parse it"
+          fi
+
+          # PAST THIS LINE the bundle and its Info.plist are PROVEN found and
+          # readable - every failure below is the real defect this gate
+          # exists to catch, and stays fatal.
+          EMBEDDED="$(/usr/libexec/PlistBuddy -c 'Print :ZippieGitCommit' "$PLIST" 2>/dev/null || true)"
+          [ -n "$EMBEDDED" ] || { echo "::error::ZippieGitCommit is missing from $PLIST - embed-build-info.sh did not run or was skipped"; exit 1; }
+
+          # A real TestFlight archive must be a CLEAN, CI-produced build - if
+          # this ever reads "-local" or "-dirty" the runner's checkout is not
+          # what it should be (a stray edit, a rebase left mid-flight, or the
+          # CI-detection env vars not reaching the build phase the way this
+          # was verified to work when it was written) and uploading it would
+          # silently defeat the entire point of this change.
+          case "$EMBEDDED" in
+            *-local*|*-dirty*)
+              echo "::error::archive carries '$EMBEDDED', which is not a clean CI build - refusing to upload a build that cannot prove its own provenance"
+              exit 1
+              ;;
+          esac
+
+          EXPECTED="$(git rev-parse --short=7 HEAD)"
+          [ "$EMBEDDED" = "$EXPECTED" ] || { echo "::error::archive carries commit $EMBEDDED but this checkout is at $EXPECTED"; exit 1; }
+
+          echo "archive carries commit $EMBEDDED, matching this checkout"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            echo "Build commit: \`$EMBEDDED\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Export + sign the IPA (App Store, manual)
         run: |
           set -euo pipefail

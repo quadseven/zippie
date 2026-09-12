@@ -200,6 +200,13 @@ struct BondScreen: View {
                     .font(Kind.caption())
                     .foregroundStyle(Ink.tertiary)
             }
+            // ANSWERS "are we running the fix" without a debugger (#75) - the
+            // same question the router's /api/status build.commit field
+            // already answers for that side of the bond. See BuildInfo.swift
+            // for what the suffixes mean and where the value comes from.
+            Text("Build \(BuildInfo.commitLabel)")
+                .font(Kind.caption())
+                .foregroundStyle(Ink.tertiary)
         }
         .padding(.top, Space.section)
     }
