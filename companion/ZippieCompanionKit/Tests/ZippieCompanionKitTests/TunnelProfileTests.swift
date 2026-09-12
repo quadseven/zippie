@@ -248,6 +248,83 @@ final class TunnelProfileTests: XCTestCase {
                        "the configured router SSID still scopes the auto-connect")
     }
 
+    // MARK: - on the router's network, by cable or by radio (#67)
+
+    /// The fix this pins: an SSID cannot identify the router's network over a
+    /// wire, so the router is asked directly. A Connect rule with a probeURL
+    /// matches only when that URL answers 200, which is a positive test that
+    /// works on any interface.
+    func testACableAtTheRouterConnectsBecauseTheConsoleAnswers() throws {
+        let rules = try XCTUnwrap(installed(TunnelPlan.decide(
+            ModeDecision(proximity: .local),
+            relay: relayWithConsole(), client: nil))?.onDemandRules)
+
+        let probing = rules.compactMap { $0 as? NEOnDemandRuleConnect }
+            .filter { $0.probeURL != nil }
+        XCTAssertEqual(probing.count, 1, "exactly one rule asks the router directly")
+        let rule = try XCTUnwrap(probing.first)
+        XCTAssertEqual(rule.interfaceTypeMatch, .any,
+                       "a cable cannot be matched by type on iOS, so the probe "
+                     + "is the predicate and the interface must not be")
+        XCTAssertEqual(rule.probeURL?.host, "192.0.2.7")
+        XCTAssertEqual(rule.probeURL?.path, "/api/status")
+
+        // Order is load-bearing: iOS takes the FIRST matching rule, so the
+        // connects must both precede every disconnect or one of them never
+        // gets a say.
+        let lastConnect = try XCTUnwrap(rules.lastIndex { $0 is NEOnDemandRuleConnect })
+        let firstDisconnect = try XCTUnwrap(rules.firstIndex { $0 is NEOnDemandRuleDisconnect })
+        XCTAssertLessThan(lastConnect, firstDisconnect)
+        XCTAssertTrue(rules.last is NEOnDemandRuleIgnore,
+                      "an interface nothing matched is left as the operator set it")
+    }
+
+    /// The router's own wifi still connects by itself, by NAME and without
+    /// waiting on a probe. This is the #55/#56 behaviour and must not regress.
+    func testTheRoutersWifiStillConnectsByNameAndGoesFirst() throws {
+        let rules = try XCTUnwrap(installed(TunnelPlan.decide(
+            ModeDecision(proximity: .local),
+            relay: relayWithConsole(), client: nil))?.onDemandRules)
+        let first = try XCTUnwrap(rules.first as? NEOnDemandRuleConnect)
+        XCTAssertEqual(first.interfaceTypeMatch, .wiFi)
+        XCTAssertEqual(first.ssidMatch, ["zippie"])
+        XCTAssertNil(first.probeURL, "the named wifi does not pay for a probe")
+    }
+
+    /// No console address configured: the wifi rule stands alone and nothing
+    /// probes. The feature degrades to exactly today's behaviour.
+    func testNoConsoleAddressMeansNoProbeRule() throws {
+        let rules = try XCTUnwrap(installed(TunnelPlan.decide(
+            ModeDecision(proximity: .local), relay: relay(), client: nil))?.onDemandRules)
+        XCTAssertTrue(rules.compactMap { ($0 as? NEOnDemandRuleConnect)?.probeURL }.isEmpty)
+    }
+
+    /// Nothing to key on at all - no SSID and no console - must mean NO rules,
+    /// not rules that match everything. An unconditional on-demand would hold a
+    /// cellular socket open all day for a bond that cannot hear the phone.
+    func testNoSSIDAndNoConsoleMeansNoOnDemandAtAll() throws {
+        var cfg = RelayConfiguration(homeHost: "home.invalid")
+        cfg.routerSSIDs = []
+        cfg.consoleHost = ""
+        let manager = try XCTUnwrap(installed(TunnelPlan.decide(
+            ModeDecision(proximity: .local), relay: cfg, client: nil)))
+        XCTAssertFalse(manager.isOnDemandEnabled)
+        XCTAssertNil(manager.onDemandRules)
+    }
+
+    func testTheProbeURLIsBuiltFromTheConfiguredConsole() {
+        XCTAssertEqual(TunnelProfile.consoleProbeURL("192.0.2.7:8787")?.absoluteString,
+                       "http://192.0.2.7:8787/api/status")
+        XCTAssertEqual(TunnelProfile.consoleProbeURL("  192.0.2.7:8787  ")?.absoluteString,
+                       "http://192.0.2.7:8787/api/status",
+                       "a stray space in a settings field is not a missing console")
+        XCTAssertEqual(TunnelProfile.consoleProbeURL("http://192.0.2.7:8787")?.absoluteString,
+                       "http://192.0.2.7:8787/api/status",
+                       "a scheme the operator typed is honoured, not doubled")
+        XCTAssertNil(TunnelProfile.consoleProbeURL(""))
+        XCTAssertNil(TunnelProfile.consoleProbeURL("   "))
+    }
+
     /// An empty settings field must never quietly become "match every network",
     /// which is the unconditional on-demand this rule exists to avoid.
     func testNoRouterSSIDMeansNoOnDemandRuleAtAll() throws {
@@ -346,4 +423,12 @@ final class TunnelProfileTests: XCTestCase {
                                  "\(installed) gives the log nothing to go on")
         }
     }
+    /// A relay config that also knows where the router's console answers.
+    /// 192.0.2.x is RFC 5737 documentation space, never a real address.
+    private func relayWithConsole() -> RelayConfiguration {
+        var c = relay()
+        c.consoleHost = "192.0.2.7:8787"
+        return c
+    }
+
 }

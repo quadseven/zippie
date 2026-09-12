@@ -26,6 +26,11 @@ private struct RouterSSIDRow: Identifiable {
 /// deleting a proven capability because it is unglamorous would leave the
 /// operator with nothing.
 struct RelayScreen: View {
+    /// #77: the RUM view name for this screen. Named here, once, so the
+    /// `startView`/`stopView` pair below cannot drift out of sync with each
+    /// other - see `Observability.viewAppeared`.
+    private static let rumViewName = "Relay"
+
     /// The LIVE mode decision, not a second copy of the reasoning.
     ///
     /// `BondModel` probes the console every five seconds and is the only thing
@@ -70,6 +75,12 @@ struct RelayScreen: View {
             routerNetworks
             advanced
         }
+        // #77: every RUM event on this screen - including the actions the
+        // buttons below now emit - used to attribute to `ApplicationLaunch`,
+        // because nothing ever named a view. This is the screen the operator
+        // actually presses things on, so it is named first.
+        .onAppear { Observability.viewAppeared(Self.rumViewName) }
+        .onDisappear { Observability.viewDisappeared(Self.rumViewName) }
         .task { await tunnel.refresh() }
         .task {
             while !Task.isCancelled {
@@ -157,11 +168,15 @@ struct RelayScreen: View {
         VStack(alignment: .leading, spacing: Space.snug) {
             if running {
                 ActionButton(title: "Stop relaying", role: .destructive) {
+                    Observability.relayControlTapped(control: "background", action: "stop")
                     Task { await tunnel.stopTunnel() }
                 }
             } else {
                 ActionButton(title: tunnel.installed ? "Start relaying" : "Install and start",
-                             enabled: !foregroundRunning) { startBackground() }
+                             enabled: !foregroundRunning) {
+                    Observability.relayControlTapped(control: "background", action: "start")
+                    startBackground()
+                }
             }
 
             Note(text: "Runs in a Network Extension, so the leg survives the screen "
@@ -362,7 +377,12 @@ struct RelayScreen: View {
                     ActionButton(title: foregroundRunning
                                  ? "Stop foreground relay" : "Start foreground relay",
                                  role: .quiet,
-                                 enabled: !running) { toggleForeground() }
+                                 enabled: !running) {
+                        Observability.relayControlTapped(
+                            control: "foreground",
+                            action: foregroundRunning ? "stop" : "start")
+                        toggleForeground()
+                    }
                     Note(text: "Runs the relay inside the app, as it did before the "
                        + "Network Extension existed. Only useful on a build whose "
                        + "tunnel cannot be signed yet - iOS suspends background apps, "
@@ -411,7 +431,19 @@ struct RelayScreen: View {
             // already prefers over `startError` - so the plan's own sentence
             // reaches the screen without a second copy of it here.
             await tunnel.startTunnel(with: config, decision: bond.decision, client: nil)
-            Observability.tunnelStatus(tunnel.status, error: tunnel.lastError)
+            // #76: ONLY the failure case, and only because
+            // `TunnelController.observeStatus` now forwards every REAL
+            // transition to Observability itself (see there). Reporting
+            // `tunnel.status` here unconditionally used to race that: this
+            // line runs the instant `startTunnel` returns, which for a
+            // successful start is before iOS has changed anything yet, so an
+            // unconditional call here tagged a still-pending attempt as an
+            // instant failure. A synchronous failure (bad config, a save that
+            // threw) never reaches NEVPNConnection at all, so it is the one
+            // case this screen has to report itself.
+            if let error = tunnel.lastError {
+                Observability.tunnelStatus(tunnel.status, error: error)
+            }
         }
     }
 

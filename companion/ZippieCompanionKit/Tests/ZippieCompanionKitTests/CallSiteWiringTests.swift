@@ -289,7 +289,9 @@ final class CallSiteWiringTests: XCTestCase {
         let text = try source("ZippieCompanionKit/Sources/ZippieCompanionKit/TunnelProfile.swift")
         XCTAssertTrue(text.contains("#if os(iOS)"),
                       "the iOS-only rule must stay behind a platform guard")
-        XCTAssertTrue(text.contains("onCellular.interfaceTypeMatch = .cellular"),
+        // Matched on the ASSIGNMENT, not on a variable name - renaming the
+        // local should not read as deleting the rule.
+        XCTAssertTrue(text.contains("interfaceTypeMatch = .cellular"),
                       "a phone that walks away from the router onto cellular must "
                     + "still be disconnected")
         // CODE ONLY. The first version of this check failed on the comment
@@ -300,6 +302,51 @@ final class CallSiteWiringTests: XCTestCase {
             .joined(separator: "\n")
         XCTAssertFalse(code.contains("interfaceTypeMatch = .ethernet"),
                        "'ethernet' is unavailable in iOS and fails the app build")
+    }
+
+    /// #76: a connect attempt must still produce a span when `.connecting`
+    /// was never observed for it - the fast-flap case measured 2026-09-11,
+    /// where two taps of "Start relaying" on a phone whose tunnel was being
+    /// torn down by an on-demand rule produced 6 transitions in 1.72s and 5
+    /// in 1.79s, and ZERO `zippie.tunnel.connect` spans that hour.
+    ///
+    /// CODE ONLY for the `guard`/`duration_measured` checks: the fix is
+    /// explained in a doc comment that quotes the very guard it replaced, and
+    /// a tripwire that cannot tell an explanation from the thing being
+    /// checked for trips on its own comment.
+    func testAFastConnectAttemptWithNoObservedConnectingStillProducesASpan() throws {
+        let text = try source("ZippieCompanionApp/Observability.swift")
+        let code = text.split(separator: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+
+        assertDoesNotContain(
+            code, "guard let startedAt else { return }",
+            "a terminal transition with no recorded `.connecting` silently "
+          + "drops the span again - the exact fast-flap case measured "
+          + "2026-09-11 produced zero spans in an hour")
+        assertCalls(
+            code, "\"duration_measured\"",
+            "a span with no measured start must say so explicitly, or a "
+          + "reader cannot tell it apart from one with a genuine duration")
+        assertCalls(
+            code, "static func tunnelConnectRequested",
+            "nothing marks the moment a connect was REQUESTED, so a fast "
+          + "failure that never reaches `.connecting` cannot be told apart "
+          + "from an ordinary stop - both land on `.disconnected` with no "
+          + "recorded start")
+
+        let controller = try source("ZippieCompanionApp/TunnelController.swift")
+        assertCalls(
+            controller, "Observability.tunnelStatus(",
+            "TunnelController never forwards an OBSERVED status change to "
+          + "Observability - without this, traceTunnelTransition only ever "
+          + "runs for the one stale snapshot taken right after startTunnel() "
+          + "returns, never for a transition the system actually delivered")
+        assertCalls(
+            controller, "Observability.tunnelConnectRequested()",
+            "startTunnel never marks the moment a connect was requested, so "
+          + "the fast-flap fallback span above can never fire")
     }
 
 }

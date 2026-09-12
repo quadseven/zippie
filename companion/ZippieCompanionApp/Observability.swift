@@ -4,6 +4,7 @@ import DatadogRUM
 import DatadogTrace
 import Foundation
 import NetworkExtension
+import UIKit
 import ZippieCompanionKit
 
 /// Datadog wiring, so results reach an operator without a screenshot.
@@ -23,6 +24,42 @@ enum Observability {
     static let rumApplicationID = "99fa2439-5397-43a0-a6dd-9f127878eb7a"
     static let service = "zippie-companion"
 
+    /// #74 DECISION, RECORDED HERE BECAUSE THE ISSUE ASKED FOR IT IN WRITING.
+    ///
+    /// The other option was a separate service per platform. Rejected: every
+    /// dashboard and monitor that exists today is built against
+    /// `service:zippie-companion`, this change has no channel into Datadog's
+    /// live config to update them, and #74 requires "keep them working or
+    /// update them in the same change" - a change with no way to reach the
+    /// thing it would need to update cannot satisfy that. A platform tag
+    /// keeps every existing query working unchanged and ADDS the split as
+    /// `@platform:ios` / `@platform:android`, rather than replacing one
+    /// working query with two unproven ones.
+    ///
+    /// Android's `ddsource` has always read `"android"` (hardcoded in
+    /// `CellularLogShipper.event`), and the Datadog mobile SDKs are expected
+    /// to stamp iOS logs `ddsource:"ios"` the same way - but that is an SDK
+    /// internal, not something this app DECLARES, and relying on it is
+    /// exactly the "guessing from attributes" #74 was filed to end. `platform`
+    /// is set explicitly, by this app, so it is documented rather than
+    /// inherited.
+    static let platform = "ios"
+
+    /// The per-device identifier #74 asked for - reusing `LegName`, NOT a
+    /// second identity invented for Datadog. `LegName` is already this
+    /// phone's identity to the router (base name + 4 persisted hex chars, so
+    /// two same-model phones never collide - see `LegName.swift`), and it is
+    /// already computed the same way on Android (`RelayService.legName`).
+    /// Reusing it means a phone's Datadog stream and its leg in the bond read
+    /// the SAME string, which is what would have made the 2026-09-11
+    /// misdiagnosis impossible: "relay heartbeat" could not have looked like
+    /// one continuous stream from an iPhone when every line said which of
+    /// several Pixels it actually came from.
+    static let deviceIdentity: String = {
+        let defaults = RelayConfiguration.sharedDefaults ?? .standard
+        return LegName.resolve(in: defaults, deviceName: UIDevice.current.name)
+    }()
+
     static func start() {
         Datadog.initialize(
             with: Datadog.Configuration(
@@ -33,6 +70,13 @@ enum Observability {
             trackingConsent: .granted
         )
         Logs.enable()
+        // MANDATORY, not opt-in per call site (#74): every logger created
+        // from this point on - including `log` below - carries `platform`
+        // and `device` on every single line, the same way Android's
+        // `CellularLogShipper` bakes its tags into the class rather than
+        // trusting each call site to remember them.
+        Logs.addAttribute(forKey: "platform", value: platform)
+        Logs.addAttribute(forKey: "device", value: deviceIdentity)
         // Read ONCE and shared by both features. Two calls could disagree if
         // the operator edits the console address between them, and a request
         // that is first-party to RUM but third-party to Trace produces a
@@ -62,6 +106,10 @@ enum Observability {
                 return event
             }
         ))
+        // Same guarantee as the two lines after Logs.enable() above, for RUM's
+        // own attribute store: applies to every view/action/error/resource
+        // from here on, not just the ones a call site remembers to tag (#74).
+        RUMMonitor.shared().addAttributes(["platform": platform, "device": deviceIdentity])
         // APM. sampleRate 100 because this is a handful of users and a handful
         // of requests a minute; the default 20% would drop four out of five
         // console polls, and the whole point is being able to answer "what did
@@ -145,6 +193,19 @@ enum Observability {
         with: Logger.Configuration(service: service, networkInfoEnabled: true)
     )
 
+    /// `platform` and `device` on every span (#74). Trace has no
+    /// global-attribute call like `Logs.addAttribute` / `RUMMonitor.
+    /// addAttributes` above, so a span is the one signal that would otherwise
+    /// need every call site to remember these two tags by hand. Merged in
+    /// here instead, once, so a third `startSpan` added later gets them for
+    /// free rather than by copying the two lines correctly.
+    private static func spanTags(_ tags: [String: Encodable]) -> [String: Encodable] {
+        var merged = tags
+        merged["platform"] = platform
+        merged["device"] = deviceIdentity
+        return merged
+    }
+
     /// A probe run. The verdict is a first-class attribute so it can be graphed
     /// and alerted on - "did the last probe prove the pin" should be a monitor,
     /// not a memory.
@@ -175,7 +236,7 @@ enum Observability {
         let finishedAt = Date()
         let span = Tracer.shared().startSpan(
             operationName: "zippie.probe",
-            tags: attrs,
+            tags: spanTags(attrs),
             startTime: finishedAt.addingTimeInterval(-seconds)
         )
         // Only the two verdicts that mean the probe could not answer. A
@@ -240,6 +301,35 @@ enum Observability {
     private static let connectLock = NSLock()
     private static var connectStartedAt: Date?
 
+    /// When the app last ASKED iOS to connect, regardless of whether
+    /// `.connecting` was ever subsequently observed for it.
+    ///
+    /// #76: measured 2026-09-11, two taps of "Start relaying" on a phone
+    /// whose tunnel was being torn down by an on-demand rule produced 6
+    /// transitions in 1.72s and 5 in 1.79s, and the app recorded `.connecting`
+    /// for NEITHER - `NEVPNStatusDidChangeNotification` carries no status
+    /// payload, so the handler reads `connection.status` at the moment IT
+    /// runs, and a burst this fast can race ahead of the handler and land on
+    /// a later state before `.connecting` is ever read. Without a signal set
+    /// at REQUEST time, `traceTunnelTransition` cannot tell "iOS just failed a
+    /// real connect attempt this fast" from "somebody pressed Stop" - both
+    /// produce the identical `.disconnected` transition with no recorded
+    /// start.
+    private static var attemptRequestedAt: Date?
+
+    /// Call the moment the app asks iOS to connect - see `attemptRequestedAt`.
+    /// `TunnelController.startTunnel` is the one call site (its own doc
+    /// comment: "THE MODE IS DECIDED HERE AND NOWHERE ELSE").
+    ///
+    /// A second call before the first attempt resolves (a double-tap) does
+    /// NOT restart the clock, for the same reason `connectStartedAt` does
+    /// not: the first request is still the one in flight.
+    static func tunnelConnectRequested() {
+        connectLock.lock()
+        if attemptRequestedAt == nil { attemptRequestedAt = Date() }
+        connectLock.unlock()
+    }
+
     /// Turn the tunnel's status transitions into one span per connect attempt.
     ///
     /// WHY THIS IS WORTH A SPAN. "The tunnel takes ages to come up sometimes"
@@ -256,6 +346,28 @@ enum Observability {
     /// Back-dated rather than held open: an OTSpan kept alive across app
     /// suspension is a span that never finishes if the app is killed, and this
     /// app is expected to be backgrounded for hours.
+    ///
+    /// #76: A SPAN EVEN WHEN `.connecting` WAS NEVER OBSERVED. The old guard
+    /// here - `guard let startedAt else { return }` - silently dropped every
+    /// terminal transition whose `.connecting` never reached this function,
+    /// which is exactly the fast-flap case measured 2026-09-11 (see
+    /// `attemptRequestedAt`): zero `zippie.tunnel.connect` spans recorded that
+    /// hour, from six transitions in 1.72s and five in 1.79s.
+    ///
+    /// A connect attempt that fails this fast is STILL a connect attempt, so
+    /// a span still forms when `attemptRequestedAt` shows one was asked for -
+    /// but with NO INVENTED DURATION. `duration_measured` says which kind
+    /// this is: `true` with a real `duration_s` when `.connecting` was
+    /// actually seen (unchanged from before), `false` with none at all
+    /// otherwise, so nothing downstream can mistake an unmeasured span's own
+    /// start/end (necessarily the same instant - there is no real start to
+    /// back-date to) for a measured connect time.
+    ///
+    /// NEITHER signal set means this transition was not a connect attempt at
+    /// all - a plain stop, most obviously, which also lands on `.disconnected`
+    /// with no recorded start. Spanning that as a failed CONNECT would be
+    /// mislabelling an ordinary stop, so it still produces no span, same as
+    /// before.
     private static func traceTunnelTransition(_ status: NEVPNStatus, error: String?) {
         switch status {
         case .connecting:
@@ -267,21 +379,31 @@ enum Observability {
         case .connected, .disconnected, .invalid:
             connectLock.lock()
             let startedAt = connectStartedAt
+            let wasRequested = attemptRequestedAt != nil
             connectStartedAt = nil
+            attemptRequestedAt = nil
             connectLock.unlock()
-            // No recorded start means this is a status we did not see begin -
-            // app launched with the tunnel already up, for instance. Inventing
-            // a start time would be fabricating a duration.
-            guard let startedAt else { return }
+
+            guard startedAt != nil || wasRequested else { return }
+
             let finishedAt = Date()
+            var tags: [String: Encodable] = [
+                "outcome": tunnelStatusName(status),
+                "error_message": error ?? "",
+            ]
+            let spanStart: Date
+            if let startedAt {
+                tags["duration_measured"] = true
+                tags["duration_s"] = finishedAt.timeIntervalSince(startedAt)
+                spanStart = startedAt
+            } else {
+                tags["duration_measured"] = false
+                spanStart = finishedAt
+            }
             let span = Tracer.shared().startSpan(
                 operationName: "zippie.tunnel.connect",
-                tags: [
-                    "outcome": tunnelStatusName(status),
-                    "error_message": error ?? "",
-                    "duration_s": finishedAt.timeIntervalSince(startedAt),
-                ],
-                startTime: startedAt
+                tags: spanTags(tags),
+                startTime: spanStart
             )
             if status != .connected { span.setTag(key: OTTags.error, value: true) }
             span.finish(at: finishedAt)
@@ -318,5 +440,46 @@ enum Observability {
         case .cellularUnavailable: return "cellular_unavailable"
         case .baselineFailed: return "baseline_failed"
         }
+    }
+
+    // MARK: - RUM views and actions (#77)
+
+    /// Manual RUM view tracking, because `uiKitViewsPredicate:
+    /// DefaultUIKitRUMViewsPredicate()` above only fires when a
+    /// `UIViewController` is pushed - and this is a SwiftUI app with exactly
+    /// ONE, the hosting controller, for its entire lifetime. Every RUM event
+    /// landed on `ApplicationLaunch` because of that: 40 events in an hour of
+    /// real use, all `resource`/`long_task`, none attributed to a screen a
+    /// person could recognise. There is no `DatadogSwiftUI` package linked
+    /// here to do this automatically (see `project.yml`), so it is called by
+    /// hand from the screen's own appear/disappear.
+    ///
+    /// `key` and `name` are the same string on purpose - there is exactly one
+    /// instance of each named view in this app, so a second identifier would
+    /// only be one more thing that could disagree with the name.
+    static func viewAppeared(_ name: String) {
+        RUMMonitor.shared().startView(key: name, name: name)
+    }
+
+    static func viewDisappeared(_ name: String) {
+        RUMMonitor.shared().stopView(key: name)
+    }
+
+    /// A tap on a control that changes whether this phone is relaying - the
+    /// thing RUM could not answer at all (#77): zero `action` events in an
+    /// hour of active use, so "what did the operator press" had to be
+    /// reconstructed from unrelated log timing. `type: .tap` rather than
+    /// `.custom` (contrast `probeCompleted`'s action, which is not a tap on
+    /// anything): this literally is one.
+    ///
+    /// NO CONFIGURATION VALUE TRAVELS IN `attributes` - only which control and
+    /// which of start/stop, never a host, port or token. See #77's
+    /// "no payload, address or credential" acceptance criterion.
+    static func relayControlTapped(control: String, action: String) {
+        RUMMonitor.shared().addAction(
+            type: .tap,
+            name: "relay.\(control).\(action)",
+            attributes: ["control": control, "action": action]
+        )
     }
 }
