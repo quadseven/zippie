@@ -43,10 +43,20 @@ import os
 /// Network Extension providers are killed hard when they exceed their limit,
 /// with no warning and no crash the user can see. The ceiling is undocumented
 /// and has been reported around 50 MB for packet-tunnel providers. That is why
-/// there is no Datadog SDK in this target and no packet buffering anywhere in
-/// the relay: the extension stays as close to "a socket and a counter" as it
-/// can. The heartbeat in `RelayStatusStore` exists precisely so a silent
-/// jetsam shows up in the app as "not reporting" rather than as frozen counters.
+/// there is no packet buffering anywhere in the relay: the extension stays as
+/// close to "a socket and a counter" as it can. The heartbeat in
+/// `RelayStatusStore` exists precisely so a silent jetsam shows up in the app
+/// as "not reporting" rather than as frozen counters.
+///
+/// `TunnelObservability` (#73) is the one deliberate addition to that budget:
+/// `DatadogCore` + `DatadogLogs` ONLY - never RUM, never Trace, both of which
+/// the app links and neither of which this process has anything to spend on -
+/// initialised once, reporting on a cadence coarser than this heartbeat (see
+/// `RelayTelemetry.reportInterval`). Before it, the background relay's stats
+/// reached `os.Logger` and nowhere else: the ONE call site that shipped them
+/// to Datadog was the foreground toggle an operator rarely uses
+/// (`RelayScreen.swift:447`), so the relay that actually carries traffic was
+/// invisible off-device (2026-09-11).
 final class PacketTunnelProvider: NEPacketTunnelProvider {
     private static let log = Logger(subsystem: "app.zippie.companion", category: "tunnel")
 
@@ -151,6 +161,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             \(config.homePort, privacy: .public) listen=\(config.listenPort, privacy: .public)
             """)
 
+        // BEFORE anything else in this function, so the first heartbeat tick
+        // never finds the SDK uninitialised and drops a report on the floor.
+        TunnelObservability.start()
+
         let relay = CellularRelay(config: config.relayConfig)
         self.relay = relay
 
@@ -181,6 +195,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 // supervisor still running against a relay that has been torn
                 // down would cancel a tunnel that is already going.
                 await self?.superviseSelf(since: startedAt, onDemandArmed: onDemandArmed)
+                // ONLY ON SCHEDULE, not every pass - see
+                // `RelayTelemetry.reportInterval` for why 2 seconds would be
+                // the wrong cadence for a network request. The tick itself is
+                // owned by the reporter actor rather than a local variable
+                // captured here, so advancing it needs no capture-list
+                // reasoning across `await` suspension points.
+                let tick = await reporter.nextHeartbeatTick()
+                if RelayTelemetry.shouldReport(tick: tick) {
+                    TunnelObservability.report(await reporter.snapshot())
+                }
                 try? await Task.sleep(nanoseconds: UInt64(RelayStatus.heartbeatInterval * 1_000_000_000))
             }
         }
@@ -512,6 +536,13 @@ enum TunnelSupervisionError: LocalizedError {
 actor RelayStatusReporter {
     private let defaults: UserDefaults?
     private var latest = CellularRelay.Stats()
+    /// Counts heartbeat passes for `RelayTelemetry.shouldReport` (#73). Owned
+    /// here rather than as a `var` local to the heartbeat `Task` in
+    /// `PacketTunnelProvider`: this actor already IS the single owner of
+    /// state that crosses that loop's `await` points, so advancing a counter
+    /// alongside `latest` needs no separate reasoning about capturing a
+    /// mutable variable in concurrently-executing code.
+    private var heartbeatTick = 0
 
     init(defaults: UserDefaults?) {
         self.defaults = defaults
@@ -520,6 +551,14 @@ actor RelayStatusReporter {
     func record(_ stats: CellularRelay.Stats) { latest = stats }
 
     func snapshot() -> CellularRelay.Stats { latest }
+
+    /// The current pass number, then advances it. Post-increment on purpose:
+    /// pass zero must read as zero so a start that fails moments later still
+    /// ships one Datadog observation rather than none.
+    func nextHeartbeatTick() -> Int {
+        defer { heartbeatTick += 1 }
+        return heartbeatTick
+    }
 
     func flush() {
         guard let defaults else { return }
