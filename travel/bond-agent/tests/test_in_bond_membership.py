@@ -217,3 +217,173 @@ def test_status_dict_legs_carrying_reflects_the_discrepancy(tmp_path, monkeypatc
         f"and only 2 are actually moving traffic"
     )
     assert status["legs_total"] == 4
+
+
+# ---------------------------------------------------------------------------
+# ACTIVITY is the same fact in ONE WORD, which is what a reader scanning a
+# list of legs actually uses (#26).
+#
+# `state` answers "how is this leg" and its vocabulary - up, degraded, down -
+# has no word for "fine, present, and moving nothing". So the leg in the live
+# report came out as `degraded`, the same word a leg carrying LESS than it
+# should gets, and the one thing separating them was a boolean two columns
+# away that every consumer combined differently, or not at all:
+#
+#     pixel-6a-ea83   state=degraded   in_bond=True   loss=2.5%   rtt=0   weight=0
+#
+# Health and work are orthogonal and both are published. A leg can be
+# `degraded` AND `carrying` (12% loss, doing the work) or `up` AND `idle`
+# (healthy, held out), and collapsing either pair loses the half that matters.
+# ---------------------------------------------------------------------------
+def test_a_leg_in_the_bond_at_weight_zero_reads_idle_not_degraded(tmp_path, monkeypatch):
+    """THE ONE THAT MATTERS - the live row, field for field.
+
+    `state` still says `degraded`, correctly and deliberately: that is this
+    leg's health and it has not changed. `activity` is what says the leg is
+    moving nothing, in a word, without the reader having to know that
+    `effective_weight` and `in_bond` have to be read together.
+    """
+    from zippie.models import PathState
+
+    a = _agent(tmp_path)
+    p = _path("pixel-6a-ea83")
+    p.state = PathState.DEGRADED
+    p.loss_pct = 2.5
+    p.effective_weight = 0
+    a._transport_ids[p.name] = 0
+    a._transport_links.add(0)
+
+    d = _status(a, p, monkeypatch)
+    assert d["in_bond"] is True, "test setup: leg must actually be in_bond"
+    assert d["state"] == "degraded", (
+        "health is a separate fact and must not be rewritten - a leg that is "
+        "losing packets is still losing them while it sits idle"
+    )
+    assert d["activity"] == "idle", (
+        f"activity={d['activity']!r}; a leg holding a slot at weight 0 still "
+        f"reads as though it were helping"
+    )
+
+
+def test_a_leg_carrying_while_degraded_reads_carrying(tmp_path, monkeypatch):
+    """The other half, and the one a lossy-but-useful leg depends on.
+
+    An earlier attempt at this distinction made the DRAWING lossy instead - a
+    degraded leg with weight was relabelled healthy, so the count came out
+    right and the row was wrong. Both facts stand on their own here.
+    """
+    from zippie.models import PathState
+
+    a = _agent(tmp_path)
+    p = _path("hotspot")
+    p.state = PathState.DEGRADED
+    p.loss_pct = 12.0
+    p.effective_weight = 40
+    a._transport_ids[p.name] = 0
+    a._transport_links.add(0)
+
+    d = _status(a, p, monkeypatch)
+    assert d["state"] == "degraded"
+    assert d["activity"] == "carrying"
+
+
+def test_a_leg_that_is_not_a_member_reads_out_not_idle(tmp_path, monkeypatch):
+    """Idle and absent are different problems and must not share a word.
+
+    A tier-gated reserve leg is out of the bond BY DESIGN and carries nothing
+    for a good reason; an idle member is holding capacity nobody has. Calling
+    both "idle" would file the one signal worth looking at next to a row that
+    is behaving correctly.
+    """
+    a = _agent(tmp_path)
+    p = _path("ethernet", tier=2)
+    p.effective_weight = 40
+    a._transport_ids[p.name] = 1
+    # deliberately NOT added to _transport_links
+
+    d = _status(a, p, monkeypatch)
+    assert d["in_bond"] is False
+    assert d["activity"] == "out"
+
+
+def test_a_leg_on_probation_reads_carrying(tmp_path, monkeypatch):
+    """A probation share is a small share, not no share (#61).
+
+    The bounded release this word has to describe honestly: the leg really is
+    moving traffic, so calling it idle would send a reader looking for a fault
+    the gate has already dealt with.
+    """
+    from zippie.models import PathState
+
+    a = _agent(tmp_path)
+    p = _path("iphone")
+    p.state = PathState.DEGRADED
+    p.effective_weight = 5
+    p.on_probation = True
+    a._transport_ids[p.name] = 0
+    a._transport_links.add(0)
+
+    d = _status(a, p, monkeypatch)
+    assert d["on_probation"] is True
+    assert d["activity"] == "carrying"
+
+
+def test_activity_agrees_with_the_counts_the_summary_publishes(tmp_path, monkeypatch):
+    """One derivation, so the row and the headline cannot disagree.
+
+    "2 of 4 carrying" printed above four rows that all read `degraded` is the
+    reported symptom. Both numbers and every row now come off the same per-leg
+    facts, and this is the assertion that keeps them tied together.
+    """
+    import zippie.agent as agent_mod
+    monkeypatch.setattr(agent_mod.net, "wg_peer_endpoint", lambda _i: None)
+    monkeypatch.setattr(agent_mod.net, "wan_gateways", lambda: {})
+
+    a = _agent(tmp_path)
+    names = ["ethernet", "hotspot", "pixel-6a", "iphone"]
+    a.paths = [_path(n) for n in names]
+    for i, p in enumerate(a.paths):
+        p.effective_weight = 40 if i < 2 else 0
+        a._transport_ids[p.name] = i
+        a._transport_links.add(i)
+
+    status = a.status_dict()
+    words = [d["activity"] for d in status["paths"]]
+    assert words == ["carrying", "carrying", "idle", "idle"]
+    assert words.count("carrying") == status["legs_carrying"]
+    assert sum(1 for w in words if w != "out") == status["legs_in_bond"]
+
+
+def test_an_idle_member_is_its_own_telemetry_series():
+    """UNIT-TESTED, NEVER WIRED is this repo's most repeated defect, and a
+    distinction that never leaves the status payload is exactly that.
+
+    path.idle_in_bond is flat at 0 on a healthy bond, so any excursion is a
+    real finding rather than a threshold to tune - and it cannot be inferred
+    from path.weight, which reads 0 for an idle member and for a leg that is
+    not a member at all.
+    """
+    import zippie.telemetry as tel
+
+    def series(p):
+        return {n: v for n, v, _t in tel._path_samples(
+            p, "aggregate", "hotspot", membership_known=True)}
+
+    idle = series({"name": "pixel-6a", "state": "degraded", "in_bond": True,
+                   "contributing": False, "activity": "idle",
+                   "effective_weight": 0})
+    assert idle["path.idle_in_bond"] == 1
+    assert idle["path.weight"] == 0
+
+    carrying = series({"name": "hotspot", "state": "degraded", "in_bond": True,
+                       "contributing": True, "activity": "carrying",
+                       "effective_weight": 40})
+    assert carrying["path.idle_in_bond"] == 0
+
+    # NOT A MEMBER AT ALL reads 0 too, and shares path.weight == 0 with the
+    # idle leg - which is the whole reason this series has to exist separately.
+    reserve = series({"name": "ethernet", "state": "up", "in_bond": False,
+                      "contributing": False, "activity": "out",
+                      "effective_weight": 0})
+    assert reserve["path.idle_in_bond"] == 0
+    assert reserve["path.weight"] == 0

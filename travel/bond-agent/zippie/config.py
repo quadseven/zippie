@@ -204,6 +204,17 @@ def parse_config(data: dict[str, Any], *, private_key: str = "", public_key: str
         sticky_rtt_slack_ms=float(policy_raw.get("sticky_rtt_slack_ms", 40.0)),
         on_all_paths_down=str(policy_raw.get("on_all_paths_down", "degrade")),
         join_streak_min=float(policy_raw.get("join_streak_min", 8.0)),
+        # Bounded recovery probation (#61). Tunable on the device because how
+        # long a proven leg may be excluded is a judgement about the trip: a
+        # bond behind an obstructed Starlink wants a short bound, a bond on a
+        # stable wire wants the churn protection. Neither value is validated
+        # here - out of range degrades toward holding a proven leg out LESS
+        # (see the fields' own comments), and a knob reached for on a router in
+        # a car must not stop the agent booting.
+        join_streak_miss_penalty=float(
+            policy_raw.get("join_streak_miss_penalty", 1.0)
+        ),
+        probation_after_ms=int(policy_raw.get("probation_after_ms", 30_000)),
         # Router DNS must survive a route flip (#21, the travel router 2026-08-02). The
         # OpenWrt path is only the DEFAULT - an empty string disables the kick,
         # and any other init script can be named instead, because this agent

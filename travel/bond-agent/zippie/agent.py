@@ -310,6 +310,38 @@ NEVER_HANDSHAKED_MIN_TX_BYTES = 4096
 NO_REPLY_PLAIN_AFTER_PROBES = 20
 
 
+def _now_ms() -> int:
+    """Wall clock in milliseconds, for the anti-flap gate's own bounds.
+
+    A NAMED SEAM, not a tidy-up. The probation bound (#61) is measured in
+    wall-clock time - a hold that lasts 30 s must last 30 s whether the probe
+    cadence is the active 500 ms or the idle economy's 2000 ms - and a test
+    that drives six hundred simulated passes cannot wait five real minutes for
+    it. Patching `time.time` itself would move the clock under `logging` too,
+    which timestamps every record this gate emits.
+
+    Wall clock rather than monotonic because the values it produces are
+    PUBLISHED (`held_out_since_ms`, `no_reply_since_ms`) alongside
+    `last_ok_ms`, which has always been wall clock, and a console comparing
+    two of those must not be comparing two different epochs.
+    """
+    return int(time.time() * 1000)
+
+
+def _elapsed_s(since_ms: int | None) -> float | None:
+    """Seconds since a published wall-clock mark, or None if there is no mark.
+
+    NONE IS NOT ZERO, and that is the only reason this is a function rather
+    than a subtraction at each call site. "This leg is not waiting for
+    anything" and "this leg has been waiting for no time at all" are different
+    facts, and a console that renders them the same way is the shape of defect
+    both of its callers exist to fix (#26, #61).
+    """
+    if since_ms is None:
+        return None
+    return round((_now_ms() - since_ms) / 1000.0, 1)
+
+
 class BondStanddown:
     """"A bond with one dying leg beats an idle healthy WAN, and takes the
     LAN with it" (#124). Decides whether the CARRYING SET, as a whole, is
@@ -698,6 +730,15 @@ class BondAgent:
         # pure policy layer, because it is stateful across loop passes.
         self._join_streak: dict[str, float] = {}
         self._flapped: set[str] = set()
+        # Legs whose probation release has already been logged, so the line is
+        # written ONCE PER HOLD rather than once per pass (#61). A leg on
+        # probation behind a lossy uplink goes DOWN and comes back constantly,
+        # and `on_probation` is a per-pass fact that follows it - it is False
+        # while the leg is DOWN, because the leg is carrying nothing while it
+        # is DOWN. Keying the log line off that would bury the transition it
+        # reports under a line every couple of seconds. Cleared wherever the
+        # hold itself ends - see _end_hold.
+        self._probation_logged: set[str] = set()
         # apply_policy passes: every 30th forces a firewall rebuild (self-heal).
         self._fw_pass = 0
         # Last nexthop set actually installed. Guards the route replace so an
@@ -2762,51 +2803,69 @@ class BondAgent:
         Every membership change re-hashes client flows (kernel multipath), so
         a yo-yoing leg breaks long-lived connections on every bounce - the
         2026-07-30 "unusable" incident. A path that has FAILED once may only
-        rejoin after join_streak_min consecutive healthy probes (UP=1.0,
+        rejoin after join_streak_min passes of healthy probes (UP=1.0,
         degraded-but-carrying=0.5). The first join at startup is exempt;
         leaving remains instant. Called with self._lock held.
+
+        THE HOLD IS BOUNDED, AND FOR A PROVEN LEG IT IS LOSS-TOLERANT (#61).
+        This used to erase the streak on any pass a leg read DOWN, which turns
+        "eight passes of evidence" into "eight consecutive lucky passes" - and
+        a MISSED KEEPALIVE READS DOWN. Measured on the travel router 2026-09-11 behind an
+        obstructed Starlink (17% loss, 578 outage events in 12 hours): two legs
+        that had carried all day sat at weight 0 reading "held out of bond
+        until proven (1/8)" and "(0.5/8)" pass after pass, fractions that are a
+        counter being reset rather than one climbing, while the all-legs valve
+        below carried the household on a third leg.
+
+        So a leg the far end has ANSWERED is treated differently from one that
+        has never round-tripped at all, in the two ways #61 asks for:
+
+          * a failed pass DEBITS its streak by `join_streak_miss_penalty`
+            instead of erasing it, so intermittent loss slows recovery rather
+            than preventing it - and a leg that is up only half the time still
+            nets zero and still never finishes, which is the anti-flap gate
+            doing its original job by the same number.
+          * the hold itself expires. After `probation_after_ms` the leg is put
+            on PROBATION - a real but minimal share, the same `weight_floor_for`
+            slice the valve hands out - so exclusion cannot be indefinite. Full
+            weight still has to be earned.
+
+        A leg that has NEVER been answered keeps all of the old behaviour: no
+        decay, no probation, no share. Force-admitting a leg that has never
+        round-tripped is precisely the failure `has_ever_answered` exists to
+        prevent - 10 MB sprayed at an address nothing is listening on.
         """
         threshold = self.config.policy.join_streak_min
+        # CLAMPED, NOT REJECTED, and clamped toward TOLERANCE: a negative
+        # penalty is nonsense, and "a miss costs nothing" is the harmless
+        # reading of it. See the field's comment for why every out-of-range
+        # value in this mechanism degrades toward holding a leg out less.
+        penalty = max(0.0, self.config.policy.join_streak_miss_penalty)
         for p in self.paths:
             if p.state is PathState.DOWN or p.effective_weight <= 0:
-                if p.name in self._join_streak or p.state is PathState.DOWN:
-                    self._flapped.add(p.name)
-                self._join_streak[p.name] = 0.0
-                # This pass will not write a hold message - it falls straight
-                # through to the next leg - so a flag claiming last_error is
-                # still this gate's from an EARLIER pass is now stale. The
-                # DOWN/zero-weight verdict probe_paths wrote this tick is what
-                # a reader should see, not a leftover ownership claim (#26).
-                p.held_out_message_active = False
+                self._note_failed_pass(p, penalty)
                 continue
             streak = self._join_streak.get(p.name, 0.0)
             streak += 1.0 if p.state is PathState.UP else 0.5
             self._join_streak[p.name] = streak
             if p.name in self._flapped and threshold > 0 and streak < threshold:
-                p.effective_weight = 0
-                # "HEALTHY" ONLY IF IT HAS EVER ANSWERED. A companion leg
-                # whose phone has left the network still has an interface
-                # (br-lan) and still passes the shallow state check, so it sat
-                # on the console reading "healthy, held out of bond until
-                # proven" while 100% of its keepalives vanished into an address
-                # nothing was listening on - 10 MB sprayed, zero bytes back,
-                # no RTT ever measured. Calling that healthy is the exact lie
-                # this project exists to stop telling.
-                #
-                # Round-tripping is the evidence, but read the STICKY flag
-                # (#26), not the current sample. rtt_ms is set only when a
-                # keepalive comes BACK and goes back to None the instant one
-                # is missed, so reading it here would brand a leg that worked
-                # for hours and just went quiet as "never answered" - exactly
-                # the bug has_ever_answered exists to prevent (see its own
-                # docstring). This gate had kept reading rtt_ms anyway.
-                ever_answered = p.has_ever_answered
-                p.last_error = self._held_out_message(p, streak, threshold, ever_answered)
-                p.held_out_message_active = True
+                self._hold_out(p, streak, threshold)
             elif p.name in self._flapped and (threshold <= 0 or streak >= threshold):
                 self._flapped.discard(p.name)
                 p.no_reply_probes = 0
                 p.no_reply_since_ms = None
+                self._end_hold(p)
+                # SPENT, NOT BANKED. The streak is evidence gathered toward
+                # THIS admission, and it has now bought it; carrying it
+                # forward would let a leg accumulate credit while it is
+                # perfectly healthy and then pay for the NEXT failure out of
+                # savings. That is the anti-flap gate with its teeth pulled: a
+                # leg sitting on eight banked points loses one to a failed
+                # pass and is back at full weight two passes later, which is
+                # the 2026-07-30 yo-yo exactly. The old code got this for free
+                # from the erase-on-DOWN that #61 had to remove, so it has to
+                # be said out loud now.
+                self._join_streak[p.name] = 0.0
                 # Clear the hold message on the tick that re-admits, ON
                 # OWNERSHIP - NOT by matching its text (#26 REGRESSION,
                 # confirmed live: a leg carrying 473 MB still read "no reply
@@ -2836,8 +2895,16 @@ class BondAgent:
                 # Neither branch: this leg is not currently gated (never
                 # flapped, or already released). A stale True here would
                 # wrongly claim ownership of whatever last_error probe_paths
-                # wrote for it this tick.
+                # wrote for it this tick, and a stale hold clock would date a
+                # future hold from a hold that ended (#61).
                 p.held_out_message_active = False
+                self._end_hold(p)
+                # A LEG THAT IS NOT BEING JUDGED HOLDS NO EVIDENCE, for the
+                # same reason the re-admission branch spends it: a healthy leg
+                # that quietly banks a point a pass would arrive at its next
+                # failure pre-paid, and the wait this gate exists to impose
+                # would never happen.
+                self._join_streak[p.name] = 0.0
 
         # THE GATE MUST NEVER STARVE THE BOND.
         #
@@ -2861,11 +2928,19 @@ class BondAgent:
                       if p.state is not PathState.DOWN and p.interface]
         if not candidates:
             return
-        # Lowest tier first, then most evidence, then lowest RTT. The tier gate
-        # is still respected - releasing a reserve leg while a tier-1 leg is
-        # merely unproven would defeat the reservation.
+        # Lowest tier first, then a leg something has actually ANSWERED, then
+        # most evidence, then lowest RTT.
+        #
+        # The tier gate is still decided first - releasing a reserve leg while
+        # a tier-1 leg is merely unproven would defeat the reservation - but
+        # between two legs in the same tier, one the far end has answered and
+        # one it never has, only the first has any evidence behind it. Without
+        # this the valve could hand the whole bond to a leg spraying into an
+        # address nothing is listening on purely because its streak counter
+        # happened to be higher (#61 AC2).
         best = min(candidates, key=lambda p: (
             p.config.tier,
+            0 if p.has_ever_answered else 1,
             -self._join_streak.get(p.name, 0.0),
             p.rtt_ms if p.rtt_ms is not None else 9e9,
         ))
@@ -2875,10 +2950,138 @@ class BondAgent:
         best.no_reply_probes = 0
         best.no_reply_since_ms = None
         best.held_out_message_active = False
+        self._end_hold(best)
         best.last_error = ("released to carry - every leg was held out at once, "
                            "which starves the bond")
         log.warning("join gate released %s: all legs were held out and the bond "
                     "was carrying nothing", best.name)
+
+    def _note_failed_pass(self, p: PathRuntime, penalty: float) -> None:
+        """This leg is DOWN or carrying nothing this pass. Record it (#61).
+
+        DEBIT A PROVEN LEG, ERASE AN UNPROVEN ONE. The erase is what made the
+        exclusion absorbing on a lossy uplink - a missed keepalive reads DOWN,
+        so erasing here turned "eight passes of evidence" into "eight
+        consecutive lucky passes". The debit keeps the counter meaning "how
+        much evidence has this leg accumulated" rather than "how lucky has it
+        been lately", and a leg that has never round-tripped once has nothing
+        to be tolerant of, so it keeps the erase.
+
+        `held_out_since_ms` IS DELIBERATELY UNTOUCHED. This runs on exactly
+        the passes a lossy leg fails, so restarting the hold clock here would
+        rebuild the same unreachable bar one layer up: the leg would never
+        reach the bound for the same reason it never reached the streak.
+
+        Split out of `_gate_flapped_paths` so that loop reads as the four
+        states a leg can be in rather than as one of them inlined. Called with
+        self._lock held, from that loop only.
+        """
+        if p.name in self._join_streak or p.state is PathState.DOWN:
+            self._flapped.add(p.name)
+        streak = self._join_streak.get(p.name, 0.0)
+        self._join_streak[p.name] = (
+            max(0.0, streak - penalty) if p.has_ever_answered else 0.0
+        )
+        # This pass writes no hold message - the caller falls straight through
+        # to the next leg - so a flag claiming last_error is still this gate's
+        # from an EARLIER pass is now stale. The DOWN/zero-weight verdict
+        # probe_paths wrote this tick is what a reader should see, not a
+        # leftover ownership claim (#26).
+        p.held_out_message_active = False
+        # NEVER ON PROBATION WHILE DOWN. The bound says how long a leg may be
+        # held out DESPITE looking usable; a leg that just read DOWN is not
+        # looking usable, and a timer must not outvote a measurement.
+        p.on_probation = False
+
+    def _end_hold(self, p: PathRuntime) -> None:
+        """This leg is no longer being held out by the gate (#61).
+
+        ONE PLACE, THREE CALLERS - re-admission, the all-legs valve, and the
+        not-gated branch. Every one of them has to retire the same three
+        pieces of hold state, and the failure mode of forgetting one is
+        silent: a stale `held_out_since_ms` would date the NEXT hold from a
+        hold that already ended and put the leg straight onto probation the
+        moment it failed again, skipping the anti-flap wait entirely.
+        """
+        p.held_out_since_ms = None
+        p.on_probation = False
+        self._probation_logged.discard(p.name)
+
+    def _hold_out(self, p: PathRuntime, streak: float, threshold: float) -> None:
+        """Hold one leg out of the bond, or put it on probation (#61).
+
+        Split out of `_gate_flapped_paths` rather than inlined: that function
+        is already a loop with four branches and Elder caps this file's
+        cyclomatic complexity at 15, and the decision here - "has this hold
+        run long enough that continuing it costs more than it protects" - is
+        genuinely a separate one from "which branch is this leg in".
+
+        THE BOUND ONLY EXISTS FOR A LEG THE FAR END HAS ANSWERED, and the
+        share it grants is the floor, not the leg's configured weight. Both
+        halves matter. Probation says "carry a little while you finish proving
+        yourself", which is a different sentence from "you are proven", and a
+        leg that has never round-tripped has not started the sentence.
+
+        Callers: the hold branch of `_gate_flapped_paths` only. This is
+        reached exclusively on a pass where the leg is NOT down and arrived
+        with a real weight, so probation can never point the route at a leg
+        that has just told us it is gone.
+        """
+        now = _now_ms()
+        if p.held_out_since_ms is None:
+            p.held_out_since_ms = now
+        held_ms = now - p.held_out_since_ms
+        # "HEALTHY" ONLY IF IT HAS EVER ANSWERED. A companion leg whose phone
+        # has left the network still has an interface (br-lan) and still
+        # passes the shallow state check, so it sat on the console reading
+        # "healthy, held out of bond until proven" while 100% of its
+        # keepalives vanished into an address nothing was listening on - 10 MB
+        # sprayed, zero bytes back, no RTT ever measured. Calling that healthy
+        # is the exact lie this project exists to stop telling.
+        #
+        # Round-tripping is the evidence, but read the STICKY flag (#26), not
+        # the current sample. rtt_ms is set only when a keepalive comes BACK
+        # and goes back to None the instant one is missed, so reading it here
+        # would brand a leg that worked for hours and just went quiet as
+        # "never answered" - exactly the bug has_ever_answered exists to
+        # prevent (see its own docstring). This gate had kept reading rtt_ms
+        # anyway.
+        ever_answered = p.has_ever_answered
+        if ever_answered and held_ms >= self.config.policy.probation_after_ms:
+            # A REAL BUT MINIMAL SHARE, the same slice the all-legs valve
+            # hands out, for the same reason: it is carrying because something
+            # must, not because it has been judged fit. Full weight still
+            # waits on the streak, which is what keeps a genuinely oscillating
+            # leg capped here for as long as it keeps oscillating.
+            p.effective_weight = max(1, policy.weight_floor_for(p, self.config.policy))
+            # ONCE PER HOLD, not once per pass: a leg on probation behind a
+            # lossy uplink drops in and out of DOWN constantly, and a line on
+            # every re-entry would bury the transition it is reporting. Same
+            # rule BondStanddown._hold_sole_uplink already follows.
+            if p.name not in self._probation_logged:
+                self._probation_logged.add(p.name)
+                log.warning(
+                    "path %s put on probation at weight %d after %.0fs held out "
+                    "(streak %g/%g): a leg that has answered before must not be "
+                    "excluded indefinitely",
+                    p.name, p.effective_weight, held_ms / 1000.0, streak, threshold,
+                )
+            p.on_probation = True
+            # The no-reply counters belong to a leg that has never answered;
+            # this one has, so they are cleared for the same reason
+            # _held_out_message clears them on its ever-answered path.
+            p.no_reply_probes = 0
+            p.no_reply_since_ms = None
+            p.last_error = (
+                f"on probation - carrying a small share while it proves itself "
+                f"({streak:g}/{threshold:g}, held out {held_ms / 1000:.0f}s)"
+            )
+            p.held_out_message_active = True
+            return
+        p.effective_weight = 0
+        p.on_probation = False
+        p.last_error = self._held_out_message(p, streak, threshold, ever_answered)
+        p.held_out_message_active = True
 
     @staticmethod
     def _held_out_message(p: PathRuntime, streak: float, threshold: float,
@@ -2906,7 +3109,10 @@ class BondAgent:
             p.no_reply_since_ms = None
             return f"healthy, held out of bond until proven ({streak:g}/{threshold:g})"
 
-        now_ms = int(time.time() * 1000)
+        # THE GATE'S OWN CLOCK, not a second reading of time.time(). Both
+        # bounds this gate keeps - the no-reply wording and the probation hold
+        # - have to advance together, so they read the same seam (#61).
+        now_ms = _now_ms()
         if p.no_reply_since_ms is None:
             p.no_reply_since_ms = now_ms
         p.no_reply_probes += 1
@@ -2963,6 +3169,81 @@ class BondAgent:
             "now falls back to the physical WAN. Internet works, but it exits at "
             "the carrier, NOT through home, and is no longer inside the tunnel."
         )
+
+    def _leg_activity_facts(
+        self, path: PathRuntime, pid: int | None
+    ) -> dict[str, Any]:
+        """Is this leg in the bond, is it doing any work, and for how long not.
+
+        One block, lifted out of `_path_status` on Elder's complexity finding
+        against PR #84. These fields are not merely adjacent - they are the
+        answer to a single question a reader asks about a row, derived from
+        each other in order, and every one of them exists because some surface
+        got that answer wrong on its own.
+
+        IN_BOND IS MEMBERSHIP, NOT WEIGHT, and conflating them is why the phone
+        app showed four legs carrying while the transport held exactly one. A
+        tier-gated leg keeps whatever weight the policy last computed - the
+        weight is real, it is just not being used - so any reader deciding
+        "carrying" from weight alone reports legs that are switched off.
+        Membership is the transport's own link table, which is the only place
+        that knows. ...AND NOT HELD OUT FOR LATENCY: link membership alone
+        stopped being sufficient when shedding arrived (#81), because a shed
+        leg deliberately STAYS a link so it keeps getting keepalives and can
+        measure its way back - removing it freezes its tail and it never
+        recovers. It carries nothing, though, so reporting it as in the bond is
+        this module's own failure from the other side. Observed live
+        2026-08-09: `ethernet degraded rtt=2847.9 shed=True in_bond=True`.
+
+        CONTRIBUTING IS ITS OWN FACT, computed exactly once (#26). A leg can be
+        `in_bond=True` and `state="degraded"` while moving zero traffic - held
+        to weight 0 by the anti-flap gate, or shed for latency, or simply
+        demoted - and "degraded" reads as "still helping, a bit" to a human
+        scanning the row. It is not. Every consumer of this status (the
+        dashboard, the fleet hub, a phone) was re-deriving that distinction
+        independently and inconsistently; this is the one place it is decided.
+
+        ACTIVITY IS THE SAME FACT IN ONE WORD, because a reader scanning a list
+        of legs does not combine two booleans (#26). WORK, NOT HEALTH, and that
+        is the whole distinction: `state` answers "how is this leg", and its
+        vocabulary - up, degraded, down - has no word for "fine, present, and
+        moving nothing", so a leg held at weight 0 came out as `degraded`. Live
+        on 2026-08-29 that was a leg with a slot in the bond, no RTT and zero
+        weight for an hour of streaming, listed among the legs while the
+        console said "2 of 4 carrying". The two fields stay orthogonal and both
+        are published: a leg can be `degraded` AND `carrying` (12% loss and
+        doing the work, which is one row, not two), or `up` AND `idle` (healthy
+        and held out), and collapsing either pair loses the half a reader
+        needs.
+
+            carrying - in the bond with a real weight, probation included
+            idle     - in the bond, holding a slot, contributing nothing
+            out      - not in the bond at all; `state` says why
+
+        AND HOW LONG, IN SECONDS, NOT IN PASSES. A reader should not have to
+        know the probe interval to tell whether "no reply" means five seconds
+        or an hour (#26), and the streak fraction in a hold message says how
+        much evidence has been gathered but nothing about how long the
+        gathering has been going on - on 2026-09-11 the answer was "all day"
+        for a fraction that read 1/8 (#61). Both are None when the leg is not
+        in that state at all, never 0, because "not waiting" and "waiting for
+        no time" are different things.
+        """
+        in_bond = (pid is not None and pid in self._transport_links
+                   and not path.shed_for_latency)
+        contributing = in_bond and path.effective_weight > 0
+        return {
+            "in_bond": in_bond,
+            "contributing": contributing,
+            "activity": ("carrying" if contributing
+                         else "idle" if in_bond else "out"),
+            # NOT the same as `state`. A leg here is not having a bad day, it
+            # has never had a good one - see _flag_never_handshaked.
+            "never_handshaked": path.never_handshaked,
+            "no_reply_probes": path.no_reply_probes,
+            "no_reply_elapsed_s": _elapsed_s(path.no_reply_since_ms),
+            "held_out_elapsed_s": _elapsed_s(path.held_out_since_ms),
+        }
 
     def _path_status(self, path: PathRuntime) -> dict[str, Any]:
         """to_dict() plus the two facts that were only visible by hand.
@@ -3027,18 +3308,7 @@ class BondAgent:
         # failure from the other side. Observed live 2026-08-09:
         # `ethernet degraded rtt=2847.9 shed=True in_bond=True`.
         pid = self._transport_ids.get(path.name)
-        d["in_bond"] = (pid is not None and pid in self._transport_links
-                        and not path.shed_for_latency)
-        # CONTRIBUTING, as its own fact, and computed exactly once (#26). A
-        # leg can be `in_bond=True` and `state="degraded"` while moving zero
-        # traffic - held to weight 0 by this same anti-flap gate, or shed for
-        # latency, or simply demoted - and "degraded" reads as "still helping,
-        # a bit" to a human scanning the row. It is not. Every consumer of
-        # this status (the dashboard, the fleet hub, a phone) was re-deriving
-        # that distinction independently and inconsistently (D29's shape,
-        # repeated); this is the one place it is computed so every consumer
-        # can just read it.
-        d["contributing"] = bool(d["in_bond"]) and path.effective_weight > 0
+        d.update(self._leg_activity_facts(path, pid))
         # The RAW counters usage is derived from, and the id they are keyed by.
         # Published because the first version of the accounting under-counted a
         # 20 MB transfer as 100 KB, and there was no way to see whether the
@@ -3064,18 +3334,6 @@ class BondAgent:
         d["dynamic"] = lease is not None
         if lease is not None:
             d["lease_s"] = round(lease, 1)
-        # NOT the same as `state`. A leg here is not having a bad day, it has
-        # never had a good one - see _flag_never_handshaked.
-        d["never_handshaked"] = path.never_handshaked
-        # ELAPSED TIME, not just a probe count (#26's second acceptance
-        # criterion) - a reader should not have to know the probe interval to
-        # tell whether "no reply" means five seconds or an hour. None while
-        # the leg has answered, or has not yet spent a pass in the hold gate.
-        d["no_reply_probes"] = path.no_reply_probes
-        d["no_reply_elapsed_s"] = (
-            round((time.time() * 1000 - path.no_reply_since_ms) / 1000.0, 1)
-            if path.no_reply_since_ms is not None else None
-        )
         # A usable uplink this leg's pattern matched and nobody took (#212).
         # Empty for every correctly-configured leg, so a non-empty list is
         # always a real finding.
