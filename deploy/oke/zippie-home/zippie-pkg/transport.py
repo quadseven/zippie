@@ -148,6 +148,212 @@ MAX_GAP_SCAN = NackTracker.MAX_PENDING
 NACK_MAX_DELAY_FRACTION = 0.6
 
 
+# ---- adaptive recovery (#62) -----------------------------------------------
+#
+# The fixed 250 ms reorder deadline and 400 ms retransmit window are sized for
+# the legs this bond ordinarily carries (33/73/334 ms measured on the travel
+# router). Starlink can produce latency spikes and loss bursts well past
+# those - the issue's own motivating case - and a deadline too short for the
+# spike means packets expire before a NACK/retransmit cycle can complete:
+# `too_late_dropped` and `gaps_abandoned` climb, and the application sees a
+# stall it should not have had to.
+#
+# WHY ONE ADAPTIVE QUANTITY, NOT THREE. reorder_deadline_ms, retransmit
+# hold_ms and the NACK ceiling are already a derivation, not three
+# independent knobs - Transport.__init__ computes hold_ms's margin and
+# max_delay_ms from reorder_deadline_ms once, at construction. Threading a
+# live-mutable value through Reassembler, NackTracker and RetransmitBuffer
+# independently would be a bigger surface for the identical problem this
+# already solves once. So AdaptiveRecovery below owns exactly one number -
+# the reorder deadline - and re-derives the other two from it on every
+# change, the same way construction does.
+#
+# THE SIGNALS ARE WHAT TRANSPORT ALREADY PUBLISHES. `nacks.stats.capped`
+# (a gap hit the ceiling despite no leg proving progress - direct evidence the
+# deadline was too short) and `reassembler.stats.too_late_dropped` +
+# `gaps_abandoned` (frames arriving after the deadline gave up, or gaps force-
+# abandoned) are exactly "the deadline was too short, empirically" - no new
+# instrumentation. `_link_rtt` (the last answered keepalive per leg) adds the
+# RTT/tail evidence the issue's "What" section also asks for, restricted to
+# legs `_heard_recently` still trusts - a leg's last reading before it goes
+# silent must not pin a stale, possibly-bad RTT in the decision forever.
+#
+# NOT `agent.py`'s PathRuntime.rtt_tail_ms. This module is shared,
+# byte-identical code between the travel router and the home pod
+# (test_manifest_copy_in_sync.py) - PathRuntime is router-only scheduling
+# state that home's transport never builds, so depending on it here would
+# make the two ends' adaptive behaviour asymmetric for no reason the issue
+# asks for. `_link_rtt` is something both ends already track.
+#
+# HOW OFTEN THIS RE-EVALUATES. `tick()` runs on every pass of the transport
+# loop - up to once per datagram under load - so evaluating on every call
+# would make the deadline swing on individual packets instead of on sustained
+# conditions. Gated to once per ADAPT_EVAL_INTERVAL_S, the same
+# rate-limiting shape as every other periodic decision in this codebase.
+ADAPT_EVAL_INTERVAL_S = 1.0
+
+# How far one evaluation may move the deadline, in either direction. Bounded
+# so a single bad second cannot jump straight to the ceiling - the point of
+# stepping is that sustained impairment earns a wider window and a blip does
+# not.
+ADAPT_STEP_MS = 50
+
+# How many CONSECUTIVE healthy evaluations are required before stepping the
+# deadline back down. This is the acceptance criterion's hysteresis: recovery
+# timing must return toward baseline only after SUSTAINED healthy evidence,
+# not the instant one good second is seen after a bad one. At the 1 s
+# evaluation interval this is a 5 s healthy run per step down - much shorter
+# than the widening a real Starlink obstruction earns, so a bond that
+# recovers stays widened only briefly, not for the rest of the trip.
+ADAPT_SUSTAINED_HEALTHY_EVALS = 5
+
+# A leg's RTT counts as impairment evidence once it exceeds this fraction of
+# the CURRENT deadline. Below 1.0 deliberately: the point is to widen ahead of
+# loss, not only after packets have already been abandoned. 0.8 leaves 20%
+# headroom before the reassembler would actually give up on a gap from that
+# leg alone.
+ADAPT_RTT_HEADROOM = 0.8
+
+# THE EXPLICIT UPPER BOUND the acceptance criteria require. Default is a
+# multiple of whatever baseline the deployment configured, capped by a hard
+# ceiling in milliseconds so a misconfigured baseline cannot compute an
+# unbounded one. 4x the packet-mode default (250 ms) is 1000 ms, which is
+# comfortably past the legs measured on the travel router while still being a
+# small fraction of the standdown timers elsewhere in this codebase (1.5 s
+# RTT / 20 s sustained) - wide enough to ride out a spike, nowhere near long
+# enough to read as a stall on its own.
+ADAPT_MAX_DEADLINE_MULTIPLIER = 4
+ADAPT_MAX_DEADLINE_HARD_CEILING_MS = 1000
+
+
+@dataclass
+class AdaptiveRecoveryStats:
+    increases: int = 0
+    decreases: int = 0
+    reorder_deadline_ms: int = 0
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "increases": self.increases,
+            "decreases": self.decreases,
+            "reorder_deadline_ms": self.reorder_deadline_ms,
+        }
+
+
+class AdaptiveRecovery:
+    """Owns the ONE live-adaptive number (see the module comment above) and
+    derives the retransmit hold and NACK ceiling from it on every change.
+
+    Pure and clock-injectable: no socket, no thread, nothing about legs by
+    name - it is handed cumulative counters and a worst-RTT reading, and
+    returns whether anything changed. That is what makes it unit-testable
+    without a real bond, the same seam RetransmitBuffer and NackTracker
+    already use.
+    """
+
+    def __init__(
+        self,
+        baseline_deadline_ms: int,
+        hold_margin_ms: int,
+        nack_delay_ms: int,
+        *,
+        max_deadline_ms: int | None = None,
+        step_ms: int = ADAPT_STEP_MS,
+        eval_interval_s: float = ADAPT_EVAL_INTERVAL_S,
+        sustained_healthy_evals: int = ADAPT_SUSTAINED_HEALTHY_EVALS,
+        rtt_headroom: float = ADAPT_RTT_HEADROOM,
+        _clock=time.monotonic,
+    ) -> None:
+        self.baseline_ms = baseline_deadline_ms
+        self.deadline_ms = baseline_deadline_ms
+        # Margin retransmit hold_ms keeps ABOVE the reorder deadline,
+        # preserved from whatever the deployment originally configured (the
+        # 400/250 default is a 150 ms margin) rather than reset to a new
+        # constant - see hold_ms() below.
+        self._hold_margin_ms = hold_margin_ms
+        self._nack_delay_ms = nack_delay_ms
+        self.max_deadline_ms = max_deadline_ms or min(
+            ADAPT_MAX_DEADLINE_MULTIPLIER * baseline_deadline_ms,
+            ADAPT_MAX_DEADLINE_HARD_CEILING_MS,
+        )
+        self._step_ms = step_ms
+        self._eval_interval_s = eval_interval_s
+        self._sustained_healthy_evals = sustained_healthy_evals
+        self._rtt_headroom = rtt_headroom
+        self._clock = _clock
+        self._last_eval: float | None = None
+        self._last_capped = 0
+        self._last_abandoned = 0
+        self._healthy_streak = 0
+        self.stats = AdaptiveRecoveryStats(reorder_deadline_ms=baseline_deadline_ms)
+
+    def maybe_adapt(
+        self,
+        *,
+        capped_total: int,
+        abandoned_total: int,
+        worst_rtt_ms: float | None,
+    ) -> bool:
+        """Call as often as you like; internally rate-limited to
+        `eval_interval_s`. Returns True if the deadline moved, which is the
+        caller's signal to push the new derived values into the reassembler,
+        retransmit buffer and nack tracker.
+
+        `capped_total`/`abandoned_total` are CUMULATIVE counters (the stats
+        objects Transport already owns); deltas are tracked here so the
+        caller does not have to.
+        """
+        now = self._clock()
+        if self._last_eval is not None and (now - self._last_eval) < self._eval_interval_s:
+            return False
+        first_eval = self._last_eval is None
+        self._last_eval = now
+        capped_delta = capped_total - self._last_capped
+        abandoned_delta = abandoned_total - self._last_abandoned
+        self._last_capped = capped_total
+        self._last_abandoned = abandoned_total
+        if first_eval:
+            # Nothing to compare the first delta against; wait for the next
+            # window rather than reading process-start counters as a burst.
+            return False
+
+        rtt_pressure = (
+            worst_rtt_ms is not None
+            and worst_rtt_ms > self.deadline_ms * self._rtt_headroom
+        )
+        impaired = capped_delta > 0 or abandoned_delta > 0 or rtt_pressure
+
+        changed = False
+        if impaired:
+            self._healthy_streak = 0
+            if self.deadline_ms < self.max_deadline_ms:
+                self.deadline_ms = min(
+                    self.max_deadline_ms, self.deadline_ms + self._step_ms
+                )
+                self.stats.increases += 1
+                changed = True
+        elif self.deadline_ms > self.baseline_ms:
+            self._healthy_streak += 1
+            if self._healthy_streak >= self._sustained_healthy_evals:
+                self.deadline_ms = max(
+                    self.baseline_ms, self.deadline_ms - self._step_ms
+                )
+                self.stats.decreases += 1
+                self._healthy_streak = 0
+                changed = True
+
+        self.stats.reorder_deadline_ms = self.deadline_ms
+        return changed
+
+    def hold_ms(self) -> int:
+        return self.deadline_ms + self._hold_margin_ms
+
+    def nack_max_delay_ms(self) -> int:
+        return max(
+            self._nack_delay_ms, int(self.deadline_ms * NACK_MAX_DELAY_FRACTION)
+        )
+
+
 # How many unanswered probes one leg may have outstanding. Eight is ~4 s at the
 # 500 ms default interval, far longer than any round trip worth measuring, and
 # a leg silent for that long is being judged by link_rx_age_s rather than RTT.
@@ -403,6 +609,10 @@ class Transport:
         duplicate_fanout: int = DEFAULT_DUPLICATE_FANOUT,
         reorder_deadline_ms: int = 150,
         nack_delay_ms: int = 60,
+        # THE EXPLICIT UPPER BOUND adaptive recovery may widen the reorder
+        # deadline to (#62). None computes the default from
+        # reorder_deadline_ms itself - see ADAPT_MAX_DEADLINE_MULTIPLIER.
+        max_reorder_deadline_ms: int | None = None,
         roam: bool = False,
         wg_peer: tuple[str, int] | None = None,
         socket_factory=make_udp_socket,
@@ -479,6 +689,25 @@ class Transport:
             # of #108.
             max_delay_ms=max(nack_delay_ms,
                              int(reorder_deadline_ms * NACK_MAX_DELAY_FRACTION)),
+            _clock=_clock,
+        )
+        # THE MARGIN retransmit hold_ms KEEPS ABOVE THE REORDER DEADLINE,
+        # preserved rather than reset to a new constant. retransmit.py's own
+        # docstring states the invariant: hold_ms "must exceed the receiver's
+        # reorder deadline... but not by much" - at the 400/250 defaults
+        # that is a 150 ms margin. Clamped to a small positive floor so a
+        # deployment that configures hold_ms <= reorder_deadline_ms (already
+        # a misconfiguration today) cannot make adaptive recovery derive a
+        # hold_ms that is SHORTER than the widened deadline, which would
+        # defeat retransmission outright instead of merely inheriting the
+        # pre-existing misconfiguration.
+        configured_hold_ms = (retransmit or RetransmitConfig()).hold_ms
+        hold_margin_ms = max(20, configured_hold_ms - reorder_deadline_ms)
+        self._adaptive = AdaptiveRecovery(
+            baseline_deadline_ms=reorder_deadline_ms,
+            hold_margin_ms=hold_margin_ms,
+            nack_delay_ms=nack_delay_ms,
+            max_deadline_ms=max_reorder_deadline_ms,
             _clock=_clock,
         )
         self.classifier = Classifier(classifier)
@@ -1300,6 +1529,42 @@ class Transport:
         self._deliver_to_wireguard(self.reassembler.tick())
         for seq in self.nacks.due():
             self._send_nack(seq)
+        self._maybe_adapt_recovery()
+
+    def _worst_known_rtt_ms(self) -> float | None:
+        """Max RTT among legs `_heard_recently` still trusts (#62).
+
+        Reuses the SAME recency rule #4's healthy flag does rather than a new
+        constant: a leg that has gone silent freezes `_link_rtt` at whatever
+        it last read, and an unfiltered max would let one leg's last gasp
+        before dying pin a stale, possibly-bad RTT in the adaptive decision
+        forever - the deadline would never relax back toward baseline.
+        """
+        worst = None
+        for path_id, rtt in self._link_rtt.items():
+            if not self._heard_recently(path_id):
+                continue
+            if worst is None or rtt > worst:
+                worst = rtt
+        return worst
+
+    def _maybe_adapt_recovery(self) -> None:
+        changed = self._adaptive.maybe_adapt(
+            capped_total=self.nacks.stats.capped,
+            abandoned_total=(self.reassembler.stats.too_late_dropped
+                             + self.reassembler.stats.gaps_abandoned),
+            worst_rtt_ms=self._worst_known_rtt_ms(),
+        )
+        if not changed:
+            return
+        self.reassembler.reorder_deadline_s = self._adaptive.deadline_ms / 1000.0
+        self.retransmit.set_hold_ms(self._adaptive.hold_ms())
+        self.nacks.set_max_delay_ms(self._adaptive.nack_max_delay_ms())
+        log.info(
+            "adaptive recovery: reorder deadline now %dms (hold %dms, nack ceiling %dms)",
+            self._adaptive.deadline_ms, self._adaptive.hold_ms(),
+            self._adaptive.nack_max_delay_ms(),
+        )
 
     def run_once(self, timeout: float = 0.05) -> None:
         events = self._sel.select(timeout)
@@ -1381,6 +1646,11 @@ class Transport:
             "reassembly": self.reassembler.stats.as_dict(),
             "retransmit": self.retransmit.stats.as_dict(),
             "nacks": self.nacks.stats.as_dict(),
+            # reorder_deadline_ms here is the LIVE value adaptive recovery is
+            # currently running (#62), not the configured baseline - it moves
+            # within [baseline, max_deadline_ms] and stats_dict is the way to
+            # see that from outside the process without a code change.
+            "recovery": self._adaptive.stats.as_dict(),
             "classifier": self.classifier.stats(),
             "links": len(self._links),
             # A leg counts only while the peer is still reaching us on it.

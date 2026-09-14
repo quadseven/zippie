@@ -262,6 +262,15 @@ def parse_config(data: dict[str, Any], *, private_key: str = "", public_key: str
         transport_port=int(policy_raw.get("transport_port", 51830)),
         home_port=(int(policy_raw["home_port"]) if policy_raw.get("home_port") else None),
         reorder_deadline_ms=int(policy_raw.get("reorder_deadline_ms", 250)),
+        # None (absent) keeps Transport's own computed default (#62). Present
+        # means an operator has deliberately picked a ceiling for adaptive
+        # recovery, so it is used exactly rather than clamped here - a bad
+        # value fails the same way any other transport misconfiguration does,
+        # at Transport construction, not silently here.
+        max_reorder_deadline_ms=(
+            int(policy_raw["max_reorder_deadline_ms"])
+            if policy_raw.get("max_reorder_deadline_ms") else None
+        ),
         transport_roam=bool(policy_raw.get("transport_roam", False)),
         # Validated HERE, at load, rather than at first use. parse_auth_level
         # refuses an unrecognised rung, and a typo that silently meant "off"

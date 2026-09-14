@@ -63,6 +63,9 @@ class HomeTransportConfig:
     # SO_BINDTODEVICE target for the listening link (the WAN). None = any.
     wan_device: str | None = None
     reorder_deadline_ms: int = 250
+    # See PolicyConfig.max_reorder_deadline_ms (#62). None keeps Transport's
+    # own computed default.
+    max_reorder_deadline_ms: int | None = None
     # WHICH RUNG OF THE HEADER-MAC LADDER THIS END STANDS ON (auth.py).
     #
     # OFF IS THE DEFAULT, so a pod that is given no auth configuration behaves
@@ -93,6 +96,7 @@ def build_home_transport(
     """
     kwargs = {
         "reorder_deadline_ms": cfg.reorder_deadline_ms,
+        "max_reorder_deadline_ms": cfg.max_reorder_deadline_ms,
         "roam": True,
         "wg_peer": cfg.wg_server,
         # Raises rather than falling back to unauthenticated if the level and
@@ -184,6 +188,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--wan-device", default=None,
                     help="SO_BINDTODEVICE target for the listening link")
     ap.add_argument("--reorder-deadline-ms", type=int, default=250)
+    ap.add_argument("--max-reorder-deadline-ms", type=int, default=None,
+                    help="ceiling adaptive recovery may widen "
+                         "--reorder-deadline-ms to (#62); default computes "
+                         "one from --reorder-deadline-ms itself")
     ap.add_argument("--auth-level", default="off",
                     help="header MAC rung: off, observe, sign or require. "
                          "Move ONE rung at a time and home before the router; "
@@ -206,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
         wg_server=("127.0.0.1", args.wg_server_port),
         wan_device=args.wan_device,
         reorder_deadline_ms=args.reorder_deadline_ms,
+        max_reorder_deadline_ms=args.max_reorder_deadline_ms,
         # parse_auth_level refuses an unrecognised value rather than
         # defaulting, because a typo that silently meant "off" would look
         # exactly like a working rollout.
