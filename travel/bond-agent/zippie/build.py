@@ -29,8 +29,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from pathlib import Path
 from typing import Any
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib  # type: ignore
 
 # Where the deploy tool records what it believes it installed.
 DEPLOY_STAMP = Path("/etc/zippie/build.json")
@@ -77,6 +83,53 @@ def module_count(package_dir: Path | None = None) -> int:
     """How many modules went into the fingerprint."""
     root = package_dir or _package_dir()
     return len(list(root.glob("*.py")))
+
+
+# [home] keys that are structurally unable to match between a real router and
+# the checked-in zippie.toml, and must never be compared byte-for-byte.
+#
+# `endpoint` and `server_public_key` are PERMANENT placeholders in the
+# checked-in file once the repo went public (`travel/gl-mt3000/zippie.toml`'s
+# own top-of-[home] comment: "the real value is deliberately not checked in
+# ... before running the cat | ssh deploy step, replace <server-public-key>
+# with the real value"). `lan_endpoints` is the same shape one level down: a
+# per-router home-LAN fact, illustrated in the checked-in file with an
+# RFC 5737 example address no real router is ever configured with.
+#
+# A byte-for-byte config comparison against these three keys therefore
+# reports drift on every router, forever - discovered live 2026-09-13/14,
+# Datadog monitor 314870899 in permanent Alert on suzu even though the
+# running config was correct. That is exactly the false-positive this
+# module's own header warns the CODE fingerprint against ("a commit
+# comparison alarms on every docs-only merge"); the config comparison needs
+# the same discipline.
+CONFIG_HOME_ENVIRONMENT_KEYS = ("endpoint", "server_public_key", "lan_endpoints")
+
+
+def normalized_config_fingerprint(config_path: Path) -> str:
+    """SHA-256 over the config, with per-router/scrubbed [home] fields excluded.
+
+    Parses as TOML rather than comparing bytes so this is immune to the
+    excluded keys moving, gaining a trailing comment, or reordering with the
+    rest of `[home]` - none of which is drift, all of which would still
+    change a raw file hash. `json.dumps(..., sort_keys=True)` over the parsed
+    structure is the canonical form compared, the same reasoning
+    `fingerprint()` above gives for folding filename and length into the code
+    digest rather than trusting raw bytes alone.
+
+    Raises on a missing or unparseable file, deliberately: `fingerprint()`
+    above and every call site of this function already treat "could not read
+    it" as a distinct, non-drift outcome (`could not hash one side` /
+    `cannot fingerprint`), and swallowing the error here would collapse that
+    distinction back into a silent empty digest.
+    """
+    data = tomllib.loads(config_path.read_text())
+    home = data.get("home")
+    if isinstance(home, dict):
+        for key in CONFIG_HOME_ENVIRONMENT_KEYS:
+            home.pop(key, None)
+    canonical = json.dumps(data, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def _read_stamp(stamp_path: Path) -> dict[str, Any]:
