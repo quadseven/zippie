@@ -145,6 +145,17 @@ def _dashboard_tls_config(raw: dict[str, Any]) -> tuple[int | None, str, str]:
     return port, cert, key
 
 
+def _positive_int(raw: Any, key: str) -> int:
+    """A config value that must be a positive integer once present at all -
+    used where a present-but-<=0 value would otherwise reach a caller as a
+    bound that can never be satisfied (#62's max_reorder_deadline_ms) rather
+    than as the loud misconfiguration it actually is."""
+    value = int(raw)
+    if value <= 0:
+        raise ValueError(f"{key} must be a positive integer, got {value}")
+    return value
+
+
 def parse_config(data: dict[str, Any], *, private_key: str = "", public_key: str = "") -> AgentConfig:
     home_raw = data.get("home") or {}
     policy_raw = data.get("policy") or {}
@@ -262,14 +273,19 @@ def parse_config(data: dict[str, Any], *, private_key: str = "", public_key: str
         transport_port=int(policy_raw.get("transport_port", 51830)),
         home_port=(int(policy_raw["home_port"]) if policy_raw.get("home_port") else None),
         reorder_deadline_ms=int(policy_raw.get("reorder_deadline_ms", 250)),
-        # None (absent) keeps Transport's own computed default (#62). Present
-        # means an operator has deliberately picked a ceiling for adaptive
-        # recovery, so it is used exactly rather than clamped here - a bad
-        # value fails the same way any other transport misconfiguration does,
-        # at Transport construction, not silently here.
+        # None (KEY ABSENT) keeps Transport's own computed default (#62).
+        # Checked with `in`, not a truthy `.get()`, because a truthy check
+        # reads an explicit `max_reorder_deadline_ms = 0` as "not set" and
+        # silently substitutes the computed default instead - an operator who
+        # wrote 0 believing it meant something would never see their own
+        # value take effect. Present-and-invalid (<=0) fails LOUD here rather
+        # than reaching Transport as a bound that can never be reached
+        # (AdaptiveRecovery.deadline_ms starts at baseline, which a <=0
+        # ceiling sits below or at, so widening would just silently never
+        # happen).
         max_reorder_deadline_ms=(
-            int(policy_raw["max_reorder_deadline_ms"])
-            if policy_raw.get("max_reorder_deadline_ms") else None
+            _positive_int(policy_raw["max_reorder_deadline_ms"], "max_reorder_deadline_ms")
+            if "max_reorder_deadline_ms" in policy_raw else None
         ),
         transport_roam=bool(policy_raw.get("transport_roam", False)),
         # Validated HERE, at load, rather than at first use. parse_auth_level

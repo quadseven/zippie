@@ -25,6 +25,48 @@ def test_parse_minimal():
     assert cfg.policy.mode.value == "aggregate"
 
 
+def test_max_reorder_deadline_ms_absent_stays_none():
+    """Absent means Transport computes its own default (#62) - parse_config
+    must not invent a number the operator never wrote."""
+    cfg = parse_config({
+        "home": {"endpoint": "home.example.com"},
+        "policy": {},
+        "paths": [],
+    })
+    assert cfg.policy.max_reorder_deadline_ms is None
+
+
+def test_max_reorder_deadline_ms_is_configurable():
+    cfg = parse_config({
+        "home": {"endpoint": "home.example.com"},
+        "policy": {"max_reorder_deadline_ms": 800},
+        "paths": [],
+    })
+    assert cfg.policy.max_reorder_deadline_ms == 800
+
+
+def test_max_reorder_deadline_ms_zero_is_a_present_value_not_absence():
+    """A truthy `.get()` check would read an explicit 0 as "not set" and
+    silently fall back to Transport's computed default - the operator's
+    own value would vanish with no error. Present-and-invalid must fail
+    loud instead. Grug Elder, PR #105."""
+    with pytest.raises(ValueError):
+        parse_config({
+            "home": {"endpoint": "home.example.com"},
+            "policy": {"max_reorder_deadline_ms": 0},
+            "paths": [],
+        })
+
+
+def test_max_reorder_deadline_ms_negative_is_rejected():
+    with pytest.raises(ValueError):
+        parse_config({
+            "home": {"endpoint": "home.example.com"},
+            "policy": {"max_reorder_deadline_ms": -100},
+            "paths": [],
+        })
+
+
 def test_idle_economy_policy_is_configurable():
     cfg = parse_config({
         "home": {"endpoint": "home.example.com"},

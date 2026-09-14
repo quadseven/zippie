@@ -267,14 +267,31 @@ class AdaptiveRecovery:
         self.baseline_ms = baseline_deadline_ms
         self.deadline_ms = baseline_deadline_ms
         # Margin retransmit hold_ms keeps ABOVE the reorder deadline,
-        # preserved from whatever the deployment originally configured (the
-        # 400/250 default is a 150 ms margin) rather than reset to a new
+        # preserved from whatever the deployment originally configured
+        # (RetransmitConfig's 400 default against the operational 250ms
+        # reorder deadline is a 150 ms margin) rather than reset to a new
         # constant - see hold_ms() below.
         self._hold_margin_ms = hold_margin_ms
         self._nack_delay_ms = nack_delay_ms
-        self.max_deadline_ms = max_deadline_ms or min(
-            ADAPT_MAX_DEADLINE_MULTIPLIER * baseline_deadline_ms,
-            ADAPT_MAX_DEADLINE_HARD_CEILING_MS,
+        # `is not None`, NOT a truthy check: an explicit max_deadline_ms=0
+        # is a real value, not "unset", and a truthy check would silently
+        # replace it with the computed default - the exact bug this line
+        # exists to not have. Rejected outright rather than clamped: a
+        # ceiling at or below baseline would make widening silently never
+        # happen (deadline_ms starts at baseline and `<` a same-or-lower
+        # ceiling is never true), which is a misconfiguration that deserves
+        # to fail loud here, at construction, same as every other invalid
+        # combination this constructor already refuses.
+        if max_deadline_ms is not None and max_deadline_ms <= baseline_deadline_ms:
+            raise ValueError(
+                f"max_deadline_ms ({max_deadline_ms}) must be greater than "
+                f"baseline_deadline_ms ({baseline_deadline_ms}), or omitted "
+                f"to compute a default"
+            )
+        self.max_deadline_ms = (
+            max_deadline_ms if max_deadline_ms is not None
+            else min(ADAPT_MAX_DEADLINE_MULTIPLIER * baseline_deadline_ms,
+                     ADAPT_MAX_DEADLINE_HARD_CEILING_MS)
         )
         self._step_ms = step_ms
         self._eval_interval_s = eval_interval_s
@@ -694,8 +711,12 @@ class Transport:
         # THE MARGIN retransmit hold_ms KEEPS ABOVE THE REORDER DEADLINE,
         # preserved rather than reset to a new constant. retransmit.py's own
         # docstring states the invariant: hold_ms "must exceed the receiver's
-        # reorder deadline... but not by much" - at the 400/250 defaults
-        # that is a 150 ms margin. Clamped to a small positive floor so a
+        # reorder deadline... but not by much" - RetransmitConfig's own
+        # default hold_ms (400) against the 250ms every real caller
+        # configures (agent.py, home_transport.py - this constructor's own
+        # bare `reorder_deadline_ms=150` fallback above is a test-only value,
+        # never what a deployment actually runs) is a 150ms margin. Clamped
+        # to a small positive floor so a
         # deployment that configures hold_ms <= reorder_deadline_ms (already
         # a misconfiguration today) cannot make adaptive recovery derive a
         # hold_ms that is SHORTER than the widened deadline, which would

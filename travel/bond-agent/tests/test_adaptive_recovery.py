@@ -11,6 +11,8 @@ sockets; this file proves the mechanism itself.
 
 from __future__ import annotations
 
+import pytest
+
 from zippie.transport import (
     ADAPT_RTT_HEADROOM,
     ADAPT_STEP_MS,
@@ -165,6 +167,22 @@ class TestWidening:
         assert ar.max_deadline_ms == 1000  # min(4*250, 1000)
         ar2, _ = _make(baseline_ms=10)
         assert ar2.max_deadline_ms == 40  # min(4*10, 1000), well under the hard cap
+
+    def test_an_explicit_zero_ceiling_is_rejected_not_silently_defaulted(self):
+        """A truthy check on max_deadline_ms would read 0 as "not set" and
+        silently substitute the computed default - the caller's explicit
+        value would vanish with no error. Grug Elder, PR #105."""
+        with pytest.raises(ValueError):
+            _make(baseline_ms=250, max_deadline_ms=0)
+
+    def test_a_ceiling_at_or_below_baseline_is_rejected(self):
+        """Below baseline: widening could never reach it (deadline_ms starts
+        at baseline). Silently accepting it would leave adaptive recovery
+        permanently inert with no signal that anything is wrong."""
+        with pytest.raises(ValueError):
+            _make(baseline_ms=250, max_deadline_ms=250)
+        with pytest.raises(ValueError):
+            _make(baseline_ms=250, max_deadline_ms=-50)
 
 
 class TestHysteresis:
