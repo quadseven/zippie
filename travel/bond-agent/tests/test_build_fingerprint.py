@@ -182,3 +182,152 @@ def test_default_package_dir_is_the_loaded_tree():
     assert build.fingerprint() == build.fingerprint(
         Path(build.__file__).resolve().parent
     )
+
+
+# ----------------------------------------------- normalized config fingerprint
+#
+# Discovered live 2026-09-13/14: Datadog monitor 314870899 in permanent Alert
+# on suzu because drift-check.sh hashed travel/gl-mt3000/zippie.toml's raw
+# bytes, and `[home].endpoint` / `[home].server_public_key` are PERMANENT
+# placeholders in that checked-in file once the repo went public - a real
+# router's actual config can never equal them, by design. A byte comparison
+# therefore reported drift on every router, forever.
+
+_BASE_TOML = """
+[home]
+endpoint = "dns-e.example-home.invalid"
+ports = [51900, 51901, 51902, 51903]
+server_public_key = "<server-public-key>"
+dns = ["1.1.1.1", "9.9.9.9"]
+allowed_ips = ["0.0.0.0/0", "::/0"]
+persistent_keepalive = 3
+
+[[paths]]
+name = "ethernet"
+interface = "eth1"
+weight = 100
+"""
+
+
+def _toml(tmp_path, text=_BASE_TOML, name="zippie.toml"):
+    p = tmp_path / name
+    p.write_text(text)
+    return p
+
+
+def test_config_fingerprint_is_stable_for_identical_content(tmp_path):
+    a = _toml(tmp_path, name="a.toml")
+    b = _toml(tmp_path, name="b.toml")
+    assert build.normalized_config_fingerprint(a) == build.normalized_config_fingerprint(b)
+
+
+def test_a_router_specific_endpoint_does_not_count_as_drift():
+    """THE case that mattered: a real endpoint next to the checked-in
+    placeholder must fingerprint identically, or every real router alarms
+    against the file it was deployed from."""
+    import tempfile
+    from pathlib import Path
+
+    placeholder = _BASE_TOML
+    real = _BASE_TOML.replace(
+        'endpoint = "dns-e.example-home.invalid"', 'endpoint = "dns-e.some-house.net"'
+    )
+    with tempfile.TemporaryDirectory() as d:
+        p1 = Path(d) / "placeholder.toml"
+        p2 = Path(d) / "real.toml"
+        p1.write_text(placeholder)
+        p2.write_text(real)
+        assert build.normalized_config_fingerprint(
+            p1
+        ) == build.normalized_config_fingerprint(p2)
+
+
+def test_a_router_specific_server_public_key_does_not_count_as_drift(tmp_path):
+    placeholder = _toml(tmp_path, name="placeholder.toml")
+    real = _toml(
+        tmp_path,
+        text=_BASE_TOML.replace(
+            'server_public_key = "<server-public-key>"',
+            'server_public_key = "kZ9x3mQ2pL8vN4rT7wY1bC6dF5gH0jK2sA3eR8tU9wI="',
+        ),
+        name="real.toml",
+    )
+    assert build.normalized_config_fingerprint(
+        placeholder
+    ) == build.normalized_config_fingerprint(real)
+
+
+def test_lan_endpoints_present_vs_absent_does_not_count_as_drift(tmp_path):
+    """A per-router home-LAN fact, illustrated in the checked-in file with an
+    RFC 5737 example no real router is configured with."""
+    absent = _toml(tmp_path, name="absent.toml")
+    # Inserted INSIDE [home], not appended after [[paths]] - TOML is
+    # positional, and a key after a later table header belongs to that
+    # table, not to [home].
+    present = _toml(
+        tmp_path,
+        text=_BASE_TOML.replace(
+            "persistent_keepalive = 3",
+            'persistent_keepalive = 3\n'
+            'lan_endpoints = [{ network = "10.0.0.0/24", address = "10.0.0.5", port = 51931 }]',
+        ),
+        name="present.toml",
+    )
+    assert build.normalized_config_fingerprint(
+        absent
+    ) == build.normalized_config_fingerprint(present)
+
+
+def test_a_real_config_difference_still_counts_as_drift(tmp_path):
+    """The whole point of #228: this must not go blind to a genuine drift just
+    because it learned to ignore three specific keys."""
+    before = _toml(tmp_path, name="before.toml")
+    after = _toml(
+        tmp_path,
+        text=_BASE_TOML.replace('weight = 100', 'weight = 40'),
+        name="after.toml",
+    )
+    assert build.normalized_config_fingerprint(
+        before
+    ) != build.normalized_config_fingerprint(after)
+
+
+def test_key_order_and_whitespace_do_not_count_as_drift(tmp_path):
+    """TOML, not text - so this survives a reformat that changes nothing about
+    what the agent actually parses."""
+    reordered = _toml(
+        tmp_path,
+        text="""
+[home]
+dns = ["1.1.1.1", "9.9.9.9"]
+ports = [51900, 51901, 51902, 51903]
+allowed_ips = ["0.0.0.0/0", "::/0"]
+endpoint = "dns-e.example-home.invalid"
+persistent_keepalive = 3
+server_public_key = "<server-public-key>"
+
+[[paths]]
+weight = 100
+interface = "eth1"
+name = "ethernet"
+""",
+        name="reordered.toml",
+    )
+    assert build.normalized_config_fingerprint(
+        _toml(tmp_path, name="canonical.toml")
+    ) == build.normalized_config_fingerprint(reordered)
+
+
+def test_missing_file_raises_rather_than_hashing_silently(tmp_path):
+    """Every call site of this function treats 'could not read it' as a
+    distinct, non-drift outcome - swallowing the error here would collapse
+    that back into a silent, wrong digest."""
+    with pytest.raises(OSError):
+        build.normalized_config_fingerprint(tmp_path / "does-not-exist.toml")
+
+
+def test_a_config_with_no_home_table_does_not_crash(tmp_path):
+    """Defensive: a config missing [home] entirely (malformed, or a layout
+    change) must still produce a digest, not an AttributeError on .pop()."""
+    p = _toml(tmp_path, text="[paths]\n", name="no-home.toml")
+    assert build.normalized_config_fingerprint(p)

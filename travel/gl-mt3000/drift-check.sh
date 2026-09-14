@@ -141,8 +141,22 @@ if [ ! -f "$CONFIG_LOCAL" ]; then
 elif [ -z "$remote_cfg" ]; then
     config_note=" (config not compared: $REF has no travel/gl-mt3000/zippie.toml)"
 else
-    local_cfg_sha=$(sha256sum "$CONFIG_LOCAL" 2>/dev/null | cut -d' ' -f1)
-    remote_cfg_sha=$(sha256sum "$remote_cfg" 2>/dev/null | cut -d' ' -f1)
+    # NORMALIZED, not a raw byte hash. `endpoint`, `server_public_key` and
+    # `lan_endpoints` in `[home]` are permanent, per-router placeholders in
+    # the checked-in file once this repo went public - see
+    # `normalized_config_fingerprint`'s own docstring. A raw sha256sum here
+    # reported drift on every router, forever, which is the exact
+    # false-positive this whole script exists to refuse.
+    local_cfg_sha=$(PYTHONPATH="$(dirname "$PKG_LOCAL")" python3 -c "
+from pathlib import Path
+from zippie import build
+print(build.normalized_config_fingerprint(Path('$CONFIG_LOCAL')))
+" 2>/dev/null)
+    remote_cfg_sha=$(PYTHONPATH="$(dirname "$PKG_LOCAL")" python3 -c "
+from pathlib import Path
+from zippie import build
+print(build.normalized_config_fingerprint(Path('$remote_cfg')))
+" 2>/dev/null)
     if [ -z "$local_cfg_sha" ] || [ -z "$remote_cfg_sha" ]; then
         config_note=" (config not compared: could not hash one side)"
     elif [ "$local_cfg_sha" != "$remote_cfg_sha" ]; then
