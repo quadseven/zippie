@@ -3918,6 +3918,7 @@ class BondAgent:
         self._transport = Transport(
             ("127.0.0.1", self.config.policy.transport_port),
             reorder_deadline_ms=self.config.policy.reorder_deadline_ms,
+            max_reorder_deadline_ms=self.config.policy.max_reorder_deadline_ms,
             roam=self.config.policy.transport_roam,
             classifier=ClassifierConfig(
                 duplicate_enabled=self.config.policy.duplicate_enabled,

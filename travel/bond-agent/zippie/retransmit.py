@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import time
 from collections import OrderedDict, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 @dataclass(frozen=True)
@@ -111,6 +111,21 @@ class RetransmitBuffer:
 
     def __len__(self) -> int:
         return len(self._ring)
+
+    def set_hold_ms(self, hold_ms: int) -> None:
+        """Adjust the retention window live (#62's adaptive recovery).
+
+        The ring itself is untouched - only the NEXT `_evict` uses the new
+        window - so this is a plain attribute swap, not a rebuild, and safe to
+        call from the same single thread that already calls record/on_nack
+        without any lock. `max_packets` and `max_resends_per_seq` are left
+        alone: the memory and per-sequence retry ceilings this issue's
+        acceptance criteria require stay fixed regardless of how hold_ms
+        moves, because they are already independent bounds and widening the
+        time window must not widen those too.
+        """
+        if hold_ms != self.config.hold_ms:
+            self.config = replace(self.config, hold_ms=hold_ms)
 
 
 class NackTracker:
@@ -415,6 +430,16 @@ class NackTracker:
             self._asked.discard(s)
             self.stats.abandoned += 1
         self._forgotten_below = seq
+
+    def set_max_delay_ms(self, max_delay_ms: int) -> None:
+        """Adjust the forward-progress ceiling live (#62's adaptive recovery).
+
+        Floored at `initial_delay_s`, exactly like `__init__` does - so this
+        can never push the ceiling below the floor no matter what the caller
+        derives it from, the same invariant NACK_MAX_DELAY_FRACTION protects
+        at construction.
+        """
+        self.max_delay_s = max(self.initial_delay_s, max_delay_ms / 1000.0)
 
 
 @dataclass

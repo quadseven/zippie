@@ -459,6 +459,14 @@ class PolicyConfig:
     # retransmit. start_transport read this field before it existed - the
     # single reason packet mode crashed on start (pyright flagged it all along).
     reorder_deadline_ms: int = 250
+    # THE CEILING adaptive recovery may widen reorder_deadline_ms to under
+    # sustained loss or RTT pressure (#62) - a Starlink spike can outrun the
+    # fixed windows above, and this bounds how far the bond may chase it.
+    # None computes a default from reorder_deadline_ms itself; see
+    # transport.py's ADAPT_MAX_DEADLINE_MULTIPLIER. A healthy bond never
+    # reaches this value at all - it only matters once evidence says the
+    # baseline window is too short for what the path is doing right now.
+    max_reorder_deadline_ms: int | None = None
     # Home-side transport roams each link's reply target to the last source it
     # heard from, so replies follow whichever ISP delivered last with zero
     # routing churn. Travel side keeps fixed remotes (it dials out), so this is
