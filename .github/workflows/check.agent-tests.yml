@@ -192,6 +192,14 @@ jobs:
     defaults:
       run:
         working-directory: travel/datapath-go
+    # The race detector needs cgo, and cgo needs a C compiler. infra#3905
+    # (merged edb7a441) added gcc + libc6-dev to the arc-infra-runner image
+    # this job runs on, proven on both arm64 and amd64 with CGO_ENABLED=1: a
+    # clean test passes under -race, a deliberately racy one reports
+    # "WARNING: DATA RACE". Set here at job scope so it also covers `go vet`
+    # harmlessly and both `go test` steps below.
+    env:
+      CGO_ENABLED: 1
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -205,7 +213,7 @@ jobs:
       - name: go vet
         run: go vet ./...
       - name: go test
-        run: go test ./... -count=1
+        run: go test ./... -race -count=1
       # THE MOBILE BIND LAYER IS A NESTED MODULE, and `./...` does not descend
       # into one. `travel/datapath-go/mobile` has its own go.mod, so the step
       # above lists exactly three packages - cmd/zippie-clienthome,
@@ -224,24 +232,7 @@ jobs:
       # that also holds the signing keychain.
       - name: go test (mobile bind module)
         working-directory: travel/datapath-go/mobile
-        run: go test ./... -count=1
-      # NO -race HERE, DELIBERATELY, and it is a real gap rather than a
-      # preference. The transport runs both directions concurrently and this is
-      # the one component where a data race shows up as a car losing internet
-      # rather than as a stack trace, so -race is exactly what you would want.
-      #
-      # It cannot run on this image. Two attempts, both on the record:
-      #   CGO_ENABLED=0 default -> "go: -race requires cgo"
-      #   CGO_ENABLED=1         -> cgo: C compiler "gcc" not found in $PATH
-      # The race detector needs cgo, cgo needs a C compiler, and the
-      # arc-infrastructure image ships none.
-      #
-      # Left OUT rather than skipped-when-missing on purpose: a step that
-      # quietly no-ops when a tool is absent reads as coverage while providing
-      # none, which is the exact failure this whole job was added to fix. Run it
-      # locally (`go test ./... -race`) until a C toolchain is on the image;
-      # tracked in #2182.
-      #
+        run: go test ./... -race -count=1
       # The fuzz SEED corpus only - a timed fuzz run does not belong on a PR
       # gate, but the seeds encode inputs that already found real bugs (an
       # unbounded stream origin, a nextSeq overflow) and must never regress.
