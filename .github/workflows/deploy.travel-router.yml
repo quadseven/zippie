@@ -18,8 +18,11 @@ on:
     branches: [main]
     paths:
       - 'travel/**'
-      # Docs never ship to the router, and every deploy restarts the bond.
+      # Docs and tests never ship to the router (deploy-openwrt.sh copies
+      # travel/bond-agent/zippie/*.py and named travel/gl-mt3000 files), and
+      # every deploy restarts the bond.
       - '!travel/**/*.md'
+      - '!travel/**/tests/**'
       - 'scripts/deploy-openwrt.sh'
   workflow_dispatch:
 
