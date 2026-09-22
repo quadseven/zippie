@@ -7,18 +7,35 @@ This reverses the 2026-08-07 morning decision (which kept tickets in
 every open zippie issue and feature epic was transferred. Both states of the
 world are documented below so nobody re-litigates from half the story.
 
+## The repo was recreated on 2026-08-28
+
+`quadseven/zippie` was recreated as a clean repo (`quadseven/infra#2958`:
+`git filter-repo` cannot purge GitHub's PR-head refs, so scrubbing history
+meant a new repo). The previous repo is `quadseven/zippie-legacy-private`.
+**Issue and PR numbers restarted.** Any `#N` in text written before
+2026-08-28 - including earlier versions of this file, which listed #39, #40
+and #41 as epics - refers to the legacy repo, not this one. The label
+taxonomy did not come across either; it was re-mirrored from infra on
+2026-09-22.
+
+The transition epic, `quadseven/infra#2260`, stays in infra and is still
+open; it tracks the split's remaining infra-side work.
+
 ## The live epics
+
+Every open non-epic ticket is a native sub-issue of exactly one of these.
 
 | epic | what |
 |---|---|
-| #39 | Packet datapath (was `quadseven/infra#2112`) |
-| #40 | Companion phase 3 - client mode (was `quadseven/infra#2243`) |
-| #41 | Operational integrity - prove what runs, trust the metrics (was `quadseven/infra#2259`) |
+| #8 | Router secrets come from muster and rotate without an outage |
+| #59 | Packet resilience under burst loss and path degradation |
+| #107 | Alarms and guards whose verdict can be trusted |
+| #108 | Aggregate downstream and decide what must cross the bond |
+| #109 | The travel router bonds from cold power with no help |
 
-The transition epic itself, `quadseven/infra#2260`, deliberately STAYS in
-infra: it tracks the split's remaining infra-side work and closes when the
-transition is complete. It holds cross-repo sub-issue links to the zippie-side
-transition items (#17, #36, #37, #38).
+Closed epics: #60 (iOS wired-Ethernet and CarPlay path transitions), #72
+(companion telemetry). A new ticket that fits none of the live epics needs a
+new epic, not no parent.
 
 ## What stays in quadseven/infra, and why
 
@@ -37,13 +54,14 @@ transition items (#17, #36, #37, #38).
 
 ## Conventions
 
-- **No title prefix.** This is a single-project repo; `[infra]` prefixes were
-  stripped on transfer.
+- **No title prefix** on ordinary tickets. Epics are `Epic: <sentence>`,
+  72 characters or fewer, ASCII only.
 - **Labels**: exactly one state-role (`needs-triage` / `needs-info` /
   `ready-for-agent` / `ready-for-human` / `wontfix`), one or more categories,
-  one `size/XS|S|M|L|XL`. The full taxonomy was mirrored from infra on
-  2026-08-07 - all label names match infra's, deliberately, so transfers in
-  either direction never strip them again.
+  one `size/XS|S|M|L|XL`. Label names match infra's, deliberately, so
+  transfers in either direction never strip them. Blocked on a person
+  (access, a live outage window, an operator decision) is
+  `ready-for-human`; do not invent a synonym for it.
 - **Body shape**: Why / What / Acceptance criteria / Out of scope /
   `Size: <X>` / `Part of #<epic>` - mirrors the Grug DoR checker enforced on
   PRs here.
