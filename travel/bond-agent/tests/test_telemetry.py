@@ -11,20 +11,40 @@ STATUS = {
     "primary": "usb-lte",
     "uptime_s": 42.0,
     "paths": [
-        {"name": "usb-lte", "state": "up", "effective_weight": 100,
-         "loss_pct": 0.0, "rtt_ms": 38.2, "tx_bytes": 100, "rx_bytes": 200,
-         "usage_gb": 1.5, "carrier": "T-Mobile"},
-        {"name": "wifi-sta-5g", "state": "down", "effective_weight": 0,
-         "loss_pct": 100.0, "rtt_ms": None, "tx_bytes": 0, "rx_bytes": 0,
-         "usage_gb": 0.0},
+        {
+            "name": "usb-lte",
+            "state": "up",
+            "effective_weight": 100,
+            "loss_pct": 0.0,
+            "rtt_ms": 38.2,
+            "tx_bytes": 100,
+            "rx_bytes": 200,
+            "usage_gb": 1.5,
+            "carrier": "T-Mobile",
+        },
+        {
+            "name": "wifi-sta-5g",
+            "state": "down",
+            "effective_weight": 0,
+            "loss_pct": 100.0,
+            "rtt_ms": None,
+            "tx_bytes": 0,
+            "rx_bytes": 0,
+            "usage_gb": 0.0,
+        },
     ],
 }
 
 
 class FakeSock:
-    def __init__(self): self.sent = []
-    def sendto(self, payload, addr): self.sent.append((payload.decode(), addr))
-    def close(self): pass
+    def __init__(self):
+        self.sent = []
+
+    def sendto(self, payload, addr):
+        self.sent.append((payload.decode(), addr))
+
+    def close(self):
+        pass
 
 
 def _emit(monkeypatch, status=STATUS, host="10.0.0.5"):
@@ -89,8 +109,11 @@ def test_extra_tags_are_applied_to_every_metric(monkeypatch):
 
 def test_a_dead_collector_never_raises(monkeypatch):
     class Boom:
-        def sendto(self, *a): raise OSError("network unreachable")
-        def close(self): pass
+        def sendto(self, *a):
+            raise OSError("network unreachable")
+
+        def close(self):
+            pass
 
     monkeypatch.setattr(tel.socket, "socket", lambda *a, **k: Boom())
     t = tel.Telemetry(host="10.0.0.5")
@@ -127,9 +150,15 @@ def test_api_emit_count_posts_a_count_series(monkeypatch):
 
     class FakeResp:
         status = 202
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-        def close(self): pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def close(self):
+            pass
 
     def fake_urlopen(req, timeout=0):
         posted.append(req)
@@ -157,12 +186,14 @@ class TestDatadogLogHandler:
 
     def _record(self, msg, level=40):  # ERROR
         import logging as _logging
+
         return _logging.LogRecord("zippie.agent", level, __file__, 1, msg, (), None)
 
     def test_flush_posts_buffered_records_to_the_logs_intake(self, monkeypatch):
         posted = []
         monkeypatch.setattr(
-            tel.urllib.request, "urlopen",
+            tel.urllib.request,
+            "urlopen",
             lambda req, timeout=0: posted.append(req) or type("R", (), {"close": lambda s: None})(),
         )
         h = self._handler(extra_tags=["device:travel-router"])
@@ -237,10 +268,12 @@ class TestTelemetryWiringRegressions:
         monkeypatch.delenv("ZIPPIE_TAGS", raising=False)
         monkeypatch.setenv("PATHBOND_TAGS", "device:travel-router,router:gl-mt3000")
         monkeypatch.setenv("DD_API_KEY", "k")
-        cfg = parse_config({
-            "home": {"endpoint": "h", "server_public_key": "k"},
-            "paths": [{"name": "a", "interface": "eth0"}],
-        })
+        cfg = parse_config(
+            {
+                "home": {"endpoint": "h", "server_public_key": "k"},
+                "paths": [{"name": "a", "interface": "eth0"}],
+            }
+        )
         a = BondAgent(cfg)
         assert "device:travel-router" in a.telemetry.extra_tags
         assert "router:gl-mt3000" in a.telemetry.extra_tags
@@ -252,10 +285,12 @@ class TestTelemetryWiringRegressions:
         monkeypatch.setenv("ZIPPIE_TAGS", "device:new")
         monkeypatch.setenv("PATHBOND_TAGS", "device:old")
         monkeypatch.setenv("DD_API_KEY", "k")
-        cfg = parse_config({
-            "home": {"endpoint": "h", "server_public_key": "k"},
-            "paths": [{"name": "a", "interface": "eth0"}],
-        })
+        cfg = parse_config(
+            {
+                "home": {"endpoint": "h", "server_public_key": "k"},
+                "paths": [{"name": "a", "interface": "eth0"}],
+            }
+        )
         a = BondAgent(cfg)
         assert "device:new" in a.telemetry.extra_tags
         assert "device:old" not in a.telemetry.extra_tags
@@ -290,21 +325,30 @@ class TestDatapathObservability:
 
     def _status(self, **over):
         t = {
-            "transport": {"sent": 100, "received": 80, "send_errors": 0,
-                          "malformed": 2, "nacks_received": 1, "no_path": 5},
-            "reassembly": {"delivered": 70, "duplicates_dropped": 3,
-                           "too_late_dropped": 1, "gaps_abandoned": 0,
-                           "lost_estimate": 0, "stream_restarts": 1},
-            "retransmit": {"resent": 4, "expired": 9, "unanswerable": 0,
-                           "refused": 0},
-            "nacks": {"nacks_sent": 2, "abandoned": 0, "dropped": 0,
-                      "reordered": 11, "capped": 1},
-            "links": 2, "healthy": 2,
+            "transport": {
+                "sent": 100,
+                "received": 80,
+                "send_errors": 0,
+                "malformed": 2,
+                "nacks_received": 1,
+                "no_path": 5,
+            },
+            "reassembly": {
+                "delivered": 70,
+                "duplicates_dropped": 3,
+                "too_late_dropped": 1,
+                "gaps_abandoned": 0,
+                "lost_estimate": 0,
+                "stream_restarts": 1,
+            },
+            "retransmit": {"resent": 4, "expired": 9, "unanswerable": 0, "refused": 0},
+            "nacks": {"nacks_sent": 2, "abandoned": 0, "dropped": 0, "reordered": 11, "capped": 1},
+            "links": 2,
+            "healthy": 2,
         }
         for k, v in over.items():
             t[k] = {**t.get(k, {}), **v} if isinstance(v, dict) else v
-        return {"mode": "aggregate", "datapath": "packet", "paths": [],
-                "transport": t}
+        return {"mode": "aggregate", "datapath": "packet", "paths": [], "transport": t}
 
     def _names(self, samples):
         return {n for n, _v, _t in samples}
@@ -313,22 +357,33 @@ class TestDatapathObservability:
         """A counter that exists but is not shipped is a blind spot."""
         names = self._names(tel._samples(self._status()))
         for expected in (
-            "transport.sent", "transport.received", "transport.no_path",
-            "transport.send_errors", "transport.malformed",
+            "transport.sent",
+            "transport.received",
+            "transport.no_path",
+            "transport.send_errors",
+            "transport.malformed",
             "transport.nacks_received",
-            "reassembly.delivered", "reassembly.duplicates_dropped",
-            "reassembly.too_late_dropped", "reassembly.stream_restarts",
-            "reassembly.gaps_abandoned", "reassembly.lost_estimate",
-            "retransmit.resent", "retransmit.expired",
+            "reassembly.delivered",
+            "reassembly.duplicates_dropped",
+            "reassembly.too_late_dropped",
+            "reassembly.stream_restarts",
+            "reassembly.gaps_abandoned",
+            "reassembly.lost_estimate",
+            "retransmit.resent",
+            "retransmit.expired",
             # `dropped` is the only signal that the bond has STOPPED asking
             # for what it lost, rather than asking and not getting it (#22).
-            "nacks.nacks_sent", "nacks.abandoned", "nacks.dropped",
+            "nacks.nacks_sent",
+            "nacks.abandoned",
+            "nacks.dropped",
             # The two halves of #108, and each is meaningless without the
             # other. `reordered` is skew the bond absorbed for free; `capped`
             # is skew it had to pay a retransmit for because the reorder
             # deadline left no room to keep waiting.
-            "nacks.reordered", "nacks.capped",
-            "transport.links", "transport.healthy",
+            "nacks.reordered",
+            "nacks.capped",
+            "transport.links",
+            "transport.healthy",
         ):
             assert expected in names, f"{expected} is not shipped"
 
@@ -354,19 +409,18 @@ class TestDatapathObservability:
         """THE signal that was missing. Legs healthy, frames moving, zero
         payloads - the exact live failure."""
         d = tel._Deltas()
-        tel._samples(self._status(), d)          # prime
-        stalled = self._status(transport={"sent": 200, "received": 160},
-                               reassembly={"delivered": 70})   # unchanged
-        carrying = [v for n, v, _t in tel._samples(stalled, d)
-                    if n == "datapath.carrying"]
+        tel._samples(self._status(), d)  # prime
+        stalled = self._status(
+            transport={"sent": 200, "received": 160}, reassembly={"delivered": 70}
+        )  # unchanged
+        carrying = [v for n, v, _t in tel._samples(stalled, d) if n == "datapath.carrying"]
         assert carrying == [0.0], "a stalled datapath did not report itself"
 
     def test_carrying_is_one_when_payloads_move(self):
         d = tel._Deltas()
         tel._samples(self._status(), d)
         moving = self._status(reassembly={"delivered": 95})
-        carrying = [v for n, v, _t in tel._samples(moving, d)
-                    if n == "datapath.carrying"]
+        carrying = [v for n, v, _t in tel._samples(moving, d) if n == "datapath.carrying"]
         assert carrying == [1.0]
 
     def test_a_restart_emits_no_delta_rather_than_a_negative_spike(self):
@@ -374,8 +428,7 @@ class TestDatapathObservability:
         huge negative spike, so the reset tick must emit nothing at all."""
         d = tel._Deltas()
         tel._samples(self._status(), d)
-        after = self._status(transport={"sent": 3, "received": 1},
-                             reassembly={"delivered": 0})
+        after = self._status(transport={"sent": 3, "received": 1}, reassembly={"delivered": 0})
         names = self._names(tel._samples(after, d))
         assert "transport.sent_delta" not in names, "emitted a negative delta"
         assert "transport.sent" in names, "dropped the cumulative value too"
@@ -389,8 +442,7 @@ class TestDatapathObservability:
 
     def test_route_mode_without_a_transport_ships_nothing_extra(self):
         """Route mode has no datapath block; it must not fabricate zeros."""
-        names = self._names(tel._samples(
-            {"mode": "aggregate", "datapath": "route", "paths": []}))
+        names = self._names(tel._samples({"mode": "aggregate", "datapath": "route", "paths": []}))
         assert not any(n.startswith(("transport.", "reassembly.")) for n in names)
 
 
@@ -406,12 +458,22 @@ class TestHijackAndWatchdogVisibility:
 
     def _s(self, **over):
         base = {
-            "mode": "aggregate", "datapath": "route", "primary": "hotspot",
-            "home": "dns-e.example", "home_ip": "203.0.113.33",
+            "mode": "aggregate",
+            "datapath": "route",
+            "primary": "hotspot",
+            "home": "dns-e.example",
+            "home_ip": "203.0.113.33",
             "home_ip_private": False,
             "watchdog": {"tripped": False, "rearms_used": 0, "capped": False},
-            "paths": [{"name": "hotspot", "state": "up", "effective_weight": 100,
-                       "has_gateway": True, "peer_endpoint_private": False}],
+            "paths": [
+                {
+                    "name": "hotspot",
+                    "state": "up",
+                    "effective_weight": 100,
+                    "has_gateway": True,
+                    "peer_endpoint_private": False,
+                }
+            ],
         }
         base.update(over)
         return base
@@ -429,27 +491,44 @@ class TestHijackAndWatchdogVisibility:
         )
 
     def test_a_tunnel_dialling_a_private_address_is_visible_per_leg(self):
-        s = self._s(paths=[{"name": "hotspot", "state": "up", "effective_weight": 100,
-                            "has_gateway": True, "peer_endpoint_private": True}])
+        s = self._s(
+            paths=[
+                {
+                    "name": "hotspot",
+                    "state": "up",
+                    "effective_weight": 100,
+                    "has_gateway": True,
+                    "peer_endpoint_private": True,
+                }
+            ]
+        )
         assert self._val(tel._samples(s), "path.peer_endpoint_private") == [1]
 
     def test_an_unresolved_endpoint_is_distinct_from_a_hijacked_one(self):
-        """"Could not resolve" and "resolved to a lie" need different fixes."""
+        """ "Could not resolve" and "resolved to a lie" need different fixes."""
         s = tel._samples(self._s(home_ip=None, home_ip_private=False))
         assert self._val(s, "home_endpoint_resolved") == [0]
         assert self._val(s, "home_endpoint_private") == [0]
 
     def test_a_leg_with_no_gateway_reports_it(self):
-        s = self._s(paths=[{"name": "x", "state": "up", "effective_weight": 100,
-                            "has_gateway": False, "peer_endpoint_private": False}])
+        s = self._s(
+            paths=[
+                {
+                    "name": "x",
+                    "state": "up",
+                    "effective_weight": 100,
+                    "has_gateway": False,
+                    "peer_endpoint_private": False,
+                }
+            ]
+        )
         assert self._val(tel._samples(s), "path.has_gateway") == [0]
 
     def test_watchdog_state_is_a_metric_not_only_an_event(self):
         """Events give a timeline and cannot be alerted on. The re-arm budget
         silently reached 2/2 twice on 2026-08-02; the next trip would have
         stayed down until a human noticed."""
-        s = tel._samples(self._s(watchdog={"tripped": True, "rearms_used": 2,
-                                           "capped": True}))
+        s = tel._samples(self._s(watchdog={"tripped": True, "rearms_used": 2, "capped": True}))
         assert self._val(s, "watchdog.tripped") == [1]
         assert self._val(s, "watchdog.rearms_used") == [2]
         assert self._val(s, "watchdog.budget_capped") == [1]
@@ -511,11 +590,16 @@ class TestTelemetryNeverBlocksTheControlLoop:
 
         class FakeResp:
             status = 202
-            def __enter__(self): return self
-            def __exit__(self, *a): return False
 
-        monkeypatch.setattr(tel.urllib.request, "urlopen",
-                            lambda req, timeout=0: posted.append(req) or FakeResp())
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(
+            tel.urllib.request, "urlopen", lambda req, timeout=0: posted.append(req) or FakeResp()
+        )
         t = tel.DatadogApiTelemetry(api_key="k")
         t.emit_status({"mode": "aggregate", "paths": [], "uptime_s": 1})
         assert t.flush(), "queue never drained"
@@ -548,10 +632,18 @@ class TestDroppedBatchDelta:
 
         class FakeResp:
             status = 202
-            def __enter__(self): return self
-            def __exit__(self, *a): return False
-            def read(self): return b""
-            def close(self): pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b""
+
+            def close(self):
+                pass
 
         def fake_urlopen(req, timeout=0):
             posted.append(req)
@@ -592,8 +684,8 @@ class TestDroppedBatchDelta:
 
     def test_delta_reports_drops_since_the_last_tick(self, monkeypatch):
         t, posted = self._sink(monkeypatch)
-        self._emit(t, posted)              # prime
-        t.dropped = 7                      # 7 batches lost since
+        self._emit(t, posted)  # prime
+        t.dropped = 7  # 7 batches lost since
         got = dict(self._emit(t, posted))
         assert got["custom.zippie.telemetry.dropped_delta"] == 7.0
         assert got["custom.zippie.telemetry.dropped"] == 7.0
@@ -603,7 +695,7 @@ class TestDroppedBatchDelta:
         which is what lets the monitor clear."""
         t, posted = self._sink(monkeypatch)
         self._emit(t, posted)
-        t.dropped = 1591                   # the real 2026-08-06 episode
+        t.dropped = 1591  # the real 2026-08-06 episode
         assert dict(self._emit(t, posted))["custom.zippie.telemetry.dropped_delta"] == 1591.0
         got = dict(self._emit(t, posted))  # nothing further dropped
         assert got["custom.zippie.telemetry.dropped_delta"] == 0.0, (
@@ -622,7 +714,7 @@ class TestDroppedBatchDelta:
         self._emit(t, posted)
         t.dropped = 500
         self._emit(t, posted)
-        t.dropped = 0                      # process restarted
+        t.dropped = 0  # process restarted
         names = [n for n, _ in self._emit(t, posted)]
         assert "custom.zippie.telemetry.dropped_delta" not in names, (
             "a reset must emit nothing, never a negative delta"
@@ -642,13 +734,16 @@ class TestBuildFingerprintIsVisibleOffBox:
 
     def _build(self, **over):
         """A build block shaped exactly like build.build_info() returns."""
-        return dict({
-            "fingerprint": "7c51eff1b39365df",   # what the travel router was really running
-            "modules": 19,
-            "commit": "35ad62f",
-            "deployed_at": "2026-08-06T14:00:00Z",
-            "matches_deploy": True,
-        }, **over)
+        return dict(
+            {
+                "fingerprint": "7c51eff1b39365df",  # what the travel router was really running
+                "modules": 19,
+                "commit": "35ad62f",
+                "deployed_at": "2026-08-06T14:00:00Z",
+                "matches_deploy": True,
+            },
+            **over,
+        )
 
     def _status(self, **over):
         build = self._build(**over.pop("build", {}))
@@ -660,12 +755,19 @@ class TestBuildFingerprintIsVisibleOffBox:
 
         class FakeResp:
             status = 202
-            def __enter__(self): return self
-            def __exit__(self, *a): return False
-            def close(self): pass
 
-        monkeypatch.setattr(tel.urllib.request, "urlopen",
-                            lambda req, timeout=0: posted.append(req) or FakeResp())
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(
+            tel.urllib.request, "urlopen", lambda req, timeout=0: posted.append(req) or FakeResp()
+        )
         return tel.DatadogApiTelemetry(api_key="k", extra_tags=["device:travel-router"]), posted
 
     def _series(self, monkeypatch, status):
@@ -673,8 +775,7 @@ class TestBuildFingerprintIsVisibleOffBox:
         t, posted = self._sink(monkeypatch)
         t.emit_status(status)
         assert t.flush(), "telemetry queue did not drain"
-        return [s for req in posted
-                for s in tel.json.loads(req.data.decode())["series"]]
+        return [s for req in posted for s in tel.json.loads(req.data.decode())["series"]]
 
     def _one(self, series, metric):
         got = [s for s in series if s["metric"] == metric]
@@ -684,8 +785,7 @@ class TestBuildFingerprintIsVisibleOffBox:
     def test_the_fingerprint_reaches_datadog_as_tags_on_a_gauge(self, monkeypatch):
         """A digest is a string, and a metric value cannot be one. The info
         shape puts it where Datadog can group by it."""
-        s = self._one(self._series(monkeypatch, self._status()),
-                      "custom.zippie.build.info")
+        s = self._one(self._series(monkeypatch, self._status()), "custom.zippie.build.info")
         assert s["points"][0]["value"] == 1.0
         assert s["type"] == 3, "gauge - a constant 1 counted would climb forever"
         assert "fingerprint:7c51eff1b39365df" in s["tags"]
@@ -696,13 +796,13 @@ class TestBuildFingerprintIsVisibleOffBox:
     def test_module_count_ships_too(self, monkeypatch):
         """20 modules arriving as 40 is the AppleDouble deploy, and the count
         says WHAT changed where the digest only says THAT it changed."""
-        s = self._one(self._series(monkeypatch, self._status()),
-                      "custom.zippie.build.modules")
+        s = self._one(self._series(monkeypatch, self._status()), "custom.zippie.build.modules")
         assert s["points"][0]["value"] == 19.0
 
     def test_a_matching_deploy_is_one(self, monkeypatch):
-        s = self._one(self._series(monkeypatch, self._status()),
-                      "custom.zippie.build.matches_deploy")
+        s = self._one(
+            self._series(monkeypatch, self._status()), "custom.zippie.build.matches_deploy"
+        )
         assert s["points"][0]["value"] == 1.0
 
     def test_a_hand_edited_box_is_zero(self, monkeypatch):
@@ -711,7 +811,8 @@ class TestBuildFingerprintIsVisibleOffBox:
         deployed telemetry.py was owned by uid 501 beside five .bak-* trees."""
         s = self._one(
             self._series(monkeypatch, self._status(build={"matches_deploy": False})),
-            "custom.zippie.build.matches_deploy")
+            "custom.zippie.build.matches_deploy",
+        )
         assert s["points"][0]["value"] == 0.0
 
     def test_unknown_is_omitted_rather_than_reported_as_a_mismatch(self, monkeypatch):
@@ -725,16 +826,16 @@ class TestBuildFingerprintIsVisibleOffBox:
         there, which is what makes the absence readable as "unknown" rather than
         as "the agent is gone".
         """
-        series = self._series(monkeypatch, self._status(
-            build={"matches_deploy": None, "commit": None, "deployed_at": None}))
+        series = self._series(
+            monkeypatch,
+            self._status(build={"matches_deploy": None, "commit": None, "deployed_at": None}),
+        )
         names = [s["metric"] for s in series]
         assert "custom.zippie.build.matches_deploy" not in names, (
             "unknown must not be flattened into a boolean"
         )
         info = self._one(series, "custom.zippie.build.info")
-        assert "commit:unknown" in info["tags"], (
-            "a tag that vanishes splits the series in two"
-        )
+        assert "commit:unknown" in info["tags"], "a tag that vanishes splits the series in two"
         assert "deployed_at:unknown" in info["tags"]
 
     def test_no_build_block_emits_no_build_series(self, monkeypatch):
@@ -743,8 +844,7 @@ class TestBuildFingerprintIsVisibleOffBox:
 
         NOTE: an absence assertion - it passes without the emitter as well.
         """
-        names = [s["metric"] for s in
-                 self._series(monkeypatch, {"mode": "aggregate", "paths": []})]
+        names = [s["metric"] for s in self._series(monkeypatch, {"mode": "aggregate", "paths": []})]
         assert not any(n.startswith("custom.zippie.build.") for n in names)
 
     # ------------------------------------------------------------- DogStatsD
@@ -755,18 +855,18 @@ class TestBuildFingerprintIsVisibleOffBox:
         info = [ln for ln in lines if ln.startswith("custom.zippie.build.info:")]
         assert len(info) == 1
         assert "fingerprint:7c51eff1b39365df" in info[0]
-        assert any(ln.startswith("custom.zippie.build.matches_deploy:1")
-                   for ln in lines)
+        assert any(ln.startswith("custom.zippie.build.matches_deploy:1") for ln in lines)
 
     def test_a_stamp_field_cannot_inject_extra_tags(self, monkeypatch):
         """build.json sits on a box people hand-edit - that is the whole reason
         this fingerprint exists. DogStatsD separates tags with commas and ends
         the value with `|`, so an unsanitised commit does not make an ugly tag,
         it makes a different metric."""
-        lines = _emit(monkeypatch, status=self._status(
-            build={"commit": "abc,evil:1|c|#pwn:1\nsecond.metric:1"}))
-        (info,) = [ln for ln in lines
-                   if ln.startswith("custom.zippie.build.info:")]
+        lines = _emit(
+            monkeypatch,
+            status=self._status(build={"commit": "abc,evil:1|c|#pwn:1\nsecond.metric:1"}),
+        )
+        (info,) = [ln for ln in lines if ln.startswith("custom.zippie.build.info:")]
         assert info.count("|") == 2, "value/type field was broken open"
         assert "\n" not in info
         tags = info.split("|#", 1)[1].split(",")
@@ -774,8 +874,7 @@ class TestBuildFingerprintIsVisibleOffBox:
         assert any(t.startswith("commit:abc_evil") for t in tags)
 
     # ------------------------------------------------------------ real wiring
-    def test_the_agents_own_status_dict_carries_it_end_to_end(self, monkeypatch,
-                                                              tmp_path):
+    def test_the_agents_own_status_dict_carries_it_end_to_end(self, monkeypatch, tmp_path):
         """Code that exists and never runs is this repo's commonest defect.
 
         Nothing above proves the key telemetry reads is the key the agent
@@ -788,16 +887,22 @@ class TestBuildFingerprintIsVisibleOffBox:
         from zippie.config import parse_config
 
         stamp = tmp_path / "build.json"
-        stamp.write_text(tel.json.dumps({
-            "commit": "deadbee",
-            "deployed_at": "2026-08-07T09:30:00Z",
-            "fingerprint": build.fingerprint(),   # what this checkout IS
-        }))
+        stamp.write_text(
+            tel.json.dumps(
+                {
+                    "commit": "deadbee",
+                    "deployed_at": "2026-08-07T09:30:00Z",
+                    "fingerprint": build.fingerprint(),  # what this checkout IS
+                }
+            )
+        )
         monkeypatch.setattr(build, "DEPLOY_STAMP", stamp)
-        cfg = parse_config({
-            "home": {"endpoint": "h", "server_public_key": "k"},
-            "paths": [{"name": "a", "interface": "eth0"}],
-        })
+        cfg = parse_config(
+            {
+                "home": {"endpoint": "h", "server_public_key": "k"},
+                "paths": [{"name": "a", "interface": "eth0"}],
+            }
+        )
         agent = BondAgent(cfg)
 
         series = self._series(monkeypatch, agent.status_dict())
@@ -806,19 +911,21 @@ class TestBuildFingerprintIsVisibleOffBox:
             "telemetry reported a different build from the one on disk"
         )
         assert "commit:deadbee" in info["tags"]
-        assert self._one(series, "custom.zippie.build.matches_deploy"
-                         )["points"][0]["value"] == 1.0
+        assert self._one(series, "custom.zippie.build.matches_deploy")["points"][0]["value"] == 1.0
 
         # And the mismatch, through the same path: rewrite the stamp so the
         # running bytes no longer match what it claims was deployed.
-        stamp.write_text(tel.json.dumps({
-            "commit": "deadbee",
-            "deployed_at": "2026-08-07T09:30:00Z",
-            "fingerprint": "0000000000000000",
-        }))
+        stamp.write_text(
+            tel.json.dumps(
+                {
+                    "commit": "deadbee",
+                    "deployed_at": "2026-08-07T09:30:00Z",
+                    "fingerprint": "0000000000000000",
+                }
+            )
+        )
         drifted = self._series(monkeypatch, agent.status_dict())
-        assert self._one(drifted, "custom.zippie.build.matches_deploy"
-                         )["points"][0]["value"] == 0.0
+        assert self._one(drifted, "custom.zippie.build.matches_deploy")["points"][0]["value"] == 0.0
 
 
 # ------------------------------------------------------------- zippie#258 AC5
@@ -835,14 +942,32 @@ def _idle_metric(lines):
 def test_a_free_wire_doing_nothing_while_phones_carry_is_reported(monkeypatch):
     """the travel router, 2026-08-20: a cable plugged in, `state=down`, and 3 GB/day on phones."""
     status = {
-        "mode": "aggregate", "primary": "pixel", "uptime_s": 1.0,
+        "mode": "aggregate",
+        "primary": "pixel",
+        "uptime_s": 1.0,
         "paths": [
-            {"name": "ethernet", "state": "down", "effective_weight": 0,
-             "cost_class": "free", "loss_pct": 100.0, "rtt_ms": None,
-             "tx_bytes": 102, "rx_bytes": 0, "usage_gb": 0.006},
-            {"name": "pixel", "state": "up", "effective_weight": 100,
-             "cost_class": "metered", "loss_pct": 0.0, "rtt_ms": 40.0,
-             "tx_bytes": 263904, "rx_bytes": 36999, "usage_gb": 10.0},
+            {
+                "name": "ethernet",
+                "state": "down",
+                "effective_weight": 0,
+                "cost_class": "free",
+                "loss_pct": 100.0,
+                "rtt_ms": None,
+                "tx_bytes": 102,
+                "rx_bytes": 0,
+                "usage_gb": 0.006,
+            },
+            {
+                "name": "pixel",
+                "state": "up",
+                "effective_weight": 100,
+                "cost_class": "metered",
+                "loss_pct": 0.0,
+                "rtt_ms": 40.0,
+                "tx_bytes": 263904,
+                "rx_bytes": 36999,
+                "usage_gb": 10.0,
+            },
         ],
     }
     line = _idle_metric(_emit(monkeypatch, status))
@@ -852,14 +977,32 @@ def test_a_free_wire_doing_nothing_while_phones_carry_is_reported(monkeypatch):
 
 def test_a_free_wire_that_is_carrying_is_not_reported(monkeypatch):
     status = {
-        "mode": "aggregate", "primary": "ethernet", "uptime_s": 1.0,
+        "mode": "aggregate",
+        "primary": "ethernet",
+        "uptime_s": 1.0,
         "paths": [
-            {"name": "ethernet", "state": "up", "effective_weight": 100,
-             "cost_class": "free", "loss_pct": 0.0, "rtt_ms": 2.0,
-             "tx_bytes": 9, "rx_bytes": 9, "usage_gb": 0.0},
-            {"name": "pixel", "state": "up", "effective_weight": 8,
-             "cost_class": "metered", "loss_pct": 0.0, "rtt_ms": 40.0,
-             "tx_bytes": 9, "rx_bytes": 9, "usage_gb": 1.0},
+            {
+                "name": "ethernet",
+                "state": "up",
+                "effective_weight": 100,
+                "cost_class": "free",
+                "loss_pct": 0.0,
+                "rtt_ms": 2.0,
+                "tx_bytes": 9,
+                "rx_bytes": 9,
+                "usage_gb": 0.0,
+            },
+            {
+                "name": "pixel",
+                "state": "up",
+                "effective_weight": 8,
+                "cost_class": "metered",
+                "loss_pct": 0.0,
+                "rtt_ms": 40.0,
+                "tx_bytes": 9,
+                "rx_bytes": 9,
+                "usage_gb": 1.0,
+            },
         ],
     }
     line = _idle_metric(_emit(monkeypatch, status))
@@ -869,11 +1012,21 @@ def test_a_free_wire_that_is_carrying_is_not_reported(monkeypatch):
 def test_no_free_leg_at_all_is_an_explicit_zero_not_a_missing_metric(monkeypatch):
     """A gauge that vanishes cannot be alerted on: no-data is not zero."""
     status = {
-        "mode": "aggregate", "primary": "pixel", "uptime_s": 1.0,
+        "mode": "aggregate",
+        "primary": "pixel",
+        "uptime_s": 1.0,
         "paths": [
-            {"name": "pixel", "state": "up", "effective_weight": 100,
-             "cost_class": "metered", "loss_pct": 0.0, "rtt_ms": 40.0,
-             "tx_bytes": 9, "rx_bytes": 9, "usage_gb": 1.0},
+            {
+                "name": "pixel",
+                "state": "up",
+                "effective_weight": 100,
+                "cost_class": "metered",
+                "loss_pct": 0.0,
+                "rtt_ms": 40.0,
+                "tx_bytes": 9,
+                "rx_bytes": 9,
+                "usage_gb": 1.0,
+            },
         ],
     }
     line = _idle_metric(_emit(monkeypatch, status))
@@ -884,14 +1037,32 @@ def test_no_free_leg_at_all_is_an_explicit_zero_not_a_missing_metric(monkeypatch
 def test_nothing_carrying_at_all_is_not_reported_as_a_wasted_wire(monkeypatch):
     """A bond with nothing carrying has a different problem, and this is not it."""
     status = {
-        "mode": "aggregate", "primary": None, "uptime_s": 1.0,
+        "mode": "aggregate",
+        "primary": None,
+        "uptime_s": 1.0,
         "paths": [
-            {"name": "ethernet", "state": "down", "effective_weight": 0,
-             "cost_class": "free", "loss_pct": 100.0, "rtt_ms": None,
-             "tx_bytes": 0, "rx_bytes": 0, "usage_gb": 0.0},
-            {"name": "pixel", "state": "down", "effective_weight": 0,
-             "cost_class": "metered", "loss_pct": 100.0, "rtt_ms": None,
-             "tx_bytes": 0, "rx_bytes": 0, "usage_gb": 0.0},
+            {
+                "name": "ethernet",
+                "state": "down",
+                "effective_weight": 0,
+                "cost_class": "free",
+                "loss_pct": 100.0,
+                "rtt_ms": None,
+                "tx_bytes": 0,
+                "rx_bytes": 0,
+                "usage_gb": 0.0,
+            },
+            {
+                "name": "pixel",
+                "state": "down",
+                "effective_weight": 0,
+                "cost_class": "metered",
+                "loss_pct": 100.0,
+                "rtt_ms": None,
+                "tx_bytes": 0,
+                "rx_bytes": 0,
+                "usage_gb": 0.0,
+            },
         ],
     }
     line = _idle_metric(_emit(monkeypatch, status))

@@ -68,15 +68,18 @@ def test_a_changed_address_is_written(tmp_path):
     assert s.load() == "203.0.113.9"
 
 
-@pytest.mark.parametrize("junk", [
-    "",                     # truncated write
-    "   \n",                # whitespace only
-    "dns-e.example.com",    # a hostname somebody pasted in
-    "not an address",
-    "999.1.1.1",            # out of range
-    "10",                   # inet_aton accepts this; the datapath cannot use it
-    "1.2.3",                # ditto - short forms are not dotted quads
-])
+@pytest.mark.parametrize(
+    "junk",
+    [
+        "",  # truncated write
+        "   \n",  # whitespace only
+        "dns-e.example.com",  # a hostname somebody pasted in
+        "not an address",
+        "999.1.1.1",  # out of range
+        "10",  # inet_aton accepts this; the datapath cannot use it
+        "1.2.3",  # ditto - short forms are not dotted quads
+    ],
+)
 def test_an_unusable_file_reads_as_no_address(tmp_path, junk):
     """A bad file must read as "no address", never propagate.
 
@@ -100,14 +103,26 @@ def test_trailing_whitespace_is_tolerated(tmp_path):
 def _agent(tmp_path, endpoint="dns-e.example.com:51900"):
     from zippie.agent import BondAgent
     from zippie.config import parse_config
-    return BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path),
-                  "run_dir": str(tmp_path / "run")},
-        "home": {"endpoint": endpoint, "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"datapath": "packet"},
-        "paths": [{"name": "ethernet", "interface": "eth0"}],
-    }))
+
+    return BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path),
+                    "run_dir": str(tmp_path / "run"),
+                },
+                "home": {
+                    "endpoint": endpoint,
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"datapath": "packet"},
+                "paths": [{"name": "ethernet", "interface": "eth0"}],
+            }
+        )
+    )
 
 
 def test_a_cold_start_with_no_dns_still_has_somewhere_to_dial(tmp_path, monkeypatch):
@@ -120,8 +135,10 @@ def test_a_cold_start_with_no_dns_still_has_somewhere_to_dial(tmp_path, monkeypa
     (tmp_path / "home-ip").write_text("203.0.113.33\n")
 
     from zippie import net
-    monkeypatch.setattr(net, "resolve_host",
-                        lambda *a, **k: (_ for _ in ()).throw(OSError("no DNS")))
+
+    monkeypatch.setattr(
+        net, "resolve_host", lambda *a, **k: (_ for _ in ()).throw(OSError("no DNS"))
+    )
 
     a = _agent(tmp_path)
     assert a._home_ip == "203.0.113.33", "started with no idea where home is"
@@ -147,8 +164,10 @@ def test_the_persisted_address_reaches_a_links_remote(tmp_path, monkeypatch):
     (tmp_path / "home-ip").write_text("203.0.113.33\n")
 
     from zippie import net
-    monkeypatch.setattr(net, "resolve_host",
-                        lambda *a, **k: (_ for _ in ()).throw(OSError("no DNS")))
+
+    monkeypatch.setattr(
+        net, "resolve_host", lambda *a, **k: (_ for _ in ()).throw(OSError("no DNS"))
+    )
 
     a = _agent(tmp_path)
     seen = {}
@@ -178,6 +197,7 @@ def test_the_persisted_address_reaches_a_links_remote(tmp_path, monkeypatch):
 def test_a_cold_start_without_a_persisted_address_is_unchanged(tmp_path, monkeypatch):
     """No file, no DNS: still None. The fix must not invent an address."""
     from zippie import net
+
     monkeypatch.setattr(net, "resolve_host", lambda *a, **k: "")
 
     a = _agent(tmp_path)
@@ -211,6 +231,7 @@ def test_the_seeded_address_does_not_suppress_the_first_real_lookup(tmp_path, mo
 
 def test_a_successful_resolve_is_persisted_for_the_next_boot(tmp_path, monkeypatch):
     from zippie import net
+
     monkeypatch.setattr(net, "resolve_host", lambda *a, **k: "203.0.113.33")
     monkeypatch.setattr(net, "dry_run", lambda: False)
 
@@ -233,6 +254,7 @@ def test_a_private_address_is_dialed_but_never_persisted(tmp_path, monkeypatch):
     boot from then on. A bad lookup should cost one run, not every future one.
     """
     from zippie import net
+
     monkeypatch.setattr(net, "resolve_host", lambda *a, **k: "192.168.3.95")
     monkeypatch.setattr(net, "dry_run", lambda: False)
 
@@ -246,6 +268,7 @@ def test_a_good_address_already_on_disk_survives_a_later_hijack(tmp_path, monkey
     (tmp_path / "home-ip").write_text("203.0.113.33\n")
 
     from zippie import net
+
     monkeypatch.setattr(net, "resolve_host", lambda *a, **k: "192.168.3.95")
     monkeypatch.setattr(net, "dry_run", lambda: False)
 
@@ -260,6 +283,7 @@ def test_a_good_address_already_on_disk_survives_a_later_hijack(tmp_path, monkey
 def test_an_unwritable_state_dir_does_not_kill_the_bond(tmp_path, monkeypatch):
     """Failing to persist costs a slow cold boot later. Raising costs the bond now."""
     from zippie import net
+
     monkeypatch.setattr(net, "resolve_host", lambda *a, **k: "203.0.113.33")
     monkeypatch.setattr(net, "dry_run", lambda: False)
 

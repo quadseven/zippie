@@ -92,9 +92,7 @@ def cmd_down(args: argparse.Namespace) -> int:
             [cfg_obj.table_base + i for i in range(count)],
         )
     except Exception:
-        net.clear_link_tables(
-            [0x6400 + i for i in range(8)], [100 + i for i in range(8)]
-        )
+        net.clear_link_tables([0x6400 + i for i in range(8)], [100 + i for i in range(8)])
     try:
         net.clear_firewall()
     except Exception as exc:

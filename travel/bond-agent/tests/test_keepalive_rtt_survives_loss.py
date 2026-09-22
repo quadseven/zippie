@@ -35,6 +35,7 @@ Both cases below have to hold at once, and they are the reason this is not just
   a probe that is LOST   -> not timed at all; the next probe's reply is timed
                             from the next probe
 """
+
 from __future__ import annotations
 
 from zippie.datapath import FLAG_KEEPALIVE, FLAG_KEEPALIVE_REPLY, Frame
@@ -62,31 +63,55 @@ class FakeSocket:
     def deliver(self, data, addr=("10.0.0.9", 51900)):
         self._inbox.append((data, addr))
 
-    def setblocking(self, _): pass
-    def setsockopt(self, *_a): pass
-    def close(self): pass
-    def fileno(self): return -1
-    def getsockname(self): return self.bind or ("127.0.0.1", 0)
+    def setblocking(self, _):
+        pass
+
+    def setsockopt(self, *_a):
+        pass
+
+    def close(self):
+        pass
+
+    def fileno(self):
+        return -1
+
+    def getsockname(self):
+        return self.bind or ("127.0.0.1", 0)
 
 
 class _Key:
-    def __init__(self, fileobj, data): self.fileobj, self.data = fileobj, data
+    def __init__(self, fileobj, data):
+        self.fileobj, self.data = fileobj, data
 
 
 class _FakeSelector:
-    def __init__(self): self.registered = {}
-    def register(self, fileobj, _events, data): self.registered[id(fileobj)] = (fileobj, data)
-    def unregister(self, fileobj): self.registered.pop(id(fileobj), None)
+    def __init__(self):
+        self.registered = {}
+
+    def register(self, fileobj, _events, data):
+        self.registered[id(fileobj)] = (fileobj, data)
+
+    def unregister(self, fileobj):
+        self.registered.pop(id(fileobj), None)
+
     def select(self, _timeout=0):
-        return [(_Key(f, d), 1) for f, d in list(self.registered.values())
-                if getattr(f, "_inbox", None)]
-    def close(self): pass
+        return [
+            (_Key(f, d), 1) for f, d in list(self.registered.values()) if getattr(f, "_inbox", None)
+        ]
+
+    def close(self):
+        pass
 
 
 class _Clock:
-    def __init__(self): self.t = 100.0
-    def __call__(self): return self.t
-    def advance(self, s): self.t += s
+    def __init__(self):
+        self.t = 100.0
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, s):
+        self.t += s
 
 
 def _one_leg():
@@ -98,10 +123,10 @@ def _one_leg():
     shows zero keepalives and looks exactly like a broken send.
     """
     clock = _Clock()
-    t = Transport(("10.0.0.9", 51900), socket_factory=FakeSocket,
-                  selector_factory=_FakeSelector, _clock=clock)
-    t.add_link(LinkEndpoint(path_id=0, name="wan", device=None,
-                            remote=("10.0.0.9", 51900)))
+    t = Transport(
+        ("10.0.0.9", 51900), socket_factory=FakeSocket, selector_factory=_FakeSelector, _clock=clock
+    )
+    t.add_link(LinkEndpoint(path_id=0, name="wan", device=None, remote=("10.0.0.9", 51900)))
     return t, t._socks[0], clock
 
 
@@ -119,9 +144,16 @@ def _reply(t, seq):
     `run_once` would call. Going through the selector as well would only be
     testing the selector stub.
     """
-    t._on_link_data(Frame(seq=seq, path_id=0, payload=b"",
-                          flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
-                          epoch=t._epoch).pack(), 0)
+    t._on_link_data(
+        Frame(
+            seq=seq,
+            path_id=0,
+            payload=b"",
+            flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
+            epoch=t._epoch,
+        ).pack(),
+        0,
+    )
 
 
 # --------------------------------------------------------------- the defect
@@ -133,10 +165,10 @@ def test_a_dropped_probe_does_not_inflate_the_next_rtt():
     interval, which is 125x the truth and 100x the bufferbloat shed ratio."""
     t, sock, clock = _one_leg()
 
-    t.send_keepalives()                      # probe 1 - dropped in flight
-    clock.advance(0.500)                     # one probe interval passes
-    t.send_keepalives()                      # probe 2
-    clock.advance(0.004)                     # answered promptly
+    t.send_keepalives()  # probe 1 - dropped in flight
+    clock.advance(0.500)  # one probe interval passes
+    t.send_keepalives()  # probe 2
+    clock.advance(0.004)  # answered promptly
     _reply(t, _probe_seq(sock))
 
     rtt = t.link_rtt_ms(0)
@@ -151,15 +183,13 @@ def test_a_dropped_probe_does_not_inflate_the_next_rtt():
 def test_several_dropped_probes_in_a_row_still_do_not_inflate_it():
     """Loss comes in bursts, so one drop is the easy case."""
     t, sock, clock = _one_leg()
-    for _ in range(5):                       # five probes, all lost
+    for _ in range(5):  # five probes, all lost
         t.send_keepalives()
         clock.advance(0.500)
-    t.send_keepalives()                      # the sixth gets through
+    t.send_keepalives()  # the sixth gets through
     clock.advance(0.003)
     _reply(t, _probe_seq(sock))
-    assert t.link_rtt_ms(0) < 50, (
-        f"{t.link_rtt_ms(0):.1f} ms after a burst of drops on a 3 ms leg"
-    )
+    assert t.link_rtt_ms(0) < 50, f"{t.link_rtt_ms(0):.1f} ms after a burst of drops on a 3 ms leg"
 
 
 # ------------------------------------------- but a genuinely slow leg still is
@@ -171,7 +201,7 @@ def test_a_late_answer_is_still_timed_from_its_own_probe():
     t, sock, clock = _one_leg()
     t.send_keepalives()
     seq = _probe_seq(sock)
-    clock.advance(0.400)                     # a genuinely bloated leg
+    clock.advance(0.400)  # a genuinely bloated leg
     _reply(t, seq)
     assert t.link_rtt_ms(0) >= 399, (
         f"a 400 ms round trip reported as {t.link_rtt_ms(0):.1f} ms - #81 would "
@@ -186,9 +216,9 @@ def test_a_late_answer_is_not_hidden_by_a_newer_probe():
     t.send_keepalives()
     first = _probe_seq(sock)
     clock.advance(0.500)
-    t.send_keepalives()                      # probe 2, while 1 is outstanding
+    t.send_keepalives()  # probe 2, while 1 is outstanding
     clock.advance(0.100)
-    _reply(t, first)                   # probe 1 finally lands: 600 ms
+    _reply(t, first)  # probe 1 finally lands: 600 ms
     assert t.link_rtt_ms(0) >= 599, (
         f"a 600 ms answer to the FIRST probe reported {t.link_rtt_ms(0):.1f} ms"
     )
@@ -211,9 +241,7 @@ def test_outstanding_probes_do_not_grow_without_bound():
         t.send_keepalives()
         clock.advance(0.5)
     outstanding = len(t._ka_sent.get(0, {}))
-    assert outstanding <= 16, (
-        f"{outstanding} unanswered probes retained after 500 sends"
-    )
+    assert outstanding <= 16, f"{outstanding} unanswered probes retained after 500 sends"
 
 
 def test_probes_are_distinguishable_from_each_other():

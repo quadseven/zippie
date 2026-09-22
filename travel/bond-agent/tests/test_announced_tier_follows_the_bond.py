@@ -34,6 +34,7 @@ A LEG THAT STATED ITS TIER KEEPS IT. `DynamicLeg.tier is None` means "I did not
 ask"; an explicit tier is an instruction, not a suggestion, and re-resolving it
 would silently overrule the app.
 """
+
 from __future__ import annotations
 
 import logging
@@ -48,23 +49,38 @@ from zippie.policy import packet_mode_legs
 def _agent(tmp_path):
     from zippie.agent import BondAgent
 
-    return BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path / "s"),
-                  "run_dir": str(tmp_path / "r")},
-        "home": {"endpoint": "home.example:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"datapath": "packet", "transport_port": 51830,
-                   "mode": "aggregate"},
-        "paths": [],
-    }))
+    return BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path / "s"),
+                    "run_dir": str(tmp_path / "r"),
+                },
+                "home": {
+                    "endpoint": "home.example:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
+                "paths": [],
+            }
+        )
+    )
 
 
 def _physical(agent, name: str, tier: int, iface: str) -> PathRuntime:
-    cfg = PathConfig(name=name, match=PathMatch(type="interface", interface=iface),
-                     tier=tier)
-    p = PathRuntime(name=name, config=cfg, interface=iface,
-                    state=PathState.UP, loss_pct=0.0, rtt_ms=50.0,
-                    rtt_tail_ms=50.0)
+    cfg = PathConfig(name=name, match=PathMatch(type="interface", interface=iface), tier=tier)
+    p = PathRuntime(
+        name=name,
+        config=cfg,
+        interface=iface,
+        state=PathState.UP,
+        loss_pct=0.0,
+        rtt_ms=50.0,
+        rtt_tail_ms=50.0,
+    )
     agent.paths.append(p)
     return p
 
@@ -77,8 +93,7 @@ def _announce(agent, *, tier=None, name="iphone-8fe5"):
     interface is filtered out by the tier gate before tier is even consulted,
     which would make every assertion below vacuous.
     """
-    agent.dynamic.announce(name=name, host="10.99.0.151", port=51999,
-                           label="iPhone", tier=tier)
+    agent.dynamic.announce(name=name, host="10.99.0.151", port=51999, label="iPhone", tier=tier)
     agent.reconcile_dynamic_legs()
     leg = next(p for p in agent.paths if p.name == name)
     leg.interface = "br-lan"
@@ -126,7 +141,7 @@ def test_the_resolved_tier_follows_the_bond_down(bond) -> None:
     for p in bond.paths:
         if p.name in ("ethernet", "hotspot"):
             object.__setattr__(p.config, "tier", 1)
-    _announce(bond)   # the renewal that used to change nothing
+    _announce(bond)  # the renewal that used to change nothing
 
     assert _phone(bond).config.tier == 1, (
         f"the phone latched at tier {_phone(bond).config.tier} while the bond "
@@ -204,6 +219,5 @@ def test_the_tier_does_not_chase_a_leg_that_went_down(bond) -> None:
 
     _announce(bond)
     assert _phone(bond).config.tier == 2, (
-        "the phone followed a DOWN leg to tier 1, leaving the live tier-2 "
-        "hotspot to carry alone"
+        "the phone followed a DOWN leg to tier 1, leaving the live tier-2 hotspot to carry alone"
     )

@@ -7,6 +7,7 @@ test_bond_shaper_survives_a_boot.py already uses for `_ensure_bond_shaped`,
 because the risk here is the same shape: a rate that looks applied and is not
 is invisible until someone starts a download.
 """
+
 from __future__ import annotations
 
 import logging
@@ -34,8 +35,15 @@ class _Host:
     missing qdisc.
     """
 
-    def __init__(self, *, cake=True, up_kbit=1200.0, down_kbit=5000.0,
-                 change_fails=False, change_silently_ignored=False):
+    def __init__(
+        self,
+        *,
+        cake=True,
+        up_kbit=1200.0,
+        down_kbit=5000.0,
+        change_fails=False,
+        change_silently_ignored=False,
+    ):
         self.cake = cake
         self.up_kbit = up_kbit
         self.down_kbit = down_kbit
@@ -53,9 +61,13 @@ class _Host:
         if args[:3] == ["tc", "qdisc", "show"]:
             iface = args[-1]
             if iface == PACKET_IFACE:
-                return subprocess.CompletedProcess(args, 0, stdout=self._qdisc_stdout(self.up_kbit), stderr="")
+                return subprocess.CompletedProcess(
+                    args, 0, stdout=self._qdisc_stdout(self.up_kbit), stderr=""
+                )
             if iface == PACKET_IFACE_INGRESS:
-                return subprocess.CompletedProcess(args, 0, stdout=self._qdisc_stdout(self.down_kbit), stderr="")
+                return subprocess.CompletedProcess(
+                    args, 0, stdout=self._qdisc_stdout(self.down_kbit), stderr=""
+                )
             return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
         if args[:3] == ["tc", "qdisc", "change"]:
             iface = args[4]
@@ -64,7 +76,8 @@ class _Host:
             kbit = float(rate[:-4])
             if self.change_fails:
                 return subprocess.CompletedProcess(
-                    args, 2, stdout="", stderr="RTNETLINK answers: Invalid argument")
+                    args, 2, stdout="", stderr="RTNETLINK answers: Invalid argument"
+                )
             if not self.change_silently_ignored:
                 if iface == PACKET_IFACE:
                     self.up_kbit = kbit
@@ -78,22 +91,41 @@ class _Host:
         return [c for c in self.calls if c[:3] == ["tc", "qdisc", "change"]]
 
 
-def _agent(tmp_path, monkeypatch, host: _Host, *, auto_rate=True,
-           datapath="packet", **extra_policy) -> BondAgent:
+def _agent(
+    tmp_path, monkeypatch, host: _Host, *, auto_rate=True, datapath="packet", **extra_policy
+) -> BondAgent:
     import zippie.agent as agent_mod
 
-    agent = BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path / "s"),
-                  "run_dir": str(tmp_path / "r")},
-        "home": {"endpoint": "home.example:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": dict({
-            "datapath": datapath, "transport_port": 51830, "mode": "aggregate",
-            "shaper_auto_rate": auto_rate,
-        }, **extra_policy),
-        "paths": [{"name": "leg0", "interface": "eth0"},
-                  {"name": "leg1", "interface": "eth1"}],
-    }))
+    agent = BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path / "s"),
+                    "run_dir": str(tmp_path / "r"),
+                },
+                "home": {
+                    "endpoint": "home.example:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": dict(
+                    {
+                        "datapath": datapath,
+                        "transport_port": 51830,
+                        "mode": "aggregate",
+                        "shaper_auto_rate": auto_rate,
+                    },
+                    **extra_policy,
+                ),
+                "paths": [
+                    {"name": "leg0", "interface": "eth0"},
+                    {"name": "leg1", "interface": "eth1"},
+                ],
+            }
+        )
+    )
     monkeypatch.setattr(agent_mod.net, "run_or_dry", host.run_or_dry)
     return agent
 
@@ -141,9 +173,14 @@ def test_no_cake_yet_means_no_change_is_attempted(tmp_path, monkeypatch):
 # ------------------------------------------------------------- the apply
 def test_first_pass_applies_a_rate_from_the_carrying_leg(tmp_path, monkeypatch):
     host = _Host(cake=True)
-    agent = _agent(tmp_path, monkeypatch, host,
-                    shaper_capacity_fraction=1.0,
-                    shaper_min_download_kbit=0.0, shaper_min_upload_kbit=0.0)
+    agent = _agent(
+        tmp_path,
+        monkeypatch,
+        host,
+        shaper_capacity_fraction=1.0,
+        shaper_min_download_kbit=0.0,
+        shaper_min_upload_kbit=0.0,
+    )
     _make_carrying(agent, "leg0", rx_bps=8_000_000.0, tx_bps=2_000_000.0, link_id=0)
     agent._update_bond_shaper_rate()
     assert len(host.changes) == 2, f"expected one change per direction: {host.calls}"
@@ -157,9 +194,14 @@ def test_a_leg_not_contributing_does_not_count(tmp_path, monkeypatch):
     in the transport's link table: either way, not carrying, not counted -
     the same distinction _leg_activity_facts exists to make everywhere else."""
     host = _Host(cake=True)
-    agent = _agent(tmp_path, monkeypatch, host,
-                    shaper_capacity_fraction=1.0,
-                    shaper_min_download_kbit=0.0, shaper_min_upload_kbit=0.0)
+    agent = _agent(
+        tmp_path,
+        monkeypatch,
+        host,
+        shaper_capacity_fraction=1.0,
+        shaper_min_download_kbit=0.0,
+        shaper_min_upload_kbit=0.0,
+    )
     _make_carrying(agent, "leg0", rx_bps=8_000_000.0, tx_bps=2_000_000.0, link_id=0)
     # leg1 has real counters but no transport link - never actually in the bond.
     leg1 = next(p for p in agent.paths if p.name == "leg1")
@@ -171,10 +213,15 @@ def test_a_leg_not_contributing_does_not_count(tmp_path, monkeypatch):
 
 def test_second_pass_within_hysteresis_does_not_reapply(tmp_path, monkeypatch):
     host = _Host(cake=True)
-    agent = _agent(tmp_path, monkeypatch, host,
-                    shaper_capacity_fraction=1.0,
-                    shaper_min_download_kbit=0.0, shaper_min_upload_kbit=0.0,
-                    shaper_reapply_hysteresis_pct=20.0)
+    agent = _agent(
+        tmp_path,
+        monkeypatch,
+        host,
+        shaper_capacity_fraction=1.0,
+        shaper_min_download_kbit=0.0,
+        shaper_min_upload_kbit=0.0,
+        shaper_reapply_hysteresis_pct=20.0,
+    )
     _make_carrying(agent, "leg0", rx_bps=8_000_000.0, tx_bps=2_000_000.0, link_id=0)
     agent._update_bond_shaper_rate()
     before = len(host.changes)
@@ -187,10 +234,15 @@ def test_second_pass_within_hysteresis_does_not_reapply(tmp_path, monkeypatch):
 
 def test_a_change_past_hysteresis_is_reapplied(tmp_path, monkeypatch):
     host = _Host(cake=True)
-    agent = _agent(tmp_path, monkeypatch, host,
-                    shaper_capacity_fraction=1.0,
-                    shaper_min_download_kbit=0.0, shaper_min_upload_kbit=0.0,
-                    shaper_reapply_hysteresis_pct=20.0)
+    agent = _agent(
+        tmp_path,
+        monkeypatch,
+        host,
+        shaper_capacity_fraction=1.0,
+        shaper_min_download_kbit=0.0,
+        shaper_min_upload_kbit=0.0,
+        shaper_reapply_hysteresis_pct=20.0,
+    )
     _make_carrying(agent, "leg0", rx_bps=8_000_000.0, tx_bps=2_000_000.0, link_id=0)
     agent._update_bond_shaper_rate()
     before = len(host.changes)
@@ -208,9 +260,14 @@ def test_never_writes_uci_or_restarts_sqm(tmp_path, monkeypatch):
     `_ensure_bond_shaped` does either of those, and only when attaching cake
     to a freshly created interface."""
     host = _Host(cake=True)
-    agent = _agent(tmp_path, monkeypatch, host,
-                    shaper_capacity_fraction=1.0,
-                    shaper_min_download_kbit=0.0, shaper_min_upload_kbit=0.0)
+    agent = _agent(
+        tmp_path,
+        monkeypatch,
+        host,
+        shaper_capacity_fraction=1.0,
+        shaper_min_download_kbit=0.0,
+        shaper_min_upload_kbit=0.0,
+    )
     _make_carrying(agent, "leg0", rx_bps=8_000_000.0, tx_bps=2_000_000.0, link_id=0)
     agent._update_bond_shaper_rate()
     forbidden = [c for c in host.calls if c[0] == "uci" or c == ["/etc/init.d/sqm", "restart"]]
@@ -219,9 +276,14 @@ def test_never_writes_uci_or_restarts_sqm(tmp_path, monkeypatch):
 
 def test_a_failed_change_warns_does_not_raise_and_retries_next_tick(tmp_path, monkeypatch, caplog):
     host = _Host(cake=True, change_fails=True)
-    agent = _agent(tmp_path, monkeypatch, host,
-                    shaper_capacity_fraction=1.0,
-                    shaper_min_download_kbit=0.0, shaper_min_upload_kbit=0.0)
+    agent = _agent(
+        tmp_path,
+        monkeypatch,
+        host,
+        shaper_capacity_fraction=1.0,
+        shaper_min_download_kbit=0.0,
+        shaper_min_upload_kbit=0.0,
+    )
     _make_carrying(agent, "leg0", rx_bps=8_000_000.0, tx_bps=2_000_000.0, link_id=0)
     with caplog.at_level(logging.WARNING, logger="zippie.agent"):
         agent._update_bond_shaper_rate()  # must not raise
@@ -242,9 +304,14 @@ def test_a_change_that_exits_zero_but_does_not_take_is_a_warning(tmp_path, monke
     the number actually moving (a stale netlink cache, a handle mismatch).
     Only the read-back proves it landed."""
     host = _Host(cake=True, change_silently_ignored=True)
-    agent = _agent(tmp_path, monkeypatch, host,
-                    shaper_capacity_fraction=1.0,
-                    shaper_min_download_kbit=0.0, shaper_min_upload_kbit=0.0)
+    agent = _agent(
+        tmp_path,
+        monkeypatch,
+        host,
+        shaper_capacity_fraction=1.0,
+        shaper_min_download_kbit=0.0,
+        shaper_min_upload_kbit=0.0,
+    )
     _make_carrying(agent, "leg0", rx_bps=8_000_000.0, tx_bps=2_000_000.0, link_id=0)
     with caplog.at_level(logging.WARNING, logger="zippie.agent"):
         agent._update_bond_shaper_rate()
@@ -256,9 +323,14 @@ def test_a_change_that_exits_zero_but_does_not_take_is_a_warning(tmp_path, monke
 # ------------------------------------------------------------------ status
 def test_status_reports_the_applied_rate(tmp_path, monkeypatch):
     host = _Host(cake=True)
-    agent = _agent(tmp_path, monkeypatch, host,
-                    shaper_capacity_fraction=1.0,
-                    shaper_min_download_kbit=0.0, shaper_min_upload_kbit=0.0)
+    agent = _agent(
+        tmp_path,
+        monkeypatch,
+        host,
+        shaper_capacity_fraction=1.0,
+        shaper_min_download_kbit=0.0,
+        shaper_min_upload_kbit=0.0,
+    )
     _make_carrying(agent, "leg0", rx_bps=8_000_000.0, tx_bps=2_000_000.0, link_id=0)
     agent._update_bond_shaper_rate()
     status = agent.status_dict()

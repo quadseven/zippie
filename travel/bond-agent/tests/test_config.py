@@ -28,20 +28,24 @@ def test_parse_minimal():
 def test_max_reorder_deadline_ms_absent_stays_none():
     """Absent means Transport computes its own default (#62) - parse_config
     must not invent a number the operator never wrote."""
-    cfg = parse_config({
-        "home": {"endpoint": "home.example.com"},
-        "policy": {},
-        "paths": [],
-    })
+    cfg = parse_config(
+        {
+            "home": {"endpoint": "home.example.com"},
+            "policy": {},
+            "paths": [],
+        }
+    )
     assert cfg.policy.max_reorder_deadline_ms is None
 
 
 def test_max_reorder_deadline_ms_is_configurable():
-    cfg = parse_config({
-        "home": {"endpoint": "home.example.com"},
-        "policy": {"max_reorder_deadline_ms": 800},
-        "paths": [],
-    })
+    cfg = parse_config(
+        {
+            "home": {"endpoint": "home.example.com"},
+            "policy": {"max_reorder_deadline_ms": 800},
+            "paths": [],
+        }
+    )
     assert cfg.policy.max_reorder_deadline_ms == 800
 
 
@@ -51,46 +55,56 @@ def test_max_reorder_deadline_ms_zero_is_a_present_value_not_absence():
     own value would vanish with no error. Present-and-invalid must fail
     loud instead. Grug Elder, PR #105."""
     with pytest.raises(ValueError):
-        parse_config({
-            "home": {"endpoint": "home.example.com"},
-            "policy": {"max_reorder_deadline_ms": 0},
-            "paths": [],
-        })
+        parse_config(
+            {
+                "home": {"endpoint": "home.example.com"},
+                "policy": {"max_reorder_deadline_ms": 0},
+                "paths": [],
+            }
+        )
 
 
 def test_max_reorder_deadline_ms_negative_is_rejected():
     with pytest.raises(ValueError):
-        parse_config({
-            "home": {"endpoint": "home.example.com"},
-            "policy": {"max_reorder_deadline_ms": -100},
-            "paths": [],
-        })
+        parse_config(
+            {
+                "home": {"endpoint": "home.example.com"},
+                "policy": {"max_reorder_deadline_ms": -100},
+                "paths": [],
+            }
+        )
 
 
 def test_idle_economy_policy_is_configurable():
-    cfg = parse_config({
-        "home": {"endpoint": "home.example.com"},
-        "policy": {
-            "idle_after_s": 90,
-            "idle_probe_interval_ms": 4000,
-            "idle_persistent_keepalive": 25,
-        },
-        "paths": [],
-    })
+    cfg = parse_config(
+        {
+            "home": {"endpoint": "home.example.com"},
+            "policy": {
+                "idle_after_s": 90,
+                "idle_probe_interval_ms": 4000,
+                "idle_persistent_keepalive": 25,
+            },
+            "paths": [],
+        }
+    )
     assert cfg.policy.idle_after_s == 90
     assert cfg.policy.idle_probe_interval_ms == 4000
     assert cfg.policy.idle_persistent_keepalive == 25
+
+
 def test_parse_optional_dashboard_tls_listener():
-    cfg = parse_config({
-        "home": {"endpoint": "home.example.com"},
-        "policy": {"mode": "aggregate"},
-        "paths": [],
-        "agent": {
-            "dashboard_tls_port": 9443,
-            "dashboard_tls_cert": "/etc/zippie/console.crt",
-            "dashboard_tls_key": "/etc/zippie/console.key",
-        },
-    })
+    cfg = parse_config(
+        {
+            "home": {"endpoint": "home.example.com"},
+            "policy": {"mode": "aggregate"},
+            "paths": [],
+            "agent": {
+                "dashboard_tls_port": 9443,
+                "dashboard_tls_cert": "/etc/zippie/console.crt",
+                "dashboard_tls_key": "/etc/zippie/console.key",
+            },
+        }
+    )
 
     assert cfg.dashboard_tls_port == 9443
     assert cfg.dashboard_tls_cert == "/etc/zippie/console.crt"
@@ -119,12 +133,14 @@ def test_parse_optional_dashboard_tls_listener():
 )
 def test_dashboard_tls_configuration_is_all_or_none(partial):
     with pytest.raises(ValueError, match="must be set together"):
-        parse_config({
-            "home": {"endpoint": "home.example.com"},
-            "policy": {"mode": "aggregate"},
-            "paths": [],
-            "agent": partial,
-        })
+        parse_config(
+            {
+                "home": {"endpoint": "home.example.com"},
+                "policy": {"mode": "aggregate"},
+                "paths": [],
+                "agent": partial,
+            }
+        )
 
 
 def test_multipath_client_bundle(tmp_path: Path):

@@ -25,15 +25,27 @@ from zippie.config import parse_config
 
 
 def _agent(tmp_path):
-    return BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path),
-                  "run_dir": str(tmp_path / "run"), "dashboard_host": "127.0.0.1",
-                  "dashboard_port": 0},
-        "home": {"endpoint": "home.example:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
-        "paths": [{"name": "att", "interface": "eth0", "tier": 1}],
-    }))
+    return BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path),
+                    "run_dir": str(tmp_path / "run"),
+                    "dashboard_host": "127.0.0.1",
+                    "dashboard_port": 0,
+                },
+                "home": {
+                    "endpoint": "home.example:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
+                "paths": [{"name": "att", "interface": "eth0", "tier": 1}],
+            }
+        )
+    )
 
 
 @pytest.fixture
@@ -49,14 +61,16 @@ def served(tmp_path):
 
 
 def _post(base, path, body, token=None):
-    req = urllib.request.Request(
-        base + path, data=json.dumps(body).encode(), method="POST",
+    req = urllib.request.Request(  # noqa: S310
+        base + path,
+        data=json.dumps(body).encode(),
+        method="POST",
         headers={"Content-Type": "application/json"},
     )
     if token is not None:
         req.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(req, timeout=5) as r:
+        with urllib.request.urlopen(req, timeout=5) as r:  # noqa: S310
             return r.status, r.read()
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read()
@@ -67,9 +81,12 @@ def test_a_401_announce_is_logged_at_warning(served, caplog):
     announce must still be visible."""
     _agent_, base = served
     with caplog.at_level(logging.INFO, logger="zippie.agent"):
-        code, _ = _post(base, "/api/legs/announce",
-                        {"name": "iphone", "host": "10.99.0.151", "port": 51999},
-                        token="stale-token-from-a-previous-pairing")
+        code, _ = _post(
+            base,
+            "/api/legs/announce",
+            {"name": "iphone", "host": "10.99.0.151", "port": 51999},
+            token="stale-token-from-a-previous-pairing",
+        )
 
     assert code == 401
     hits = [r for r in caplog.records if r.levelno >= logging.WARNING]
@@ -87,8 +104,7 @@ def test_the_rejection_log_names_the_caller(served, caplog):
     with caplog.at_level(logging.INFO, logger="zippie.agent"):
         _post(base, "/api/legs/announce", {"name": "iphone"}, token="wrong")
 
-    joined = " ".join(r.getMessage() for r in caplog.records
-                      if r.levelno >= logging.WARNING)
+    joined = " ".join(r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
     assert "127.0.0.1" in joined, f"the log does not name the caller: {joined}"
 
 
@@ -111,30 +127,35 @@ def test_a_successful_announce_is_visible_too(served, caplog):
     appears with no record of who asked for it."""
     agent, base = served
     with caplog.at_level(logging.INFO, logger="zippie.agent"):
-        code, _ = _post(base, "/api/legs/announce",
-                        {"name": "iphone", "host": "10.99.0.151", "port": 51999},
-                        token=agent.console_token())
+        code, _ = _post(
+            base,
+            "/api/legs/announce",
+            {"name": "iphone", "host": "10.99.0.151", "port": 51999},
+            token=agent.console_token(),
+        )
 
     assert code == 200
-    joined = " ".join(r.getMessage() for r in caplog.records
-                      if r.levelno >= logging.INFO)
+    joined = " ".join(r.getMessage() for r in caplog.records if r.levelno >= logging.INFO)
     assert "iphone" in joined, f"a successful announce logged nothing: {joined}"
 
 
 def test_a_malformed_body_is_logged_with_its_reason(served, caplog):
     """400s are the other way a phone gets silently turned away."""
     agent, base = served
-    req = urllib.request.Request(
-        base + "/api/legs/announce", data=b"not json", method="POST",
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {agent.console_token()}"},
+    req = urllib.request.Request(  # noqa: S310
+        base + "/api/legs/announce",
+        data=b"not json",
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {agent.console_token()}",
+        },
     )
     with caplog.at_level(logging.INFO, logger="zippie.agent"):
         try:
-            urllib.request.urlopen(req, timeout=5)
+            urllib.request.urlopen(req, timeout=5)  # noqa: S310
         except urllib.error.HTTPError as exc:
             assert exc.code == 400
 
-    joined = " ".join(r.getMessage() for r in caplog.records
-                      if r.levelno >= logging.WARNING)
+    joined = " ".join(r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
     assert joined, "a 400 on announce logged nothing at WARNING"

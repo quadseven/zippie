@@ -49,8 +49,7 @@ def test_all_weights_zero_still_selects_something():
     lets a leg earn its weight."""
     s = _sched((1, 0), (2, 0))
     assert s.select(SendMode.DUPLICATE) == [1, 2], (
-        "nothing was selected while every leg was at weight 0; the bond can "
-        "never bootstrap"
+        "nothing was selected while every leg was at weight 0; the bond can never bootstrap"
     )
     assert s.select(SendMode.SPRAY), "spray selected nothing during bootstrap"
 

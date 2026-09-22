@@ -17,6 +17,7 @@ deployed-looking and inert (#37, and quadseven/zippie#15 was held open for it).
 Generating the ConfigMap fixes that; this test is what stops the fix rotting
 into the same failure through a stale copy instead of an absent one.
 """
+
 from __future__ import annotations
 
 import hashlib

@@ -18,6 +18,7 @@ bring-up that created it. These tests drive that bring-up with the host faked
 and check what it SHELLS OUT, because the whole defect was a gap between what
 uci said and what tc said.
 """
+
 from __future__ import annotations
 
 import logging
@@ -61,8 +62,7 @@ class _Host:
         if args[:3] == ["uci", "-q", "get"]:
             if self.enabled is None:
                 return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
-            return subprocess.CompletedProcess(args, 0, stdout=self.enabled + "\n",
-                                               stderr="")
+            return subprocess.CompletedProcess(args, 0, stdout=self.enabled + "\n", stderr="")
         if args == [SQM_INIT_SCRIPT, "restart"]:
             if isinstance(self.restart, Exception):
                 raise self.restart
@@ -88,15 +88,25 @@ def _agent(tmp_path, monkeypatch, host: _Host, *, live=False) -> BondAgent:
     """
     import zippie.agent as agent_mod
 
-    agent = BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path / "s"),
-                  "run_dir": str(tmp_path / "r")},
-        "home": {"endpoint": "home.example:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"datapath": "packet", "transport_port": 51830,
-                   "mode": "aggregate"},
-        "paths": [],
-    }))
+    agent = BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path / "s"),
+                    "run_dir": str(tmp_path / "r"),
+                },
+                "home": {
+                    "endpoint": "home.example:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
+                "paths": [],
+            }
+        )
+    )
     agent.prepare_dirs()
     world_live = {PACKET_IFACE} if live else set()
     ups: list[str] = []
@@ -125,8 +135,9 @@ def _agent(tmp_path, monkeypatch, host: _Host, *, live=False) -> BondAgent:
 
 
 def _lines(caplog, level: int, needle: str) -> list[str]:
-    return [r.getMessage() for r in caplog.records
-            if r.levelno == level and needle in r.getMessage()]
+    return [
+        r.getMessage() for r in caplog.records if r.levelno == level and needle in r.getMessage()
+    ]
 
 
 # ------------------------------------------------------------ already shaped
@@ -141,8 +152,7 @@ def test_cake_already_on_the_bond_means_no_restart_and_no_noise(tmp_path, monkey
         agent._ensure_packet_tunnel()
     assert agent._test_ups == [PACKET_IFACE], "the bring-up did not create pbz0"
     assert host.restarts == 0, f"restarted sqm on an already-shaped bond: {host.calls}"
-    assert not [r for r in caplog.records
-                if "shap" in r.getMessage() or "sqm" in r.getMessage()], (
+    assert not [r for r in caplog.records if "shap" in r.getMessage() or "sqm" in r.getMessage()], (
         "said something about the shaper when there was nothing to say"
     )
 
@@ -176,9 +186,11 @@ def test_no_rate_is_pinned_by_the_agent(tmp_path, monkeypatch):
     host = _Host(qdisc=NOQUEUE, enabled="1")
     agent = _agent(tmp_path, monkeypatch, host)
     agent._ensure_packet_tunnel()
-    writes = [c for c in host.calls
-              if (c[:2] == ["tc", "qdisc"] and c[2] != "show")
-              or (c[0] == "uci" and c[1] != "-q")]
+    writes = [
+        c
+        for c in host.calls
+        if (c[:2] == ["tc", "qdisc"] and c[2] != "show") or (c[0] == "uci" and c[1] != "-q")
+    ]
     assert not writes, f"the agent wrote a shaper setting of its own: {writes}"
 
 
@@ -242,8 +254,7 @@ def test_a_failed_restart_warns_and_the_bring_up_continues(tmp_path, monkeypatch
     """The bond coming up matters more than the queue on it. A restart that
     exits non-zero is a WARNING carrying the command's output, and the
     bring-up still installs its route afterwards - nothing raises."""
-    host = _Host(qdisc=NOQUEUE, enabled="1",
-                 restart=(1, "", "sqm: could not load sch_cake"))
+    host = _Host(qdisc=NOQUEUE, enabled="1", restart=(1, "", "sqm: could not load sch_cake"))
     agent = _agent(tmp_path, monkeypatch, host)
     with caplog.at_level(logging.INFO, logger="zippie.agent"):
         agent._ensure_packet_tunnel()
@@ -260,8 +271,11 @@ def test_a_hung_restart_warns_and_the_bring_up_continues(tmp_path, monkeypatch, 
     """The timeout surfaces as NetError (net.run turns TimeoutExpired into
     one, 2026-08-02). It must be caught HERE: an exception out of the shaper
     would abort the bring-up that had already created the interface."""
-    host = _Host(qdisc=NOQUEUE, enabled="1",
-                 restart=net.NetError("command timed out after 15.0s: /etc/init.d/sqm restart"))
+    host = _Host(
+        qdisc=NOQUEUE,
+        enabled="1",
+        restart=net.NetError("command timed out after 15.0s: /etc/init.d/sqm restart"),
+    )
     agent = _agent(tmp_path, monkeypatch, host)
     with caplog.at_level(logging.INFO, logger="zippie.agent"):
         agent._ensure_packet_tunnel()  # must not raise

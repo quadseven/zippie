@@ -84,6 +84,7 @@ def test_a_partial_write_is_never_visible(tmp_path):
 
 # ---------------------------------------------------------------- overrides --
 
+
 def test_an_override_wins_over_config(tmp_path):
     """'The provider says the cap is 15 GB, not the 5 you configured' is the
     case this exists for."""
@@ -118,7 +119,7 @@ def test_an_unknown_field_is_refused(tmp_path):
     hand-edited file, so the whitelist is the check."""
     s = LegStore(tmp_path)
     with pytest.raises(ValueError):
-        s.update("att", {"montly_cap_gb": 15.0})   # note the typo
+        s.update("att", {"montly_cap_gb": 15.0})  # note the typo
 
 
 def test_a_corrupt_override_file_applies_nothing(tmp_path):
@@ -147,18 +148,30 @@ def test_the_file_is_readable_by_a_human(tmp_path):
 
 # ------------------------------------------------- wired into the agent --
 
+
 def _agent(tmp_path):
     from zippie.agent import BondAgent
     from zippie.config import parse_config
-    return BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path),
-                  "run_dir": str(tmp_path / "run")},
-        "home": {"endpoint": "home.example:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
-        "paths": [{"name": "att", "interface": "eth0", "monthly_cap_gb": 5.0,
-                   "tier": 1}],
-    }))
+
+    return BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path),
+                    "run_dir": str(tmp_path / "run"),
+                },
+                "home": {
+                    "endpoint": "home.example:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
+                "paths": [{"name": "att", "interface": "eth0", "monthly_cap_gb": 5.0, "tier": 1}],
+            }
+        )
+    )
 
 
 def test_the_agent_actually_writes_usage(tmp_path):
@@ -211,6 +224,7 @@ def test_descriptive_metadata_never_touches_routing(tmp_path):
 
 # ------------------------------------------------ usage actually accrues --
 
+
 class FakeTransport:
     def __init__(self) -> None:
         self.totals: dict[int, tuple[int, int]] = {}
@@ -227,11 +241,11 @@ def test_usage_accrues_from_link_bytes(tmp_path):
     t = FakeTransport()
     a._transport = t
 
-    t.totals[0] = (500_000_000, 500_000_000)   # 1 GB, first sight
+    t.totals[0] = (500_000_000, 500_000_000)  # 1 GB, first sight
     a.accumulate_usage()
     assert a.paths[0].usage_gb == 0.0, "the first sample must only baseline"
 
-    t.totals[0] = (1_000_000_000, 1_000_000_000)   # +1 GB
+    t.totals[0] = (1_000_000_000, 1_000_000_000)  # +1 GB
     a.accumulate_usage()
     assert a.paths[0].usage_gb == pytest.approx(1.0)
 
@@ -251,13 +265,11 @@ def test_a_transport_restart_does_not_erase_the_month(tmp_path):
     a.accumulate_usage()
     assert a.paths[0].usage_gb == pytest.approx(2.0)
 
-    t.totals[0] = (10_000_000, 0)          # transport restarted
+    t.totals[0] = (10_000_000, 0)  # transport restarted
     a.accumulate_usage()
-    assert a.paths[0].usage_gb == pytest.approx(2.0), (
-        "a counter reset changed the month's usage"
-    )
+    assert a.paths[0].usage_gb == pytest.approx(2.0), "a counter reset changed the month's usage"
 
-    t.totals[0] = (110_000_000, 0)         # and keeps counting from the new base
+    t.totals[0] = (110_000_000, 0)  # and keeps counting from the new base
     a.accumulate_usage()
     assert a.paths[0].usage_gb == pytest.approx(2.1)
 
@@ -272,6 +284,7 @@ def test_a_leg_with_no_link_accrues_nothing(tmp_path):
 def test_accumulated_usage_reaches_the_soft_limit(tmp_path):
     """End to end: the number the cap check reads is the one that now moves."""
     from zippie import policy
+
     a = _agent(tmp_path)
     a._transport_ids["att"] = 0
     t = FakeTransport()
@@ -284,9 +297,7 @@ def test_accumulated_usage_reaches_the_soft_limit(tmp_path):
     a.accumulate_usage()
 
     policy.update_usage_flags(a.paths[0]) if hasattr(policy, "update_usage_flags") else None
-    assert a.paths[0].usage_gb > 4.25, (
-        f"usage only reached {a.paths[0].usage_gb} GB"
-    )
+    assert a.paths[0].usage_gb > 4.25, f"usage only reached {a.paths[0].usage_gb} GB"
 
 
 def test_accumulated_usage_is_not_erased_by_the_control_loop(tmp_path):
@@ -307,15 +318,13 @@ def test_accumulated_usage_is_not_erased_by_the_control_loop(tmp_path):
 
     t.totals[0] = (0, 0)
     a.accumulate_usage()
-    t.totals[0] = (5_000_000_000, 0)      # 5 GB moves
+    t.totals[0] = (5_000_000_000, 0)  # 5 GB moves
     a.accumulate_usage()
     assert a.paths[0].usage_gb == pytest.approx(5.0)
 
     # A control tick must not roll that back to whatever the file last held.
     a.apply_leg_overrides()
-    assert a.paths[0].usage_gb == pytest.approx(5.0), (
-        "a control-loop pass erased accumulated usage"
-    )
+    assert a.paths[0].usage_gb == pytest.approx(5.0), "a control-loop pass erased accumulated usage"
 
 
 def test_load_usage_state_still_restores_at_startup(tmp_path):
@@ -345,6 +354,7 @@ def test_throughput_is_derived_from_the_link_counters(tmp_path):
 
     clock = [1000.0]
     import zippie.agent as agent_mod
+
     orig = agent_mod.time.monotonic
     agent_mod.time.monotonic = lambda: clock[0]
     try:
@@ -362,9 +372,7 @@ def test_throughput_is_derived_from_the_link_counters(tmp_path):
     total = p.tx_bps + p.rx_bps
     assert abs(total - 32_000_000) < 1_000_000, f"total {total} bps, want ~32 Mbps"
     # Split by direction, not halved - an upload must not read as symmetric.
-    assert p.rx_bps > p.tx_bps * 2, (
-        f"direction lost: tx={p.tx_bps} rx={p.rx_bps}"
-    )
+    assert p.rx_bps > p.tx_bps * 2, f"direction lost: tx={p.tx_bps} rx={p.rx_bps}"
 
 
 def test_a_zero_length_tick_does_not_produce_an_infinite_rate(tmp_path):
@@ -375,7 +383,7 @@ def test_a_zero_length_tick_does_not_produce_an_infinite_rate(tmp_path):
     t.totals[0] = (0, 0)
     a.accumulate_usage()
     t.totals[0] = (5_000_000, 0)
-    a.accumulate_usage()      # same monotonic instant in practice
+    a.accumulate_usage()  # same monotonic instant in practice
     p = a.paths[0]
     if p.tx_bps is not None:
         assert p.tx_bps < 1e12, "a near-zero span produced a spike"

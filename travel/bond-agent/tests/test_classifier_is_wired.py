@@ -21,6 +21,7 @@ recorded trap in docs/state-of-play.md: "twelve green unit tests and it had
 never worked, because every test built the config directly and skipped
 load_config()".
 """
+
 from __future__ import annotations
 
 import pytest
@@ -134,8 +135,7 @@ def test_route_mode_still_starts_no_transport(captured):
 
 # ------------------------------------------------- the parse side, separately
 def test_policy_parses_the_classifier_keys():
-    cfg = _config(duplicate_enabled=False, duplicate_max_bytes=64,
-                  duplicate_all=True)
+    cfg = _config(duplicate_enabled=False, duplicate_max_bytes=64, duplicate_all=True)
     assert cfg.policy.datapath is Datapath.PACKET
     assert cfg.policy.duplicate_enabled is False
     assert cfg.policy.duplicate_max_bytes == 64
@@ -208,11 +208,9 @@ def test_the_configured_rung_and_key_reach_the_transport(captured, tmp_path):
     key.write_bytes(secret + b"\n")
     key.chmod(0o600)
 
-    seen = captured(_config(auth_level="sign", auth_key_file=str(key),
-                            auth_peer_id=7))
+    seen = captured(_config(auth_level="sign", auth_key_file=str(key), auth_peer_id=7))
     assert seen["kwargs"]["auth_level"] is AuthLevel.SIGN
-    assert seen["kwargs"]["identity"].key_id() == new_bond_identity(
-        7, secret).key_id()
+    assert seen["kwargs"]["identity"].key_id() == new_bond_identity(7, secret).key_id()
     assert seen["kwargs"]["identity"].client_id == 7
 
 

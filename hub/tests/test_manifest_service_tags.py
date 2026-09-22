@@ -60,10 +60,13 @@ def _env(container: dict) -> dict:
     return {e["name"]: e.get("value") for e in container.get("env", [])}
 
 
-@pytest.mark.parametrize("path,deployment,service", [
-    (HUB_MANIFEST, "zippie-hub", "zippie-hub"),
-    (HOME_MANIFEST, "zippie-home", "zippie-home"),
-])
+@pytest.mark.parametrize(
+    "path,deployment,service",
+    [
+        (HUB_MANIFEST, "zippie-hub", "zippie-hub"),
+        (HOME_MANIFEST, "zippie-home", "zippie-home"),
+    ],
+)
 def test_service_tags_are_labels_not_annotations(path, deployment, service):
     meta = _pod_template(path, deployment)
     labels = meta.get("labels") or {}
@@ -104,13 +107,20 @@ def test_the_hub_traces_over_the_agents_unix_socket():
         "the hub is not hostNetwork, so a TCP write to the node's 8126 crosses "
         "the node's INPUT chain; the unix socket is the transport that does not"
     )
-    socket_path = url[len("unix://"):]
+    socket_path = url[len("unix://") :]
 
     mounts = {m["name"]: m for m in container["volumeMounts"]}
-    volumes = {v["name"]: v for v in
-               _deployment(HUB_MANIFEST, "zippie-hub")["spec"]["template"]["spec"]["volumes"]}
-    mounted = [m for m in mounts.values()
-               if socket_path.startswith(m["mountPath"].rstrip("/") + "/")]
+    volumes = {
+        v["name"]: v
+        for v in _deployment(HUB_MANIFEST, "zippie-hub")["spec"]["template"]["spec"][
+            "volumes"
+        ]
+    }
+    mounted = [
+        m
+        for m in mounts.values()
+        if socket_path.startswith(m["mountPath"].rstrip("/") + "/")
+    ]
     assert mounted, f"{socket_path} is configured but nothing mounts it"
     name = mounted[0]["name"]
     assert volumes[name]["hostPath"]["path"] == "/var/run/datadog"

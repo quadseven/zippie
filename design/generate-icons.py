@@ -36,6 +36,7 @@ them, not by arithmetic alone - `--preview` regenerates that sheet. 0.62 clears
 the mask with visible breathing room; 0.68 fits too but the corner circles come
 close enough to the edge to read as tight, which is the complaint this replaces.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -125,14 +126,15 @@ def load_mark() -> Image.Image:
     future re-export with different padding would silently resize every icon.
     """
     mark = Image.open(MASTER).convert("RGBA")
-    box = mark.getbbox()          # alpha-aware: the circles, not the canvas
+    box = mark.getbbox()  # alpha-aware: the circles, not the canvas
     if box is None:
         raise SystemExit(f"{MASTER} has no opaque pixels - wrong file?")
     return mark.crop(box)
 
 
-def place(mark: Image.Image, canvas: int, span: float,
-          ground: tuple | None) -> Image.Image:
+def place(
+    mark: Image.Image, canvas: int, span: float, ground: tuple | None
+) -> Image.Image:
     """The mark centred on a square canvas, scaled so its WIDTH is `span`.
 
     Width rather than the longer edge: this mark is wider than tall, so width
@@ -143,8 +145,7 @@ def place(mark: Image.Image, canvas: int, span: float,
     target_w = max(1, round(canvas * span))
     target_h = max(1, round(target_w * mark.height / mark.width))
     scaled = mark.resize((target_w, target_h), Image.LANCZOS)
-    out.alpha_composite(scaled, ((canvas - target_w) // 2,
-                                 (canvas - target_h) // 2))
+    out.alpha_composite(scaled, ((canvas - target_w) // 2, (canvas - target_h) // 2))
     return out
 
 
@@ -206,9 +207,11 @@ def preview(mark: Image.Image, out: pathlib.Path) -> None:
     """
     cell, pad = 216, 24
     cols, rows = 4, 2
-    sheet = Image.new("RGBA",
-                      (cell * cols + pad * (cols + 1), (cell + pad) * rows + pad),
-                      (28, 28, 32, 255))
+    sheet = Image.new(
+        "RGBA",
+        (cell * cols + pad * (cols + 1), (cell + pad) * rows + pad),
+        (28, 28, 32, 255),
+    )
 
     def at(col, row):
         return (pad + col * (cell + pad), pad + row * (cell + pad))
@@ -220,7 +223,8 @@ def preview(mark: Image.Image, out: pathlib.Path) -> None:
     ImageDraw.Draw(circle).ellipse((0, 0, cell - 1, cell - 1), fill=255)
     squircle = Image.new("L", (cell, cell), 0)
     ImageDraw.Draw(squircle).rounded_rectangle(
-        (0, 0, cell - 1, cell - 1), radius=cell // 4, fill=255)
+        (0, 0, cell - 1, cell - 1), radius=cell // 4, fill=255
+    )
     for i, mask in enumerate((square, circle, squircle)):
         tile = layer.copy()
         tile.putalpha(mask)
@@ -237,8 +241,12 @@ def preview(mark: Image.Image, out: pathlib.Path) -> None:
     # Row 2 - themed. Android recolours the monochrome layer wholesale; iOS
     # maps a grey ramp onto the tint, which is why one is flat and one is not.
     mono = silhouette(place(mark, cell, MARK_SPAN, None), (255, 255, 255, 255))
-    for i, (bg, ink) in enumerate((((236, 236, 238, 255), (60, 60, 66, 255)),
-                                   ((32, 32, 36, 255), (226, 226, 232, 255)))):
+    for i, (bg, ink) in enumerate(
+        (
+            ((236, 236, 238, 255), (60, 60, 66, 255)),
+            ((32, 32, 36, 255), (226, 226, 232, 255)),
+        )
+    ):
         tile = Image.new("RGBA", (cell, cell), bg)
         tinted = Image.new("RGBA", (cell, cell), ink)
         tinted.putalpha(mono.split()[3])
@@ -250,11 +258,15 @@ def preview(mark: Image.Image, out: pathlib.Path) -> None:
     grey = grayscale(place(mark, cell, IOS_SPAN, None))
     tint = Image.new("RGBA", (cell, cell), (24, 24, 28, 255))
     ramp = grey.convert("L").point(lambda v: v)
-    coloured = Image.merge("RGBA", (
-        ramp.point(lambda v: int(v * 0.45)),
-        ramp.point(lambda v: int(v * 0.75)),
-        ramp.point(lambda v: min(255, int(v * 1.0))),
-        grey.split()[3]))
+    coloured = Image.merge(
+        "RGBA",
+        (
+            ramp.point(lambda v: int(v * 0.45)),
+            ramp.point(lambda v: int(v * 0.75)),
+            ramp.point(lambda v: min(255, int(v * 1.0))),
+            grey.split()[3],
+        ),
+    )
     tint.alpha_composite(coloured)
     tint.putalpha(squircle)
     sheet.alpha_composite(tint, at(2, 1))
@@ -294,12 +306,16 @@ def main() -> None:
         # Foreground keeps its transparency; the launcher composites it over
         # the background layer and applies the mask to the pair.
         write(d / "ic_launcher_foreground.png", place(mark, adaptive, MARK_SPAN, None))
-        write(d / "ic_launcher_background.png",
-              Image.new("RGBA", (adaptive, adaptive), GROUND))
+        write(
+            d / "ic_launcher_background.png",
+            Image.new("RGBA", (adaptive, adaptive), GROUND),
+        )
         # Themed icons, Android 13+. Same geometry as the foreground so the
         # mark does not appear to move when the user turns themed icons on.
-        write(d / "ic_launcher_monochrome.png",
-              silhouette(place(mark, adaptive, MARK_SPAN, None), (255, 255, 255, 255)))
+        write(
+            d / "ic_launcher_monochrome.png",
+            silhouette(place(mark, adaptive, MARK_SPAN, None), (255, 255, 255, 255)),
+        )
         legacy_icon = place(mark, legacy, MARK_SPAN, GROUND)
         write(d / "ic_launcher.png", legacy_icon)
         write(d / "ic_launcher_round.png", circle_masked(legacy_icon))

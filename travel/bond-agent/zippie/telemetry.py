@@ -55,8 +55,9 @@ class DatadogApiTelemetry:
     of having data when the tunnel is down.
     """
 
-    def __init__(self, api_key: str, site: str = "datadoghq.com",
-                 extra_tags: list[str] | None = None):
+    def __init__(
+        self, api_key: str, site: str = "datadoghq.com", extra_tags: list[str] | None = None
+    ):
         self.api_key = api_key
         self.site = site
         self.extra_tags = extra_tags or []
@@ -81,9 +82,7 @@ class DatadogApiTelemetry:
         # growing without bound on a router with 128MB is not.
         self._q: queue.Queue = queue.Queue(maxsize=_QUEUE_MAX)
         self.dropped = 0
-        self._worker = threading.Thread(
-            target=self._drain, name="zippie-telemetry", daemon=True
-        )
+        self._worker = threading.Thread(target=self._drain, name="zippie-telemetry", daemon=True)
         self._worker.start()
         if not api_key:
             log.info("telemetry disabled (no DD_API_KEY)")
@@ -125,7 +124,7 @@ class DatadogApiTelemetry:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
                 if resp.status >= 300:
                     log.debug("dd api returned %s", resp.status)
         except (urllib.error.HTTPError, urllib.error.URLError, OSError) as exc:
@@ -155,11 +154,9 @@ class DatadogApiTelemetry:
         # backwards, so an agent restart emits nothing here rather than a
         # negative spike - the same rule every other counter on this page
         # follows.
-        dropped_delta = self._deltas.delta("telemetry.dropped",
-                                           float(self.dropped))
+        dropped_delta = self._deltas.delta("telemetry.dropped", float(self.dropped))
         if dropped_delta is not None:
-            samples.append(("telemetry.dropped_delta", dropped_delta,
-                            drop_tags))
+            samples.append(("telemetry.dropped_delta", dropped_delta, drop_tags))
         series = [
             {
                 "metric": f"{PREFIX}.{name}",
@@ -178,14 +175,16 @@ class DatadogApiTelemetry:
         status pass: the whole point of the event path is that it is faster
         than the poll loop, and its telemetry should be too.
         """
-        self._enqueue([
-            {
-                "metric": f"{PREFIX}.{name}",
-                "type": 1,  # count
-                "points": [{"timestamp": int(time.time()), "value": float(value)}],
-                "tags": self.extra_tags + tags,
-            }
-        ])
+        self._enqueue(
+            [
+                {
+                    "metric": f"{PREFIX}.{name}",
+                    "type": 1,  # count
+                    "points": [{"timestamp": int(time.time()), "value": float(value)}],
+                    "tags": self.extra_tags + tags,
+                }
+            ]
+        )
 
     def flush(self, timeout: float = 2.0) -> bool:
         """Block until the queue drains. For shutdown and for tests.
@@ -196,7 +195,7 @@ class DatadogApiTelemetry:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self._q.empty():
-                time.sleep(0.01)     # let the in-flight batch finish
+                time.sleep(0.01)  # let the in-flight batch finish
                 return True
             time.sleep(0.005)
         return False
@@ -244,11 +243,24 @@ _TRANSPORT_COUNTERS = {
     # does not return it, so it never reaches this status dict and the guard
     # below skips it. Naming it here means the metric starts flowing the moment
     # that one line is fixed, rather than the omission being rediscovered later.
-    "transport": ("sent", "received", "send_errors", "malformed",
-                  "nacks_received", "no_path", "rate_limited"),
-    "reassembly": ("delivered", "delivered_bytes", "duplicates_dropped",
-                   "too_late_dropped", "gaps_abandoned", "lost_estimate",
-                   "stream_restarts"),
+    "transport": (
+        "sent",
+        "received",
+        "send_errors",
+        "malformed",
+        "nacks_received",
+        "no_path",
+        "rate_limited",
+    ),
+    "reassembly": (
+        "delivered",
+        "delivered_bytes",
+        "duplicates_dropped",
+        "too_late_dropped",
+        "gaps_abandoned",
+        "lost_estimate",
+        "stream_restarts",
+    ),
     "retransmit": ("resent", "expired", "unanswerable", "refused"),
     # `dropped` is gaps the NACK tracker refused to take on because its pending
     # ceiling was already reached (#22). It is the difference between "the bond
@@ -315,8 +327,7 @@ def _transport_samples(status: dict, deltas: _Deltas | None) -> list:
     # peer_silent_s is the duration that says "the other end has stopped
     # reaching us on every leg" (#4). A duration, not a counter: a frozen
     # counter is invisible to a threshold, a climbing age is not.
-    for gauge in ("links", "healthy", "peer_silent_s", "gap_depth",
-                  "buffered", "loop_us"):
+    for gauge in ("links", "healthy", "peer_silent_s", "gap_depth", "buffered", "loop_us"):
         if t.get(gauge) is not None:
             out.append((f"transport.{gauge}", float(t[gauge]), tags))
 
@@ -342,10 +353,9 @@ def _transport_samples(status: dict, deltas: _Deltas | None) -> list:
             if d is not None:
                 out.append((f"{metric}_delta", d, tags))
     if classifier.get("duplicate_pct") is not None:
-        out.append(("classifier.duplicate_pct",
-                    float(classifier["duplicate_pct"]), tags))
+        out.append(("classifier.duplicate_pct", float(classifier["duplicate_pct"]), tags))
 
-    delivered = ((t.get("reassembly") or {}).get("delivered"))
+    delivered = (t.get("reassembly") or {}).get("delivered")
     if delivered is not None and deltas is not None:
         moved = deltas.delta("carrying_probe", float(delivered))
         if moved is not None:
@@ -353,9 +363,13 @@ def _transport_samples(status: dict, deltas: _Deltas | None) -> list:
     return out
 
 
-def _path_samples(p: dict, mode: str, primary: str | None,
-                  deltas: _Deltas | None = None,
-                  membership_known: bool = False) -> list:
+def _path_samples(
+    p: dict,
+    mode: str,
+    primary: str | None,
+    deltas: _Deltas | None = None,
+    membership_known: bool = False,
+) -> list:
     """One leg's series.
 
     Split out of _samples, which Elder flagged at cyclomatic 18 against a cap
@@ -439,8 +453,9 @@ def _path_samples(p: dict, mode: str, primary: str | None,
         # Omitted rather than zeroed when there is no cap: a leg with no plan
         # limit is not "0% of the way through its plan", and a monitor that
         # averaged the two would never fire.
-        out.append(("path.usage_pct_of_cap",
-                    100.0 * float(p.get("usage_gb", 0.0) or 0.0) / cap, tags))
+        out.append(
+            ("path.usage_pct_of_cap", 100.0 * float(p.get("usage_gb", 0.0) or 0.0) / cap, tags)
+        )
     # The policy layer's own verdict, so a demotion is visible as a cause rather
     # than inferred from a weight that dropped for one of six possible reasons.
     out.append(("path.over_soft_limit", 1 if p.get("over_soft_limit") else 0, tags))
@@ -464,8 +479,7 @@ def _path_samples(p: dict, mode: str, primary: str | None,
     # endpoint hostname resolved to something local. Never legitimate for
     # a home endpoint reached over the internet, and the single number
     # that would have ended the 2026-08-02 hunt in seconds.
-    out.append(("path.peer_endpoint_private",
-                1 if p.get("peer_endpoint_private") else 0, tags))
+    out.append(("path.peer_endpoint_private", 1 if p.get("peer_endpoint_private") else 0, tags))
     # MEMBERSHIP, WHICH IS NOT WEIGHT. Read from the transport's own link table,
     # the only place that knows. A tier-gated leg keeps a real weight and is not
     # in the bond, so every reader that decided "carrying" from weight alone was
@@ -483,11 +497,13 @@ def _path_samples(p: dict, mode: str, primary: str | None,
         # because weight alone cannot tell an idle member from a leg that is
         # not a member at all, and those want opposite responses. Flat at 0 on
         # a healthy bond; a series that sits at 1 is capacity nobody has.
-        out.append((
-            "path.idle_in_bond",
-            1 if p.get("activity") == "idle" else 0,
-            tags,
-        ))
+        out.append(
+            (
+                "path.idle_in_bond",
+                1 if p.get("activity") == "idle" else 0,
+                tags,
+            )
+        )
     # THE RAW BYTES USAGE IS DERIVED FROM, per leg.
     #
     # In packet mode there is no per-leg wg interface, so tx_bytes/rx_bytes read
@@ -623,17 +639,14 @@ def _free_leg_idle(paths: list[dict]) -> int:
     that only appears when things are wrong cannot be alerted on without
     notify_no_data, and no-data is not zero.
     """
+
     def carrying(p: dict) -> bool:
         return (p.get("effective_weight", 0) or 0) > 0
 
-    metered_carrying = any(
-        p.get("cost_class") not in (None, "free") and carrying(p) for p in paths
-    )
+    metered_carrying = any(p.get("cost_class") not in (None, "free") and carrying(p) for p in paths)
     if not metered_carrying:
         return 0
-    free_idle = any(
-        p.get("cost_class") == "free" and not carrying(p) for p in paths
-    )
+    free_idle = any(p.get("cost_class") == "free" and not carrying(p) for p in paths)
     return 1 if free_idle else 0
 
 
@@ -660,9 +673,7 @@ def _samples(status: dict, deltas: _Deltas | None = None) -> list[tuple[str, flo
     # one was the live state on 2026-08-05 and nothing said so.
     if membership_known:
         out.append(("paths_in_bond", len([p for p in paths if p.get("in_bond")]), bond))
-    out.append(
-        ("free_leg_idle_while_metered_carries", _free_leg_idle(paths), bond)
-    )
+    out.append(("free_leg_idle_while_metered_carries", _free_leg_idle(paths), bond))
     out.append(("agent_up", 1, bond))
     out.append(("uptime_s", status.get("uptime_s", 0), bond))
     # 0 here means address-loss withdrawal is degraded to probe speed. A
@@ -674,10 +685,8 @@ def _samples(status: dict, deltas: _Deltas | None = None) -> list[tuple[str, flo
     # RESOLUTION HEALTH. `home` is a name; `home_ip` is what it became. When a
     # venue resolver hijacks DNS these disagree and every other metric still
     # reads normal - the bond looks healthy while dialling nowhere.
-    out.append(("home_endpoint_private",
-                1 if status.get("home_ip_private") else 0, bond))
-    out.append(("home_endpoint_resolved",
-                1 if status.get("home_ip") else 0, bond))
+    out.append(("home_endpoint_private", 1 if status.get("home_ip_private") else 0, bond))
+    out.append(("home_endpoint_resolved", 1 if status.get("home_ip") else 0, bond))
 
     # WATCHDOG, as numbers. It already emits events, which give a timeline and
     # cannot be alerted on. `rearms_used` reaching its cap means the next trip
@@ -728,8 +737,7 @@ class Telemetry:
 
     def emit_status(self, status: dict) -> None:
         """Emit one sample per path plus bond-level rollups."""
-        self._send([self._gauge(n, v, tg)
-                    for n, v, tg in _samples(status, self._deltas)])
+        self._send([self._gauge(n, v, tg) for n, v, tg in _samples(status, self._deltas)])
 
     def emit_count(self, name: str, value: float, tags: list[str]) -> None:
         all_tags = ",".join(self.extra_tags + tags)
@@ -774,8 +782,7 @@ class DatadogLogHandler(logging.Handler):
         # never left the device. Volume is low: these fire on state CHANGE, not
         # per probe, so INFO costs a handful of lines per minute even on a
         # flapping link. Set ZIPPIE_DD_LOG_LEVEL=WARNING to go back.
-        _lvl = getattr(logging, os.environ.get("ZIPPIE_DD_LOG_LEVEL", "INFO").upper(),
-                       logging.INFO)
+        _lvl = getattr(logging, os.environ.get("ZIPPIE_DD_LOG_LEVEL", "INFO").upper(), logging.INFO)
         super().__init__(level=_lvl)
         self.api_key = api_key
         self.site = site
@@ -786,9 +793,7 @@ class DatadogLogHandler(logging.Handler):
         self._buffer: list[dict] = []
         self._buf_lock = threading.Lock()
         self._stop = threading.Event()
-        self._thread = threading.Thread(
-            target=self._flush_loop, name="zippie-dd-logs", daemon=True
-        )
+        self._thread = threading.Thread(target=self._flush_loop, name="zippie-dd-logs", daemon=True)
         self._thread.start()
 
     def emit(self, record: logging.LogRecord) -> None:
@@ -826,7 +831,7 @@ class DatadogLogHandler(logging.Handler):
             method="POST",
         )
         try:
-            urllib.request.urlopen(req, timeout=15).close()
+            urllib.request.urlopen(req, timeout=15).close()  # noqa: S310
         except Exception as exc:  # noqa: BLE001 - drop the batch, never block or recurse
             # debug only: this logger's own records go through this handler at
             # WARNING+, so anything louder here could feed back into the buffer.

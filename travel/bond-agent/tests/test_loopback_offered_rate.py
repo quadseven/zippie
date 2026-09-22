@@ -52,8 +52,12 @@ PAYLOAD = 1263
 
 def _run(pace_pps):
     return run_upstream(
-        legs=2, payload_len=PAYLOAD, seconds=SECONDS, duplicate=True,
-        ack_every=0, pace_pps=pace_pps,
+        legs=2,
+        payload_len=PAYLOAD,
+        seconds=SECONDS,
+        duplicate=True,
+        ack_every=0,
+        pace_pps=pace_pps,
     )
 
 
@@ -94,13 +98,11 @@ def test_paced_and_saturating_are_different_arrival_regimes(saturating, paced):
 def test_paced_run_offers_the_rate_it_was_asked_for(paced):
     """A pacer that overshoots is a saturating generator with extra steps."""
     assert 0.5 * PACE_PPS <= paced["offered_pps"] <= 1.5 * PACE_PPS, (
-        f"asked for {PACE_PPS:.0f} payloads/s, offered "
-        f"{paced['offered_pps']:.0f}"
+        f"asked for {PACE_PPS:.0f} payloads/s, offered {paced['offered_pps']:.0f}"
     )
 
 
-def test_cost_per_payload_is_reported_and_rises_when_the_burst_is_removed(
-        saturating, paced):
+def test_cost_per_payload_is_reported_and_rises_when_the_burst_is_removed(saturating, paced):
     """CPU per payload is the quantity that carries to another machine.
 
     Mbit/s does not: it is this laptop's. Cost per payload times a CPU scaling

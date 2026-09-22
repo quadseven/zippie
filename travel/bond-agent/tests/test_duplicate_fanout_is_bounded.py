@@ -219,11 +219,19 @@ def _transport(legs: int, **kw):
             socks[device] = s
         return s
 
-    t = Transport(("127.0.0.1", 51830), socket_factory=factory,
-                  selector_factory=_NullSelector, **kw)
+    t = Transport(
+        ("127.0.0.1", 51830), socket_factory=factory, selector_factory=_NullSelector, **kw
+    )
     for pid in range(legs):
-        t.add_link(LinkEndpoint(path_id=pid, name=f"leg{pid}", device=f"dev{pid}",
-                                remote=("10.0.0.9", 51901), weight=100))
+        t.add_link(
+            LinkEndpoint(
+                path_id=pid,
+                name=f"leg{pid}",
+                device=f"dev{pid}",
+                remote=("10.0.0.9", 51901),
+                weight=100,
+            )
+        )
     return t, socks
 
 
@@ -265,11 +273,13 @@ def test_spraying_still_uses_every_leg():
 def _config(**policy):
     base = {"datapath": "packet", "transport_port": 51830}
     base.update(policy)
-    return parse_config({
-        "home": {"endpoint": "h.example", "server_public_key": "k"},
-        "policy": base,
-        "paths": [{"name": "eth", "interface": "eth0"}],
-    })
+    return parse_config(
+        {
+            "home": {"endpoint": "h.example", "server_public_key": "k"},
+            "policy": base,
+            "paths": [{"name": "eth", "interface": "eth0"}],
+        }
+    )
 
 
 def test_policy_parses_duplicate_fanout():
@@ -309,8 +319,7 @@ def test_this_knob_coexists_with_the_other_new_policy_knobs():
     climb - so the check is simply that a [policy] block setting both lands
     both, from one parse.
     """
-    cfg = _config(duplicate_fanout=4, weight_rise_window_passes=25,
-                  weight_rises_per_window=3)
+    cfg = _config(duplicate_fanout=4, weight_rise_window_passes=25, weight_rises_per_window=3)
     assert cfg.policy.duplicate_fanout == 4
     assert cfg.policy.weight_rise_window_passes == 25
     assert cfg.policy.weight_rises_per_window == 3

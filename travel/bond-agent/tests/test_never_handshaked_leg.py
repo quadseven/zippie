@@ -6,6 +6,7 @@ word a leg gets when it worked fine yesterday and is having a bad hour today.
 The cause was a NAT hairpin, which is a configuration mistake, and nothing in
 the status said "this has never worked" as opposed to "this is working badly".
 """
+
 from zippie.agent import NEVER_HANDSHAKED_MIN_TX_BYTES
 from zippie.models import PathConfig, PathMatch, PathRuntime, PathState
 
@@ -27,6 +28,7 @@ def _agent_with(counts, paths):
     predicate reads.
     """
     from zippie import agent as agent_mod
+
     a = object.__new__(agent_mod.BondAgent)
     a.paths = paths
     a._transport = _FakeTransport(counts)
@@ -35,8 +37,7 @@ def _agent_with(counts, paths):
 
 
 def _path(name, *, answered=False, state=PathState.DEGRADED):
-    cfg = PathConfig(name=name,
-                     match=PathMatch(type="interface", interface="eth0"))
+    cfg = PathConfig(name=name, match=PathMatch(type="interface", interface="eth0"))
     p = PathRuntime(name=name, config=cfg)
     p.interface = "eth0"
     p.state = state
@@ -100,6 +101,7 @@ def test_the_flag_is_logged_once_not_every_pass(caplog):
 def test_an_unreadable_counter_is_unknown_not_zero():
     """Telemetry must never take the control loop down, and must never invent
     state. A transport that raises leaves every flag exactly as it was."""
+
     class _Broken:
         def link_bytes(self):
             raise RuntimeError("transport is mid-rebuild")
@@ -108,5 +110,5 @@ def test_an_unreadable_counter_is_unknown_not_zero():
     p.never_handshaked = True
     a = _agent_with({}, [p])
     a._transport = _Broken()
-    a._flag_never_handshaked()          # must not raise
-    assert p.never_handshaked is True   # and must not silently clear
+    a._flag_never_handshaked()  # must not raise
+    assert p.never_handshaked is True  # and must not silently clear

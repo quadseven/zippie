@@ -126,9 +126,7 @@ class _TLSHTTPServer(ThreadingHTTPServer):
         conn, addr = self.socket.accept()
         conn.settimeout(self._handshake_timeout)
         return (
-            self._tls_context.wrap_socket(
-                conn, server_side=True, do_handshake_on_connect=False
-            ),
+            self._tls_context.wrap_socket(conn, server_side=True, do_handshake_on_connect=False),
             addr,
         )
 
@@ -156,15 +154,11 @@ def _open_dashboard_listeners(
     # Hold both sockets in an ExitStack until both are ready. If either bind or
     # TLS wrapping fails, neither half of the migration is left open.
     with ExitStack() as servers:
-        http = servers.enter_context(
-            ThreadingHTTPServer((host, config.dashboard_port), handler)
-        )
+        http = servers.enter_context(ThreadingHTTPServer((host, config.dashboard_port), handler))
         https = None
         if tls_context is not None:
             https = servers.enter_context(
-                _TLSHTTPServer(
-                    (host, config.dashboard_tls_port), handler, tls_context
-                )
+                _TLSHTTPServer((host, config.dashboard_tls_port), handler, tls_context)
             )
         servers.pop_all()
 
@@ -295,15 +289,13 @@ def projected_idle_mb_per_day(
         return 0.0
     seconds_per_day = 86400
     framed_probe = HEADER_LEN + _IPV4_UDP_HEADER_BYTES
-    probes = (
-        metered_legs * 2 * framed_probe * seconds_per_day
-        / max(0.2, probe_interval_s)
-    )
+    probes = metered_legs * 2 * framed_probe * seconds_per_day / max(0.2, probe_interval_s)
     keepalives = 0.0
     if keepalive_s > 0:
         keepalives = (
             (_WIREGUARD_EMPTY_TRANSPORT_BYTES + HEADER_LEN + _IPV4_UDP_HEADER_BYTES)
-            * seconds_per_day / keepalive_s
+            * seconds_per_day
+            / keepalive_s
         )
     return (probes + keepalives) / 1_000_000
 
@@ -382,7 +374,7 @@ def _elapsed_s(since_ms: int | None) -> float | None:
 
 
 class BondStanddown:
-    """"A bond with one dying leg beats an idle healthy WAN, and takes the
+    """ "A bond with one dying leg beats an idle healthy WAN, and takes the
     LAN with it" (#124). Decides whether the CARRYING SET, as a whole, is
     materially worse than the idle physical WAN sitting underneath it - a
     question `on_all_paths_down` never asks, because by its own definition it
@@ -446,7 +438,10 @@ class BondStanddown:
     """
 
     def __init__(
-        self, cfg: PolicyConfig, *, clock: Callable[[], float] = time.monotonic,
+        self,
+        cfg: PolicyConfig,
+        *,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._cfg = cfg
         self._clock = clock
@@ -506,7 +501,10 @@ class BondStanddown:
             log.info("standdown hold released: a fallback uplink is present again")
 
     def evaluate(
-        self, best_tail_ms: float | None, *, fallback_exists: bool = True,
+        self,
+        best_tail_ms: float | None,
+        *,
+        fallback_exists: bool = True,
     ) -> bool:
         """Fold in one probe pass' evidence; return the (possibly just
         updated) verdict. `best_tail_ms` is the lowest rtt_tail_ms among legs
@@ -609,7 +607,10 @@ def _announce_host_for(body: dict, source: str, warned: dict, name: str) -> str:
                 "leg %s announced host %s but reached us from %s - dialling %s, "
                 "the address that demonstrably works (#252). A phone on two "
                 "networks offers the wrong one.",
-                name or "<unnamed>", claimed, source, host,
+                name or "<unnamed>",
+                claimed,
+                source,
+                host,
             )
     elif claimed:
         warned.pop(name, None)
@@ -858,10 +859,13 @@ class BondAgent:
         exact = by_iface.get(pattern)
         if exact is not None:
             return exact
-        return BondAgent._best_candidate([
-            l for l in links
-            if l.ifname not in used and fnmatch.fnmatch(l.ifname, pattern)
-        ])
+        return BondAgent._best_candidate(
+            [
+                link
+                for link in links
+                if link.ifname not in used and fnmatch.fnmatch(link.ifname, pattern)
+            ]
+        )
 
     @staticmethod
     def _match_by_any(links: list, used: set, gateways: dict | None = None):
@@ -883,16 +887,18 @@ class BondAgent:
         """
         gateways = {} if gateways is None else gateways
         cands = [
-            l for l in links
-            if l.ifname not in used
-            and l.has_v4
-            and l.operstate.upper() in ("UP", "UNKNOWN")
-            and l.ifname in gateways
+            link
+            for link in links
+            if link.ifname not in used
+            and link.has_v4
+            and link.operstate.upper() in ("UP", "UNKNOWN")
+            and link.ifname in gateways
         ]
         return cands[0] if cands else None
 
-    def _resolve_match(self, m, links: list, by_iface: dict, by_ssid: dict,
-                       used: set, gateways: dict | None = None):
+    def _resolve_match(
+        self, m, links: list, by_iface: dict, by_ssid: dict, used: set, gateways: dict | None = None
+    ):
         if m.type == "interface" and m.interface:
             return self._match_by_interface(m.interface, links, by_iface, used)
         if m.type == "ssid" and m.ssid:
@@ -922,13 +928,14 @@ class BondAgent:
             shadowed: list[str] = []
             if match.type == "interface" and match.interface and path.interface:
                 shadowed = sorted(
-                    l.ifname for l in links
-                    if l.ifname != path.interface
-                    and l.ifname not in used
+                    link.ifname
+                    for link in links
+                    if link.ifname != path.interface
+                    and link.ifname not in used
                     # A link with no address is not a hidden uplink, it is a
                     # link that cannot carry anything.
-                    and l.has_v4
-                    and fnmatch.fnmatch(l.ifname, match.interface)
+                    and link.has_v4
+                    and fnmatch.fnmatch(link.ifname, match.interface)
                 )
             path.shadowed_interfaces = shadowed
             # EDGE-TRIGGERED. This runs every control pass and the condition
@@ -940,7 +947,9 @@ class BondAgent:
                     "leg %s: pattern %r also matches %s, which %s usable and "
                     "in NO leg - a working uplink is not in the bond. Give it "
                     "its own path rather than sharing a glob (#154)",
-                    path.name, match.interface, ", ".join(shadowed),
+                    path.name,
+                    match.interface,
+                    ", ".join(shadowed),
                     "is" if len(shadowed) == 1 else "are",
                 )
             elif previous and not shadowed:
@@ -948,16 +957,16 @@ class BondAgent:
 
     def match_interfaces(self) -> None:
         links = net.list_links()
-        by_iface = {l.ifname: l for l in links}
+        by_iface = {link.ifname: link for link in links}
         by_ssid: dict[str, list] = {}
-        for l in links:
-            if l.ssid:
-                by_ssid.setdefault(l.ssid, []).append(l)
+        for link in links:
+            if link.ssid:
+                by_ssid.setdefault(link.ssid, []).append(link)
 
         # Read once per pass, then ordered by the kernel's own preference so an
         # "any" slot takes the best uplink rather than the first enumerated.
         gateways = net.wan_gateways()
-        links = sorted(links, key=lambda l: 0 if l.ifname in gateways else 1)
+        links = sorted(links, key=lambda link: 0 if link.ifname in gateways else 1)
 
         # EXCLUSIVITY IS KEYED ON THE RESOURCE ACTUALLY CONTENDED FOR.
         #
@@ -978,8 +987,9 @@ class BondAgent:
         used_relays: set[str] = set()
         for path in self.paths:
             relay = (path.config.relay_endpoint or "").strip()
-            chosen = self._resolve_match(path.config.match, links, by_iface,
-                                         by_ssid, used, gateways)
+            chosen = self._resolve_match(
+                path.config.match, links, by_iface, by_ssid, used, gateways
+            )
             if relay:
                 taken = relay in used_relays
             else:
@@ -1011,7 +1021,8 @@ class BondAgent:
                 # flickering (#45).
                 path.bind_error = (
                     "another leg already relays through this phone"
-                    if relay and taken else "no matching uplink interface"
+                    if relay and taken
+                    else "no matching uplink interface"
                 )
                 if path.state != PathState.DOWN:
                     path.last_error = path.bind_error
@@ -1261,7 +1272,8 @@ class BondAgent:
             # it would point at a virtual interface whose tunnel had never
             # handshaked - the 2026-07-27 black hole with one extra hop.
             return policy.packet_nexthop(
-                self.paths, PACKET_IFACE,
+                self.paths,
+                PACKET_IFACE,
                 tunnel_carrying=self._packet_datapath_delivering(),
             )
         return policy.multipath_nexthops(self.paths, self.config.policy.mode)
@@ -1312,14 +1324,15 @@ class BondAgent:
                 # and a mismatch there is the "handshakes but moves nothing"
                 # stall this method's docstring is about.
                 if self._packet_identity_leg != p.name:
-                    log.info("packet mode adopting %s's identity for %s (was %s)",
-                             p.name, PACKET_IFACE,
-                             self._packet_identity_leg or "unset")
+                    log.info(
+                        "packet mode adopting %s's identity for %s (was %s)",
+                        p.name,
+                        PACKET_IFACE,
+                        self._packet_identity_leg or "unset",
+                    )
                     self._packet_identity_leg = p.name
                 return p.config.private_key, p.config.address_cidr
-        raise RuntimeError(
-            "packet mode needs a client key/address; re-import the client bundle"
-        )
+        raise RuntimeError("packet mode needs a client key/address; re-import the client bundle")
 
     def _packet_mtu(self) -> int:
         """Tunnel MTU, leaving room for the transport's frame header.
@@ -1399,8 +1412,7 @@ class BondAgent:
             try:
                 net.wg_quick_up(str(conf), PACKET_IFACE, address=addr, mtu=mtu)
             except net.NetError as exc:
-                log.error("packet-mode tunnel %s failed to come up: %s",
-                          PACKET_IFACE, exc)
+                log.error("packet-mode tunnel %s failed to come up: %s", PACKET_IFACE, exc)
                 raise
             # Only here, and only after the interface was actually created:
             # the shaper is attached to the link, so a new link has no shaper
@@ -1412,16 +1424,18 @@ class BondAgent:
         # the tunnel-inside address via the tunnel device is safe at any time:
         # it routes nothing a client uses, only the evidence traffic.
         net.run_or_dry(
-            ["ip", "route", "replace",
-             f"{self.config.home.tunnel_ip}/32", "dev", PACKET_IFACE],
+            ["ip", "route", "replace", f"{self.config.home.tunnel_ip}/32", "dev", PACKET_IFACE],
             check=False,
         )
         # ON CHANGE ONLY, for the same reason - the other half of #87's spam.
         # That the nexthop exists is the design; that it MOVED is news.
         nexthop = (PACKET_IFACE, self.config.policy.transport_port)
         if self._packet_nexthop != nexthop:
-            log.info("packet mode: %s -> 127.0.0.1:%s (one virtual path)",
-                     PACKET_IFACE, self.config.policy.transport_port)
+            log.info(
+                "packet mode: %s -> 127.0.0.1:%s (one virtual path)",
+                PACKET_IFACE,
+                self.config.policy.transport_port,
+            )
             self._packet_nexthop = nexthop
 
     def _ensure_bond_shaped(self) -> None:
@@ -1467,43 +1481,46 @@ class BondAgent:
         try:
             if self._bond_qdisc_is_cake():
                 return
-            proc = net.run_or_dry(["uci", "-q", "get", SQM_UCI_ENABLED],
-                                  check=False)
+            proc = net.run_or_dry(["uci", "-q", "get", SQM_UCI_ENABLED], check=False)
             if proc.returncode != 0 or (proc.stdout or "").strip() != "1":
                 if not self._bond_unshaped_announced:
                     self._bond_unshaped_announced = True
                     log.info(
                         "%s is unshaped: %s is not enabled in uci, so no "
                         "queue management is applied to the bond",
-                        PACKET_IFACE, SQM_UCI_ENABLED,
+                        PACKET_IFACE,
+                        SQM_UCI_ENABLED,
                     )
                 return
-            proc = net.run_or_dry([SQM_INIT_SCRIPT, "restart"], check=False,
-                                  timeout=SQM_RESTART_TIMEOUT_S)
+            proc = net.run_or_dry(
+                [SQM_INIT_SCRIPT, "restart"], check=False, timeout=SQM_RESTART_TIMEOUT_S
+            )
             if proc.returncode != 0:
                 log.warning(
                     "%s restart exited %s; %s is up and unshaped: %s",
-                    SQM_INIT_SCRIPT, proc.returncode, PACKET_IFACE,
+                    SQM_INIT_SCRIPT,
+                    proc.returncode,
+                    PACKET_IFACE,
                     _command_output(proc),
                 )
                 return
             # Read the qdisc back. A restart that exits 0 and applies nothing
             # is exactly the failure that was found on the router.
             if self._bond_qdisc_is_cake():
-                log.info("%s shaped: cake re-applied by %s restart",
-                         PACKET_IFACE, SQM_INIT_SCRIPT)
+                log.info("%s shaped: cake re-applied by %s restart", PACKET_IFACE, SQM_INIT_SCRIPT)
             else:
                 log.warning(
                     "%s restart exited 0 but %s still has no cake qdisc; "
                     "the bond is up and unshaped: %s",
-                    SQM_INIT_SCRIPT, PACKET_IFACE, _command_output(proc),
+                    SQM_INIT_SCRIPT,
+                    PACKET_IFACE,
+                    _command_output(proc),
                 )
         except net.NetError as exc:
             # Every call above is check=False, so the only way here is a
             # timeout (net.run turns TimeoutExpired into NetError, 2026-08-02).
             # The bond stays up and the shaper stays off, which is where it was.
-            log.warning("could not apply queue management to %s: %s",
-                        PACKET_IFACE, exc)
+            log.warning("could not apply queue management to %s: %s", PACKET_IFACE, exc)
 
     @staticmethod
     def _bond_qdisc_is_cake() -> bool:
@@ -1516,14 +1533,12 @@ class BondAgent:
         NetError only for a timeout; a missing `tc` returns a non-zero exit
         under check=False and reads as "not cake", which it is.
         """
-        proc = net.run_or_dry(["tc", "qdisc", "show", "dev", PACKET_IFACE],
-                              check=False)
+        proc = net.run_or_dry(["tc", "qdisc", "show", "dev", PACKET_IFACE], check=False)
         if proc.returncode != 0:
             return False
         for line in (proc.stdout or "").splitlines():
             parts = line.split()
-            if (len(parts) >= 2 and parts[0] == "qdisc"
-                    and parts[1] == "cake" and "root" in parts):
+            if len(parts) >= 2 and parts[0] == "qdisc" and parts[1] == "cake" and "root" in parts:
                 return True
         return False
 
@@ -1544,8 +1559,9 @@ class BondAgent:
         scale = {"bit": 0.001, "Kbit": 1.0, "Mbit": 1_000.0, "Gbit": 1_000_000.0}
         for line in (proc.stdout or "").splitlines():
             parts = line.split()
-            if not (len(parts) >= 2 and parts[0] == "qdisc"
-                    and parts[1] == "cake" and "root" in parts):
+            if not (
+                len(parts) >= 2 and parts[0] == "qdisc" and parts[1] == "cake" and "root" in parts
+            ):
                 continue
             match = re.search(r"bandwidth\s+([\d.]+)(bit|Kbit|Mbit|Gbit)\b", line)
             if not match:
@@ -1605,20 +1621,37 @@ class BondAgent:
     def _apply_shaper_rate(self, download_kbit: float, upload_kbit: float) -> None:
         try:
             up_proc = net.run_or_dry(
-                ["tc", "qdisc", "change", "dev", PACKET_IFACE, "root", "cake",
-                 "bandwidth", f"{upload_kbit:.0f}kbit"],
+                [
+                    "tc",
+                    "qdisc",
+                    "change",
+                    "dev",
+                    PACKET_IFACE,
+                    "root",
+                    "cake",
+                    "bandwidth",
+                    f"{upload_kbit:.0f}kbit",
+                ],
                 check=False,
             )
             down_proc = net.run_or_dry(
-                ["tc", "qdisc", "change", "dev", PACKET_IFACE_INGRESS, "root",
-                 "cake", "bandwidth", f"{download_kbit:.0f}kbit"],
+                [
+                    "tc",
+                    "qdisc",
+                    "change",
+                    "dev",
+                    PACKET_IFACE_INGRESS,
+                    "root",
+                    "cake",
+                    "bandwidth",
+                    f"{download_kbit:.0f}kbit",
+                ],
                 check=False,
             )
         except net.NetError as exc:
             # Every call above is check=False; the only way here is a
             # timeout. The qdisc keeps whatever rate it already had.
-            log.warning("could not apply adaptive shaper rate to %s: %s",
-                        PACKET_IFACE, exc)
+            log.warning("could not apply adaptive shaper rate to %s: %s", PACKET_IFACE, exc)
             self._shaper.force_reapply()  # retry next tick, not on next drift
             return
         # READ BACK, not trust the exit code - the same lesson
@@ -1632,15 +1665,21 @@ class BondAgent:
             self._shaper_applied_kbit = (download_kbit, upload_kbit)
             log.info(
                 "%s shaper: download %.0f kbit, upload %.0f kbit (estimated from carrying legs)",
-                PACKET_IFACE, download_kbit, upload_kbit,
+                PACKET_IFACE,
+                download_kbit,
+                upload_kbit,
             )
         else:
             log.warning(
                 "adaptive shaper rate did not take on %s: wanted down=%.0f "
                 "up=%.0f kbit, tc now reads down=%s up=%s (down: %s, up: %s)",
-                PACKET_IFACE, download_kbit, upload_kbit,
-                applied_down, applied_up,
-                _command_output(down_proc), _command_output(up_proc),
+                PACKET_IFACE,
+                download_kbit,
+                upload_kbit,
+                applied_down,
+                applied_up,
+                _command_output(down_proc),
+                _command_output(up_proc),
             )
             # So the next tick retries this rate rather than waiting for the
             # estimate to drift past the hysteresis band again.
@@ -1749,8 +1788,9 @@ class BondAgent:
         """
         return self.config.home.dns if idx == 0 else []
 
-    def _write_path_conf(self, idx: int, path: PathRuntime, host: str,
-                         identity: tuple[str, str]) -> Path:
+    def _write_path_conf(
+        self, idx: int, path: PathRuntime, host: str, identity: tuple[str, str]
+    ) -> Path:
         """Write this leg's wg config and say where it landed.
 
         `table = off` because routes belong to the agent's own policy pass;
@@ -1846,8 +1886,7 @@ class BondAgent:
             # nowhere to go. Say so on the path rather than letting it read as
             # a mysterious no-handshake.
             path.last_error = (
-                f"no route in table {table} for {path.interface}"
-                f" (gateway {gw or 'not found'})"
+                f"no route in table {table} for {path.interface} (gateway {gw or 'not found'})"
             )
             if gw is None:
                 self._heal_uplink(path.interface)
@@ -1969,8 +2008,7 @@ class BondAgent:
         """
         with self._lock:
             affected = [
-                p for p in self.paths
-                if p.interface == ifname and p.state != PathState.DOWN
+                p for p in self.paths if p.interface == ifname and p.state != PathState.DOWN
             ]
             for p in affected:
                 p.interface = None
@@ -2059,9 +2097,7 @@ class BondAgent:
         # answering nothing has no RTT, and classify_state returns DOWN on the
         # rtt_ms-is-None arm before loss is consulted at all. There is a test.
         if degraded_pct is not None and degraded_pct > 0:
-            resolution = getattr(
-                transport, "link_loss_resolution_pct", lambda _pid: None
-            )(pid)
+            resolution = getattr(transport, "link_loss_resolution_pct", lambda _pid: None)(pid)
             one_probe = resolution is not None and loss <= resolution + 1e-9
             if one_probe and resolution >= degraded_pct:
                 return 0.0
@@ -2113,9 +2149,7 @@ class BondAgent:
             # on the #104 harness: without this, a 30%-lossy leg oscillating
             # through ~13 withdrawals in 65 passes read loss_pct 0.0 far more
             # often than its real behaviour justified.
-            path.loss_pct = self._leg_loss_pct(
-                transport, pid, self.config.policy.degraded_loss_pct
-            )
+            path.loss_pct = self._leg_loss_pct(transport, pid, self.config.policy.degraded_loss_pct)
             path.last_error = "awaiting transport"
             return
 
@@ -2126,9 +2160,7 @@ class BondAgent:
         # alive" branches below can just assign it. See _leg_loss_pct and
         # Transport.link_loss_pct for why this is wire loss and not
         # payload-delivery loss.
-        loss_pct = self._leg_loss_pct(
-            transport, pid, self.config.policy.degraded_loss_pct
-        )
+        loss_pct = self._leg_loss_pct(transport, pid, self.config.policy.degraded_loss_pct)
 
         if age is None or age >= PACKET_LINK_STALE_S:
             path.state = PathState.DOWN
@@ -2151,7 +2183,7 @@ class BondAgent:
                     f"relay {relay} not answering"
                     if age is None
                     else f"relay {relay} silent for {age:.0f}s "
-                         f"(stale after {PACKET_LINK_STALE_S:.0f}s)"
+                    f"(stale after {PACKET_LINK_STALE_S:.0f}s)"
                 )
             else:
                 path.last_error = (
@@ -2231,7 +2263,8 @@ class BondAgent:
                 # since stopped being true.
                 path.last_error = (
                     (path.bind_error or "no interface matched")
-                    if not path.interface else "no tunnel interface"
+                    if not path.interface
+                    else "no tunnel interface"
                 )
                 continue
             # Probe the FAR END OF THE TUNNEL, not the public endpoint.
@@ -2265,7 +2298,6 @@ class BondAgent:
                 self._probe_misses[path.wg_iface] = self._probe_misses.get(path.wg_iface, 0) + 1
             else:
                 self._probe_misses[path.wg_iface] = 0
-            missed_enough = self._probe_misses.get(path.wg_iface, 0) >= 3
 
             # NOT an override: a tunnel that is demonstrably receiving bytes
             # stays usable even if every probe fails, because ICMP can be
@@ -2325,9 +2357,7 @@ class BondAgent:
             # flag rather than the current rtt_ms sample for exactly the
             # reason documented on the field itself in models.py.
             path.has_ever_answered = True
-            path.state = policy.classify_state(
-                rtt, loss, self.config.policy, previous=path.state
-            )
+            path.state = policy.classify_state(rtt, loss, self.config.policy, previous=path.state)
             if path.state != PathState.DOWN:
                 path.last_ok_ms = int(time.time() * 1000)
                 path.last_error = None
@@ -2538,9 +2568,7 @@ class BondAgent:
         shutdown, which is the write that actually matters on a router that
         gets unplugged."""
         self._usage_store.mark_dirty()
-        self._usage_store.maybe_flush(
-            {p.name: p.usage_gb for p in self.paths}, force=force
-        )
+        self._usage_store.maybe_flush({p.name: p.usage_gb for p in self.paths}, force=force)
 
     def _joinable_tier(self, exclude: str | None = None) -> int:
         """The tier an announced leg should land on to JOIN rather than evict.
@@ -2561,8 +2589,7 @@ class BondAgent:
         # tier 2 would compute min(...) = 2 from its own tier and conclude it
         # was already right, no matter where the physical legs had moved to.
         candidates = [p for p in self.paths if p.name != exclude]
-        live = [p for p in candidates
-                if p.interface and p.state is not PathState.DOWN]
+        live = [p for p in candidates if p.interface and p.state is not PathState.DOWN]
         if not live:
             live = [p for p in candidates if p.interface]
         if not live:
@@ -2580,7 +2607,7 @@ class BondAgent:
         as a permanent down row is precisely the phantom this replaces - the
         config file already did that, and it was the bug.
         """
-        live = {l.name: l for l in self.dynamic.live()}
+        live = {leg.name: leg for leg in self.dynamic.live()}
         # Loaded ONCE per pass, not once per leg: this reads a file, and the
         # loop below runs every control tick.
         overrides = self._leg_store.load()
@@ -2606,8 +2633,7 @@ class BondAgent:
                 # carried on that phone alone for an hour while both router
                 # uplinks sat idle. Nothing alerted: one carrying leg with no
                 # loss looks healthy from the datapath.
-                tier = (leg.tier if leg.tier is not None
-                        else self._joinable_tier(exclude=name))
+                tier = leg.tier if leg.tier is not None else self._joinable_tier(exclude=name)
                 cfg = PathConfig(
                     name=name,
                     match=PathMatch(type="interface", interface="br-lan"),
@@ -2630,8 +2656,9 @@ class BondAgent:
                 continue
             self._renew_dynamic_leg(existing, leg, name, overrides)
 
-    def _renew_dynamic_leg(self, existing: PathRuntime, leg: DynamicLeg,
-                           name: str, overrides: dict) -> None:
+    def _renew_dynamic_leg(
+        self, existing: PathRuntime, leg: DynamicLeg, name: str, overrides: dict
+    ) -> None:
         """Bring an ALREADY-KNOWN announced leg in line with this announcement.
 
         Split out of reconcile_dynamic_legs because three unrelated "keep this
@@ -2642,8 +2669,12 @@ class BondAgent:
         # An announcement is also a RENEWAL of the address. A phone that
         # moved on DHCP must not leave the old endpoint being dialled.
         if existing.config.relay_endpoint != leg.relay_endpoint:
-            log.info("dynamic leg %s moved %s -> %s", name,
-                     existing.config.relay_endpoint, leg.relay_endpoint)
+            log.info(
+                "dynamic leg %s moved %s -> %s",
+                name,
+                existing.config.relay_endpoint,
+                leg.relay_endpoint,
+            )
             object.__setattr__(existing.config, "relay_endpoint", leg.relay_endpoint)
             self._drop_transport_path(name)
         # THE OPERATOR'S NAME WINS OVER THE DEVICE'S (#80).
@@ -2683,8 +2714,10 @@ class BondAgent:
             wanted = self._joinable_tier(exclude=name)
             if existing.config.tier != wanted:
                 log.info(
-                    "dynamic leg %s: tier %s -> %s, following the carrying "
-                    "tier", name, existing.config.tier, wanted,
+                    "dynamic leg %s: tier %s -> %s, following the carrying tier",
+                    name,
+                    existing.config.tier,
+                    wanted,
                 )
                 object.__setattr__(existing.config, "tier", wanted)
         named_by_operator = "label" in (overrides.get(name) or {})
@@ -2700,8 +2733,9 @@ class BondAgent:
             # Safe to log unconditionally now: it fires only on a real
             # change, and the every-tick flip that made this message the
             # entire contents of `logread` is what the guard above ended.
-            log.info("dynamic leg %s: label %r -> %r (announced)",
-                     name, existing.config.label, leg.label)
+            log.info(
+                "dynamic leg %s: label %r -> %r (announced)", name, existing.config.label, leg.label
+            )
             object.__setattr__(existing.config, "label", leg.label)
 
     def _allocate_transport_pid(self, name: str) -> int:
@@ -2744,8 +2778,7 @@ class BondAgent:
             # honest failure: handing back a duplicate would silently cross-wire
             # two legs, which is the defect this function exists to prevent.
             raise RuntimeError(
-                f"no free transport id for {name}: all {MAX_PATH_ID + 1} "
-                f"are held by live legs"
+                f"no free transport id for {name}: all {MAX_PATH_ID + 1} are held by live legs"
             )
 
         previous = self._pid_owner.get(pid)
@@ -2799,8 +2832,7 @@ class BondAgent:
                     # override in place makes removal a no-op until restart.
                     original = baseline.get(field)
                     if original is not None and getattr(p.config, field, None) != original:
-                        log.info("leg %s: %s override cleared, back to %r",
-                                 p.name, field, original)
+                        log.info("leg %s: %s override cleared, back to %r", p.name, field, original)
                         object.__setattr__(p.config, field, original)
                     continue
                 value = entry[field]
@@ -2821,12 +2853,18 @@ class BondAgent:
                     else:
                         coerced = value
                 except (TypeError, ValueError):
-                    log.warning("leg %s: override %s=%r is not usable; ignoring",
-                                p.name, field, value)
+                    log.warning(
+                        "leg %s: override %s=%r is not usable; ignoring", p.name, field, value
+                    )
                     continue
                 if coerced != current:
-                    log.info("leg %s: %s overridden %r -> %r (legs.json)",
-                             p.name, field, current, coerced)
+                    log.info(
+                        "leg %s: %s overridden %r -> %r (legs.json)",
+                        p.name,
+                        field,
+                        current,
+                        coerced,
+                    )
                     object.__setattr__(p.config, field, coerced)
 
     def _carrying_best_tail_ms(self) -> float | None:
@@ -2907,14 +2945,14 @@ class BondAgent:
         """
         carrying_pool = policy.tier_legs(self.paths)
         alive_tails = [
-            p.rtt_tail_ms for p in carrying_pool
+            p.rtt_tail_ms
+            for p in carrying_pool
             if p.state is not PathState.DOWN and p.rtt_tail_ms is not None
         ]
         if alive_tails:
             return min(alive_tails)
         down_raw = [
-            p.rtt_ms for p in carrying_pool
-            if p.state is PathState.DOWN and p.rtt_ms is not None
+            p.rtt_ms for p in carrying_pool if p.state is PathState.DOWN and p.rtt_ms is not None
         ]
         return min(down_raw) if down_raw else None
 
@@ -2983,9 +3021,7 @@ class BondAgent:
             self._carrying_best_tail_ms(),
             fallback_exists=net.foreign_default_route_exists(
                 self.config.interface_prefix,
-                exclude_interfaces=frozenset(
-                    p.interface for p in self.paths if p.interface
-                ),
+                exclude_interfaces=frozenset(p.interface for p in self.paths if p.interface),
             ),
         ):
             hops = []
@@ -3024,8 +3060,7 @@ class BondAgent:
         # client with none either (resolv.conf -> 127.0.0.1). Short-circuit, so
         # an unchanged route never even asks the kicker.
         if changed and self._resolver.kick(
-            f"default route moved: {_egress_desc(previous)} -> "
-            f"{_egress_desc(target)}"
+            f"default route moved: {_egress_desc(previous)} -> {_egress_desc(target)}"
         ):
             self.telemetry.emit_count("resolver_kicked", 1, [])
         return changed
@@ -3187,7 +3222,8 @@ class BondAgent:
                     p.held_out_message_active = False
                 log.warning(
                     "path %s re-admitted to the bond after healthy streak %g",
-                    p.name, streak,
+                    p.name,
+                    streak,
                 )
             else:
                 # Neither branch: this leg is not currently gated (never
@@ -3222,8 +3258,7 @@ class BondAgent:
         # themselves; holding the last one back protects nothing.
         if any(p.effective_weight > 0 for p in self.paths):
             return
-        candidates = [p for p in self.paths
-                      if p.state is not PathState.DOWN and p.interface]
+        candidates = [p for p in self.paths if p.state is not PathState.DOWN and p.interface]
         if not candidates:
             return
         # Lowest tier first, then a leg something has actually ANSWERED, then
@@ -3236,12 +3271,15 @@ class BondAgent:
         # this the valve could hand the whole bond to a leg spraying into an
         # address nothing is listening on purely because its streak counter
         # happened to be higher (#61 AC2).
-        best = min(candidates, key=lambda p: (
-            p.config.tier,
-            0 if p.has_ever_answered else 1,
-            -self._join_streak.get(p.name, 0.0),
-            p.rtt_ms if p.rtt_ms is not None else 9e9,
-        ))
+        best = min(
+            candidates,
+            key=lambda p: (
+                p.config.tier,
+                0 if p.has_ever_answered else 1,
+                -self._join_streak.get(p.name, 0.0),
+                p.rtt_ms if p.rtt_ms is not None else 9e9,
+            ),
+        )
         best.effective_weight = max(1, policy.weight_floor_for(best, self.config.policy))
         self._flapped.discard(best.name)
         self._join_streak[best.name] = float(self.config.policy.join_streak_min)
@@ -3249,10 +3287,13 @@ class BondAgent:
         best.no_reply_since_ms = None
         best.held_out_message_active = False
         self._end_hold(best)
-        best.last_error = ("released to carry - every leg was held out at once, "
-                           "which starves the bond")
-        log.warning("join gate released %s: all legs were held out and the bond "
-                    "was carrying nothing", best.name)
+        best.last_error = (
+            "released to carry - every leg was held out at once, which starves the bond"
+        )
+        log.warning(
+            "join gate released %s: all legs were held out and the bond was carrying nothing",
+            best.name,
+        )
 
     def _note_failed_pass(self, p: PathRuntime, penalty: float) -> None:
         """This leg is DOWN or carrying nothing this pass. Record it (#61).
@@ -3277,9 +3318,7 @@ class BondAgent:
         if p.name in self._join_streak or p.state is PathState.DOWN:
             self._flapped.add(p.name)
         streak = self._join_streak.get(p.name, 0.0)
-        self._join_streak[p.name] = (
-            max(0.0, streak - penalty) if p.has_ever_answered else 0.0
-        )
+        self._join_streak[p.name] = max(0.0, streak - penalty) if p.has_ever_answered else 0.0
         # This pass writes no hold message - the caller falls straight through
         # to the next leg - so a flag claiming last_error is still this gate's
         # from an EARLIER pass is now stale. The DOWN/zero-weight verdict
@@ -3362,7 +3401,11 @@ class BondAgent:
                     "path %s put on probation at weight %d after %.0fs held out "
                     "(streak %g/%g): a leg that has answered before must not be "
                     "excluded indefinitely",
-                    p.name, p.effective_weight, held_ms / 1000.0, streak, threshold,
+                    p.name,
+                    p.effective_weight,
+                    held_ms / 1000.0,
+                    streak,
+                    threshold,
                 )
             p.on_probation = True
             # The no-reply counters belong to a leg that has never answered;
@@ -3382,8 +3425,9 @@ class BondAgent:
         p.held_out_message_active = True
 
     @staticmethod
-    def _held_out_message(p: PathRuntime, streak: float, threshold: float,
-                           ever_answered: bool) -> str:
+    def _held_out_message(
+        p: PathRuntime, streak: float, threshold: float, ever_answered: bool
+    ) -> str:
         """Word the anti-flap gate's hold message for one leg (#26).
 
         `degraded` already covers a leg carrying LESS than it should; this is
@@ -3415,8 +3459,10 @@ class BondAgent:
             p.no_reply_since_ms = now_ms
         p.no_reply_probes += 1
         if p.no_reply_probes < NO_REPLY_PLAIN_AFTER_PROBES:
-            return (f"no reply yet - nothing is answering at this leg's address "
-                    f"({streak:g}/{threshold:g})")
+            return (
+                f"no reply yet - nothing is answering at this leg's address "
+                f"({streak:g}/{threshold:g})"
+            )
         elapsed_s = (now_ms - p.no_reply_since_ms) / 1000.0
         return (
             f"not answering - no reply for {elapsed_s:.0f}s across "
@@ -3468,9 +3514,7 @@ class BondAgent:
             "the carrier, NOT through home, and is no longer inside the tunnel."
         )
 
-    def _leg_activity_facts(
-        self, path: PathRuntime, pid: int | None
-    ) -> dict[str, Any]:
+    def _leg_activity_facts(self, path: PathRuntime, pid: int | None) -> dict[str, Any]:
         """Is this leg in the bond, is it doing any work, and for how long not.
 
         One block, lifted out of `_path_status` on Elder's complexity finding
@@ -3527,14 +3571,12 @@ class BondAgent:
         in that state at all, never 0, because "not waiting" and "waiting for
         no time" are different things.
         """
-        in_bond = (pid is not None and pid in self._transport_links
-                   and not path.shed_for_latency)
+        in_bond = pid is not None and pid in self._transport_links and not path.shed_for_latency
         contributing = in_bond and path.effective_weight > 0
         return {
             "in_bond": in_bond,
             "contributing": contributing,
-            "activity": ("carrying" if contributing
-                         else "idle" if in_bond else "out"),
+            "activity": ("carrying" if contributing else "idle" if in_bond else "out"),
             # NOT the same as `state`. A leg here is not having a bad day, it
             # has never had a good one - see _flag_never_handshaked.
             "never_handshaked": path.never_handshaked,
@@ -3581,8 +3623,7 @@ class BondAgent:
         dialled = self._leg_remote(path, ("", 0))
         lan = net.lan_home_endpoint(path.local_ip, self.config.home.lan_endpoints)
         d["home_via_lan"] = (
-            f"{dialled[0]}:{dialled[1]}"
-            if lan and dialled[0] == lan.address else ""
+            f"{dialled[0]}:{dialled[1]}" if lan and dialled[0] == lan.address else ""
         )
         # The leg's own address, which is the EVIDENCE the pairing matched on.
         # Reported so a reader can check the decision rather than trust it.
@@ -3621,7 +3662,7 @@ class BondAgent:
         #
         # Publishing the overridden field names costs nothing and means the
         # difference between the file and reality can always be seen.
-        over = (self._leg_store.load().get(path.name) or {})
+        over = self._leg_store.load().get(path.name) or {}
         applied = sorted(k for k in over if k in LegStore.OVERRIDABLE)
         d["overridden"] = applied
         # DYNAMIC LEGS ARE MARKED. A leg that exists because a phone is
@@ -3685,8 +3726,7 @@ class BondAgent:
         # evaluation, so the budget is already fully available. Mirror that
         # rather than waiting for a trip to make it true.
         expired = (
-            window_start is not None
-            and (time.time() - window_start) > WATCHDOG_REARM_WINDOW_S
+            window_start is not None and (time.time() - window_start) > WATCHDOG_REARM_WINDOW_S
         )
         out["rearms_used"] = 0 if expired else recorded
         out["capped"] = (base / "watchdog.rearms.capped").is_file()
@@ -3753,12 +3793,9 @@ class BondAgent:
             "client_payload_estimated": True,
             "metered_bytes": metered_bytes,
             "metered_amplification": (
-                round(metered_bytes / client_bytes, 2)
-                if client_bytes else None
+                round(metered_bytes / client_bytes, 2) if client_bytes else None
             ),
-            "probe_interval_ms": round(
-                self._transport_probe_interval_s() * 1000
-            ),
+            "probe_interval_ms": round(self._transport_probe_interval_s() * 1000),
             "persistent_keepalive_s": self._packet_keepalive_s,
             "projected_idle_mb_day": round(
                 projected_idle_mb_per_day(
@@ -3781,9 +3818,7 @@ class BondAgent:
                 # shipped monitors already queried. A fingerprint over the
                 # module bytes cannot be wrong about that, and `matches_deploy`
                 # additionally catches edits made on the box after a deploy.
-                "build": build.build_info(
-                    config_sha256=self.config_meta.get("sha256")
-                ),
+                "build": build.build_info(config_sha256=self.config_meta.get("sha256")),
                 "mode": self.config.policy.mode.value,
                 "datapath": self.config.policy.datapath.value,
                 # Present only in packet mode; the spray/reorder/retransmit
@@ -3942,9 +3977,7 @@ class BondAgent:
             "per-packet datapath ACTIVE on 127.0.0.1:%s - point WireGuard here",
             self.config.policy.transport_port,
         )
-        threading.Thread(
-            target=self._packet_prover, name="zippie-prover", daemon=True
-        ).start()
+        threading.Thread(target=self._packet_prover, name="zippie-prover", daemon=True).start()
 
     def _packet_prover(self) -> None:
         """Generate the bulk-delivery evidence the route gate demands.
@@ -3976,7 +4009,9 @@ class BondAgent:
                     net.ping_rtt_ms(
                         self.config.home.tunnel_ip,
                         interface=PACKET_IFACE,
-                        count=1, timeout_s=2, size=size,
+                        count=1,
+                        timeout_s=2,
+                        size=size,
                     )
                 except Exception as exc:  # noqa: BLE001
                     log.debug("prover ping failed: %s", exc)
@@ -4091,11 +4126,7 @@ class BondAgent:
             # One virtual interface carries every leg, so there is nothing to
             # filter on weight: if the bond is up at all, this is the interface.
             return [PACKET_IFACE]
-        return [
-            p.wg_iface
-            for p in self.paths
-            if p.effective_weight > 0 and p.wg_iface
-        ]
+        return [p.wg_iface for p in self.paths if p.effective_weight > 0 and p.wg_iface]
 
     def _leg_remote(self, path: PathRuntime, default: tuple[str, int]) -> tuple[str, int]:
         """Where this leg's socket sends: a companion relay, a LAN-side home, or home.
@@ -4117,8 +4148,7 @@ class BondAgent:
         """
         raw = (path.config.relay_endpoint or "").strip()
         if not raw:
-            lan = net.lan_home_endpoint(path.local_ip,
-                                        self.config.home.lan_endpoints)
+            lan = net.lan_home_endpoint(path.local_ip, self.config.home.lan_endpoints)
             if lan:
                 # The pairing's own port when it has one: the public port is a
                 # FORWARD that does not exist inside the house.
@@ -4126,19 +4156,17 @@ class BondAgent:
             return default
         host, sep, port = raw.rpartition(":")
         if not sep or not host:
-            log.warning("path %s: relay_endpoint %r is not host:port; using home",
-                        path.name, raw)
+            log.warning("path %s: relay_endpoint %r is not host:port; using home", path.name, raw)
             return default
         try:
             return (host, int(port))
         except ValueError:
-            log.warning("path %s: relay_endpoint %r has a bad port; using home",
-                        path.name, raw)
+            log.warning("path %s: relay_endpoint %r has a bad port; using home", path.name, raw)
             return default
 
-    def _reconcile_link(self, path: PathRuntime, pid: int, *,
-                        usable: bool, carrying: bool,
-                        remote: tuple[str, int]) -> None:
+    def _reconcile_link(
+        self, path: PathRuntime, pid: int, *, usable: bool, carrying: bool, remote: tuple[str, int]
+    ) -> None:
         """Bring ONE link in line with what the control loop wants.
 
         Split out of sync_transport because that function had grown three
@@ -4150,7 +4178,7 @@ class BondAgent:
         false for a leg with no interface or one the tier gate excluded, and
         those leave the transport entirely. `carrying` is "may payload go down
         it", which a leg shed for latency fails while remaining a link.
-        
+
         A leg REMOVED from the transport gets no keepalives (send_keepalives
         walks the link table), so it stops being probed, so `path.rtt_ms` goes
         None, so `update_rtt_tail` returns early and its tail freezes at the
@@ -4161,8 +4189,7 @@ class BondAgent:
         """
         from zippie.transport import LinkEndpoint
 
-        if (usable and pid in self._transport_links
-                and self._link_remotes.get(pid) != remote):
+        if usable and pid in self._transport_links and self._link_remotes.get(pid) != remote:
             # Dynamic DNS moved the home endpoint. A link cannot be re-pointed
             # in place, so rebuild it - rare enough that the dropped socket
             # costs less than dialling a dead address.
@@ -4177,18 +4204,20 @@ class BondAgent:
             return
 
         if pid not in self._transport_links:
-            self._transport.add_link(LinkEndpoint(
-                path_id=pid,
-                name=path.name,
-                device=path.interface,
-                remote=remote,
-                # NO FLOOR. max(1, ...) forced a leg the policy had
-                # deliberately held out of the bond - weight 0, "held out until
-                # proven" - into the transport with weight 1, where it took a
-                # share of real traffic and dropped all of it.
-                weight=path.effective_weight if carrying else 0,
-                max_kbps=path.config.max_kbps,
-            ))
+            self._transport.add_link(
+                LinkEndpoint(
+                    path_id=pid,
+                    name=path.name,
+                    device=path.interface,
+                    remote=remote,
+                    # NO FLOOR. max(1, ...) forced a leg the policy had
+                    # deliberately held out of the bond - weight 0, "held out until
+                    # proven" - into the transport with weight 1, where it took a
+                    # share of real traffic and dropped all of it.
+                    weight=path.effective_weight if carrying else 0,
+                    max_kbps=path.config.max_kbps,
+                )
+            )
             self._transport_links.add(pid)
             self._link_remotes[pid] = remote
 
@@ -4208,15 +4237,10 @@ class BondAgent:
         # the leg - but it silently leaked ~1% of sprayed traffic to anything
         # held out on WEIGHT alone, which is how the join gate holds a flapping
         # leg. Fixed there; the claim is true now.
-        self._transport.set_link_weight(
-            pid, path.effective_weight if carrying else 0
-        )
-        self._transport.set_link_health(
-            pid, carrying and path.state is not PathState.DOWN
-        )
+        self._transport.set_link_weight(pid, path.effective_weight if carrying else 0)
+        self._transport.set_link_health(pid, carrying and path.state is not PathState.DOWN)
 
-    def _log_leg_exclusions(self, gated: list[PathRuntime],
-                            active: set[str]) -> None:
+    def _log_leg_exclusions(self, gated: list[PathRuntime], active: set[str]) -> None:
         """Say WHY a leg is not carrying, naming the right gate.
 
         Two gates reach the same outcome and want different fixes: the tier gate
@@ -4229,8 +4253,7 @@ class BondAgent:
         one phone's cellular with nothing anywhere saying a leg had been
         dropped.
         """
-        eligible = {p.name for p in self.paths
-                    if p.interface and p.state is not PathState.DOWN}
+        eligible = {p.name for p in self.paths if p.interface and p.state is not PathState.DOWN}
         gated_names = {p.name for p in gated}
         tier_excluded = eligible - gated_names
         bloat_excluded = gated_names - active
@@ -4239,28 +4262,28 @@ class BondAgent:
             return
         self._leg_exclusions = excluded
         if tier_excluded:
-            tiers = {p.name: p.config.tier for p in self.paths
-                     if p.name in tier_excluded}
+            tiers = {p.name: p.config.tier for p in self.paths if p.name in tier_excluded}
             log.warning(
                 "tier gate excludes %s (tiers %s) - carrying tier is %s",
-                sorted(tier_excluded), tiers,
-                min((p.config.tier for p in self.paths if p.name in active),
-                    default="none"),
+                sorted(tier_excluded),
+                tiers,
+                min((p.config.tier for p in self.paths if p.name in active), default="none"),
             )
         if bloat_excluded:
             # The tail, not the average - the average is what made this
             # invisible in the first place. Over `gated`, not the carrying set:
             # that is what update_shed_state compared against, and a log quoting
             # a different denominator than the decision used is worse than none.
-            tails = {p.name: round(p.rtt_tail_ms or 0.0)
-                     for p in self.paths if p.name in bloat_excluded}
-            best = min((p.rtt_tail_ms for p in gated
-                        if p.rtt_tail_ms is not None), default=None)
+            tails = {
+                p.name: round(p.rtt_tail_ms or 0.0) for p in self.paths if p.name in bloat_excluded
+            }
+            best = min((p.rtt_tail_ms for p in gated if p.rtt_tail_ms is not None), default=None)
             log.warning(
                 "shed %s for latency: tail %s ms vs best tail %s ms in tier "
                 "(loss is not the signal here - a bufferbloated leg loses "
                 "nothing)",
-                sorted(bloat_excluded), tails,
+                sorted(bloat_excluded),
+                tails,
                 round(best) if best is not None else "unknown",
             )
 
@@ -4303,9 +4326,7 @@ class BondAgent:
             # keepalive going out and the reply arriving. The floor is bytes
             # rather than passes so it does not have to be re-tuned when the
             # probe interval changes.
-            never = (not path.has_ever_answered
-                     and tx >= NEVER_HANDSHAKED_MIN_TX_BYTES
-                     and rx == 0)
+            never = not path.has_ever_answered and tx >= NEVER_HANDSHAKED_MIN_TX_BYTES and rx == 0
             if never == path.never_handshaked:
                 continue
             path.never_handshaked = never
@@ -4319,7 +4340,8 @@ class BondAgent:
                     "no keepalive ever returned. This is not a degraded leg, it "
                     "is a leg pointed at something that is not listening - check "
                     "the endpoint it dials rather than the quality of the link",
-                    path.name, tx,
+                    path.name,
+                    tx,
                 )
             else:
                 log.info("leg %s completed its first round trip", path.name)
@@ -4339,9 +4361,7 @@ class BondAgent:
 
     def _idle_transport_probe_interval_s(self) -> float:
         active = max(0.2, self.config.policy.probe_interval_ms / 1000.0)
-        requested = max(
-            active, self.config.policy.idle_probe_interval_ms / 1000.0
-        )
+        requested = max(active, self.config.policy.idle_probe_interval_ms / 1000.0)
         # Liveness is still checked every active control tick. Keeping at
         # two missed probe opportunities inside the six-second stale window
         # reduces spend without extending the existing failover deadline.
@@ -4359,8 +4379,7 @@ class BondAgent:
             return
         idle = self._packet_is_idle()
         desired_keepalive = (
-            self._idle_persistent_keepalive_s()
-            if idle else self.config.home.persistent_keepalive
+            self._idle_persistent_keepalive_s() if idle else self.config.home.persistent_keepalive
         )
         if desired_keepalive != self._packet_keepalive_s:
             try:
@@ -4431,7 +4450,8 @@ class BondAgent:
             # leg with its own port keeps it.
             default_remote = (home, self.config.policy.home_port or path.port or 51820)
             self._reconcile_link(
-                path, pid,
+                path,
+                pid,
                 # Tier membership decides whether it is a link at all; the
                 # latency verdict decides only whether it carries.
                 usable=path.name in gated_names and path.interface is not None,
@@ -4532,7 +4552,11 @@ class BondAgent:
                 # anything that gets a shell.
                 log.warning(
                     "console refused %s %s from %s: %d %s",
-                    self.command, self.path, self.client_address[0], code, message,
+                    self.command,
+                    self.path,
+                    self.client_address[0],
+                    code,
+                    message,
                 )
                 body = json.dumps({"error": message}).encode("utf-8")
                 self.send_response(code)
@@ -4542,7 +4566,7 @@ class BondAgent:
                 self.wfile.write(body)
 
             def _authed(self) -> bool:
-                offered = (self.headers.get("Authorization") or "")
+                offered = self.headers.get("Authorization") or ""
                 offered = offered[7:] if offered.startswith("Bearer ") else ""
                 return secrets.compare_digest(offered, agent.console_token())
 
@@ -4580,15 +4604,16 @@ class BondAgent:
                     gone = agent.dynamic.withdraw(name)
                     log.info(
                         "leg withdrawn name=%s existed=%s by=%s",
-                        name or "<unnamed>", gone, self.client_address[0],
+                        name or "<unnamed>",
+                        gone,
+                        self.client_address[0],
                     )
                     payload = json.dumps({"leg": name, "withdrawn": gone}).encode()
                     self._ok(payload)
                     return
 
                 name = str(body.get("name") or "")
-                host = _announce_host_for(
-                    body, self.client_address[0], claimed_hosts, name)
+                host = _announce_host_for(body, self.client_address[0], claimed_hosts, name)
 
                 try:
                     leg = agent.dynamic.announce(
@@ -4600,8 +4625,7 @@ class BondAgent:
                         # ABSENT means "join whatever is carrying", resolved
                         # in reconcile_dynamic_legs. Defaulting to 1 here made
                         # a silent announce evict every demoted leg (#67).
-                        tier=(None if body.get("tier") is None
-                              else int(body["tier"])),
+                        tier=(None if body.get("tier") is None else int(body["tier"])),
                         lease_s=float(body.get("lease_s", 45)),
                     )
                 except (ValueError, TypeError) as exc:
@@ -4613,12 +4637,19 @@ class BondAgent:
                 # that never announced at all.
                 log.info(
                     "leg announced name=%s endpoint=%s by=%s",
-                    leg.name, leg.relay_endpoint, self.client_address[0],
+                    leg.name,
+                    leg.relay_endpoint,
+                    self.client_address[0],
                 )
-                self._ok(json.dumps({
-                    "leg": leg.name, "endpoint": leg.relay_endpoint,
-                    "lease_s": round(agent.dynamic.remaining(leg.name) or 0, 1),
-                }).encode())
+                self._ok(
+                    json.dumps(
+                        {
+                            "leg": leg.name,
+                            "endpoint": leg.relay_endpoint,
+                            "lease_s": round(agent.dynamic.remaining(leg.name) or 0, 1),
+                        }
+                    ).encode()
+                )
 
             def _ok(self, body: bytes) -> None:
                 self.send_response(200)
@@ -4638,7 +4669,7 @@ class BondAgent:
                 # token leaks it one byte per request to anything that can
                 # time the reply, and this endpoint is on a wifi network the
                 # attacker is already on.
-                offered = (self.headers.get("Authorization") or "")
+                offered = self.headers.get("Authorization") or ""
                 offered = offered[7:] if offered.startswith("Bearer ") else ""
                 if not secrets.compare_digest(offered, agent.console_token()):
                     self._reject(401, "bad or missing bearer token")
@@ -4663,7 +4694,7 @@ class BondAgent:
                     self._reject(400, "body must be a JSON object")
                     return
 
-                name = unquote(parsed.path[len(prefix):])
+                name = unquote(parsed.path[len(prefix) :])
                 try:
                     entry = agent.set_leg_fields(name, fields)
                 except KeyError:
@@ -4719,9 +4750,7 @@ class BondAgent:
                     payload = agent._series.to_dict(
                         since, max_points=DEFAULT_SERIES_MAX_RESPONSE_POINTS
                     )
-                    body, encoding = encode_json_body(
-                        payload, self.headers.get("Accept-Encoding")
-                    )
+                    body, encoding = encode_json_body(payload, self.headers.get("Accept-Encoding"))
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     if encoding:
@@ -4914,9 +4943,7 @@ def run_agent(
 ) -> BondAgent:
     cfg = load_config(config_path)
     secrets = load_wifi_secrets(wifi_secrets_path)
-    agent = BondAgent(
-        cfg, wifi_secrets=secrets, config_meta=config_fingerprint(config_path)
-    )
+    agent = BondAgent(cfg, wifi_secrets=secrets, config_meta=config_fingerprint(config_path))
 
     def _sig(_signum: int, _frame: Any) -> None:
         log.info("signal received, stopping")

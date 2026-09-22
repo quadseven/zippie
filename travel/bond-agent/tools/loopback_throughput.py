@@ -145,10 +145,15 @@ def _transport_process(local_port, leg_ports, seconds, duplicate, fanout, out_q)
         selector_factory=lambda: sel,
     )
     for i, port in enumerate(leg_ports):
-        transport.add_link(LinkEndpoint(
-            path_id=i, name=f"leg{i}", device=None,
-            remote=("127.0.0.1", port), weight=100,
-        ))
+        transport.add_link(
+            LinkEndpoint(
+                path_id=i,
+                name=f"leg{i}",
+                device=None,
+                remote=("127.0.0.1", port),
+                weight=100,
+            )
+        )
     out_q.put({"ready": True})
     deadline = time.monotonic() + seconds
     # CPU, NOT WALL CLOCK, AND ONLY WHILE TRAFFIC WAS MOVING.
@@ -194,8 +199,9 @@ def _free_port() -> int:
 class Harness:
     """Everything the transport talks to: the wg socket and the far-end legs."""
 
-    def __init__(self, legs: int, duplicate: bool, seconds: float,
-                 fanout: int = DEFAULT_DUPLICATE_FANOUT) -> None:
+    def __init__(
+        self, legs: int, duplicate: bool, seconds: float, fanout: int = DEFAULT_DUPLICATE_FANOUT
+    ) -> None:
         self.legs = legs
         self.fanout = fanout
         self.local_port = _free_port()
@@ -290,8 +296,9 @@ def _count_legs(h: Harness, stop: threading.Event, result: dict):
     return threads, counts, byte_counts, first, last
 
 
-def run_upstream(legs, payload_len, seconds, duplicate, ack_every,
-                 fanout=DEFAULT_DUPLICATE_FANOUT, pace_pps=0.0):
+def run_upstream(
+    legs, payload_len, seconds, duplicate, ack_every, fanout=DEFAULT_DUPLICATE_FANOUT, pace_pps=0.0
+):
     """Travel -> home: payloads in the local socket, frames out of the legs.
 
     `pace_pps` offers payloads at a fixed rate instead of saturating; 0 keeps
@@ -329,8 +336,13 @@ def run_upstream(legs, payload_len, seconds, duplicate, ack_every,
         threads, _counts, byte_counts, first, last = _count_legs(h, stop, result)
         if pace_pps > 0:
             offered, offered_s = _paced_upstream(
-                h.wg, ("127.0.0.1", h.local_port), payload_len,
-                int(pace_pps * seconds), pace_pps, ack_every, burst=1,
+                h.wg,
+                ("127.0.0.1", h.local_port),
+                payload_len,
+                int(pace_pps * seconds),
+                pace_pps,
+                ack_every,
+                burst=1,
             )
             result["offered"] = offered
             result["offered_s"] = offered_s
@@ -351,8 +363,12 @@ def run_upstream(legs, payload_len, seconds, duplicate, ack_every,
         window = (last[0] - first[0]) if (first[0] and last[0] and last[0] > first[0]) else None
         elapsed = window or result["offered_s"]
         return {
-            "mode": "up", "legs": legs, "payload": payload_len,
-            "duplicate": duplicate, "fanout": fanout, "ack_every": ack_every,
+            "mode": "up",
+            "legs": legs,
+            "payload": payload_len,
+            "duplicate": duplicate,
+            "fanout": fanout,
+            "ack_every": ack_every,
             "pace_pps": pace_pps,
             # CPU microseconds the datapath spent per payload it classified.
             #
@@ -361,8 +377,7 @@ def run_upstream(legs, payload_len, seconds, duplicate, ack_every,
             # times a CPU scaling factor does. Charged over the window in which
             # datagrams were actually moving - see _transport_process for why
             # the child's idle drain must not be in the numerator.
-            "cpu_us_per_payload": (
-                stats["cpu_s"] * 1e6 / payloads) if payloads else 0.0,
+            "cpu_us_per_payload": (stats["cpu_s"] * 1e6 / payloads) if payloads else 0.0,
             "offered_pps": result["offered"] / result["offered_s"],
             "payload_pps": payloads / elapsed,
             "frames_pps": carried / elapsed,
@@ -505,8 +520,9 @@ def _learn_leg_peers(h: Harness):
     return [(h.leg_socks[i], peers[i]) for i in range(len(peers)) if peers[i]]
 
 
-def run_downstream(legs, payload_len, seconds, duplicate, skew_ms=0.0,
-                   fanout=DEFAULT_DUPLICATE_FANOUT):
+def run_downstream(
+    legs, payload_len, seconds, duplicate, skew_ms=0.0, fanout=DEFAULT_DUPLICATE_FANOUT
+):
     """Home -> travel: framed datagrams in the legs, payloads out of the local
     socket.
 
@@ -533,7 +549,7 @@ def run_downstream(legs, payload_len, seconds, duplicate, skew_ms=0.0,
         spray.flush(force=True)
         offered_s = time.monotonic() - t0
 
-        time.sleep(0.5)          # let the last frames drain through
+        time.sleep(0.5)  # let the last frames drain through
         sink.stop()
         stats = h.stats()
 
@@ -541,13 +557,16 @@ def run_downstream(legs, payload_len, seconds, duplicate, skew_ms=0.0,
         received = stats["transport"]["received"]
         delivered = stats["reassembly"]["delivered"]
         return {
-            "mode": "down", "legs": legs, "payload": payload_len,
-            "duplicate": duplicate, "fanout": fanout, "skew_ms": skew_ms,
+            "mode": "down",
+            "legs": legs,
+            "payload": payload_len,
+            "duplicate": duplicate,
+            "fanout": fanout,
+            "skew_ms": skew_ms,
             "offered_pps": spray.sent / offered_s,
             # Same reason as the upstream field: the receive path's cost per
             # payload is what a CPU scaling factor can carry to the router.
-            "cpu_us_per_payload": (
-                stats["cpu_s"] * 1e6 / delivered) if delivered else 0.0,
+            "cpu_us_per_payload": (stats["cpu_s"] * 1e6 / delivered) if delivered else 0.0,
             "payload_pps": delivered / elapsed,
             "frames_pps": received / elapsed,
             "frames_per_payload": (received / delivered) if delivered else 0.0,
@@ -667,13 +686,18 @@ def _home_process(listen_ports, wg_sink, seconds, reorder_ms, out_q):
         selector_factory=lambda: sel,
     )
     for i, port in enumerate(listen_ports):
-        home.add_link(LinkEndpoint(
-            path_id=i, name=f"wan{i}", device=None,
-            # Placeholder, corrected by roam on this leg's first frame. Nothing
-            # is sent here before then: home only ever answers.
-            remote=("127.0.0.1", 1), weight=100,
-            listen=("127.0.0.1", port),
-        ))
+        home.add_link(
+            LinkEndpoint(
+                path_id=i,
+                name=f"wan{i}",
+                device=None,
+                # Placeholder, corrected by roam on this leg's first frame. Nothing
+                # is sent here before then: home only ever answers.
+                remote=("127.0.0.1", 1),
+                weight=100,
+                listen=("127.0.0.1", port),
+            )
+        )
     out_q.put({"ready": True})
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -718,8 +742,7 @@ def _impaired_travel_process(local_port, leg_ports, seconds, cfg, out_q):
 
     policy_mode = cfg["control"] == "policy"
     if policy_mode:
-        control = PolicyController(transport, names, remotes,
-                                   shed_ratio=cfg["shed_ratio"])
+        control = PolicyController(transport, names, remotes, shed_ratio=cfg["shed_ratio"])
         # THE AGENT OWNS THE LINK TABLE in this mode, and that is the whole
         # point: adopting and dropping legs IS the decision being measured, so
         # the harness must not pre-empt it by adding links itself. One pass
@@ -728,12 +751,19 @@ def _impaired_travel_process(local_port, leg_ports, seconds, cfg, out_q):
         control.pass_once()
     else:
         for i, port in enumerate(leg_ports):
-            transport.add_link(LinkEndpoint(
-                path_id=i, name=names[i], device=names[i],
-                remote=("127.0.0.1", port), weight=100,
-            ))
+            transport.add_link(
+                LinkEndpoint(
+                    path_id=i,
+                    name=names[i],
+                    device=names[i],
+                    remote=("127.0.0.1", port),
+                    weight=100,
+                )
+            )
         control = ShedController(
-            transport, names, PolicyConfig(bufferbloat_shed_ratio=cfg["shed_ratio"]),
+            transport,
+            names,
+            PolicyConfig(bufferbloat_shed_ratio=cfg["shed_ratio"]),
         )
     # `add_link` SWALLOWS a bind failure and returns, so a leg that never opened
     # a socket would be silently absent from the whole run.
@@ -804,8 +834,7 @@ class _ImpairedHarness:
         self.home_q = multiprocessing.Queue()
         self.home = multiprocessing.Process(
             target=_home_process,
-            args=(self.leg_ports, sink_addr, seconds + 2.0, cfg["reorder_ms"],
-                  self.home_q),
+            args=(self.leg_ports, sink_addr, seconds + 2.0, cfg["reorder_ms"], self.home_q),
         )
         self.home.start()
         self.home_q.get(timeout=30)
@@ -902,14 +931,12 @@ def _delivery_breakdown(home: dict, travel: dict) -> dict:
     """
     reassembly = home["reassembly"]
     delivered_or_lost = reassembly["delivered"] + reassembly["lost_estimate"]
-    loss_pct = (100.0 * reassembly["lost_estimate"] / delivered_or_lost
-                if delivered_or_lost else 0.0)
+    loss_pct = 100.0 * reassembly["lost_estimate"] / delivered_or_lost if delivered_or_lost else 0.0
 
     nacks = home["nacks"]
     gaps_needing_a_nack = nacks["reordered"] + nacks["capped"]
     reorder_deadline_expired_pct = (
-        100.0 * nacks["capped"] / gaps_needing_a_nack
-        if gaps_needing_a_nack else 0.0
+        100.0 * nacks["capped"] / gaps_needing_a_nack if gaps_needing_a_nack else 0.0
     )
 
     policy = travel["policy"]
@@ -917,8 +944,10 @@ def _delivery_breakdown(home: dict, travel: dict) -> dict:
     if policy and policy["passes"]:
         carrying_passes = policy["carrying_passes"]
         worst_leg_withdrawn_pct = max(
-            (100.0 * (policy["passes"] - carried) / policy["passes"]
-             for carried in carrying_passes.values()),
+            (
+                100.0 * (policy["passes"] - carried) / policy["passes"]
+                for carried in carrying_passes.values()
+            ),
             default=0.0,
         )
 
@@ -926,17 +955,29 @@ def _delivery_breakdown(home: dict, travel: dict) -> dict:
         "loss_pct": round(loss_pct, 3),
         "reorder_deadline_expired_pct": round(reorder_deadline_expired_pct, 3),
         "worst_leg_withdrawn_pct": (
-            round(worst_leg_withdrawn_pct, 3)
-            if worst_leg_withdrawn_pct is not None else None
+            round(worst_leg_withdrawn_pct, 3) if worst_leg_withdrawn_pct is not None else None
         ),
     }
 
 
-def run_impaired(legs, payload_len, *, seed, impair_legs, loss, delay_ms,
-                 fanout=DEFAULT_DUPLICATE_FANOUT, duplicate=True,
-                 shed_ratio=0.0, payloads=DEFAULT_IMPAIR_PAYLOADS,
-                 pps=DEFAULT_IMPAIR_PPS, reorder_ms=250, ack_every=0,
-                 drain_s=None, control="shed"):
+def run_impaired(
+    legs,
+    payload_len,
+    *,
+    seed,
+    impair_legs,
+    loss,
+    delay_ms,
+    fanout=DEFAULT_DUPLICATE_FANOUT,
+    duplicate=True,
+    shed_ratio=0.0,
+    payloads=DEFAULT_IMPAIR_PAYLOADS,
+    pps=DEFAULT_IMPAIR_PPS,
+    reorder_ms=250,
+    ack_every=0,
+    drain_s=None,
+    control="shed",
+):
     """One impaired run, travel -> home, and everything both ends counted."""
     duration = payloads / pps
     # THE DRAIN HAS TO OUTLAST THE IMPAIRMENT ITSELF. A delayed leg still owes
@@ -948,16 +989,26 @@ def run_impaired(legs, payload_len, *, seed, impair_legs, loss, delay_ms,
     if drain_s is None:
         drain_s = 2.0 + delay_ms / 1000.0
     cfg = {
-        "seed": seed, "impair_legs": list(impair_legs), "loss": loss,
-        "delay_ms": delay_ms, "fanout": fanout, "duplicate": duplicate,
-        "shed_ratio": shed_ratio, "reorder_ms": reorder_ms, "control": control,
+        "seed": seed,
+        "impair_legs": list(impair_legs),
+        "loss": loss,
+        "delay_ms": delay_ms,
+        "fanout": fanout,
+        "duplicate": duplicate,
+        "shed_ratio": shed_ratio,
+        "reorder_ms": reorder_ms,
+        "control": control,
     }
     h = _ImpairedHarness(legs, cfg, duration + drain_s)
     try:
         sink = _Sink(h.sink)
         sink.start()
         offered, offered_s = _paced_upstream(
-            h.wg, ("127.0.0.1", h.travel_local), payload_len, payloads, pps,
+            h.wg,
+            ("127.0.0.1", h.travel_local),
+            payload_len,
+            payloads,
+            pps,
             ack_every,
         )
         # Long enough for the deepest delayed frame to land, be missed, be
@@ -978,8 +1029,11 @@ def run_impaired(legs, payload_len, *, seed, impair_legs, loss, delay_ms,
     return {
         "mode": "impair",
         "seed": seed,
-        "legs": legs, "payload": payload_len, "fanout": fanout,
-        "duplicate": duplicate, "shed_ratio": shed_ratio,
+        "legs": legs,
+        "payload": payload_len,
+        "fanout": fanout,
+        "duplicate": duplicate,
+        "shed_ratio": shed_ratio,
         "control": control,
         "reorder_deadline_ms": reorder_ms,
         "impair": {"legs": list(impair_legs), "loss": loss, "delay_ms": delay_ms},
@@ -1035,18 +1089,26 @@ def _fmt_impair(row: dict) -> str:
     lines = [
         "  seed={seed} legs={legs} fan={fan} control={ctl} shed_ratio={ratio} "
         "impair(legs={ilegs} loss={loss} delay={delay}ms)".format(
-            seed=row["seed"], legs=row["legs"], fan=row["fanout"],
-            ctl=row["control"], ratio=row["shed_ratio"], ilegs=legs,
-            loss=imp["loss"], delay=imp["delay_ms"],
+            seed=row["seed"],
+            legs=row["legs"],
+            fan=row["fanout"],
+            ctl=row["control"],
+            ratio=row["shed_ratio"],
+            ilegs=legs,
+            loss=imp["loss"],
+            delay=imp["delay_ms"],
         ),
         "    payloads offered {off:,} -> classified {cls:,} -> delivered "
         "{deliv:,} ({pct:.3f}%)".format(
-            off=row["offered_payloads"], cls=row["payloads_classified"],
-            deliv=row["delivered"], pct=row["delivered_pct"],
+            off=row["offered_payloads"],
+            cls=row["payloads_classified"],
+            deliv=row["delivered"],
+            pct=row["delivered_pct"],
         ),
         "    frames {frames:,} ({fpp:.2f}/payload)  retransmit.resent {resent:,} "
         "(unanswerable {un:,}, refused {ref:,})".format(
-            frames=row["frames_sent"], fpp=row["frames_per_payload"],
+            frames=row["frames_sent"],
+            fpp=row["frames_per_payload"],
             resent=row["retransmit"]["resent"],
             un=row["retransmit"]["unanswerable"],
             ref=row["retransmit"]["refused"],
@@ -1054,43 +1116,51 @@ def _fmt_impair(row: dict) -> str:
         "    lost_estimate {lost:,}  too_late_dropped {late:,}  "
         "duplicates_dropped {dup:,}  gaps_abandoned {gaps:,}  "
         "nacks_sent {nacks:,}".format(
-            lost=row["lost_estimate"], late=row["too_late_dropped"],
-            dup=row["duplicates_dropped"], gaps=row["gaps_abandoned"],
+            lost=row["lost_estimate"],
+            late=row["too_late_dropped"],
+            dup=row["duplicates_dropped"],
+            gaps=row["gaps_abandoned"],
             nacks=row["nacks_sent"],
         ),
         "    reordering absorbed {reord:,}  asked without proof {capped:,}".format(
-            reord=row["nacks_reordered"], capped=row["nacks_capped"],
+            reord=row["nacks_reordered"],
+            capped=row["nacks_capped"],
         ),
         "    shed {shed} tails_ms {tails}".format(
-            shed=row["shed"] or "none", tails=row["tails_ms"]),
+            shed=row["shed"] or "none", tails=row["tails_ms"]
+        ),
     ]
     brk = row["delivery_breakdown"]
-    withdrawn = ("n/a (--control policy not run)"
-                 if brk["worst_leg_withdrawn_pct"] is None
-                 else f"{brk['worst_leg_withdrawn_pct']:.1f}%")
+    withdrawn = (
+        "n/a (--control policy not run)"
+        if brk["worst_leg_withdrawn_pct"] is None
+        else f"{brk['worst_leg_withdrawn_pct']:.1f}%"
+    )
     lines.append(
         "    breakdown: loss {loss:.1f}%  reorder-deadline-expired {rde:.1f}% "
         "of gaps needing a NACK  worst-leg withdrawn {wd}".format(
-            loss=brk["loss_pct"], rde=brk["reorder_deadline_expired_pct"],
+            loss=brk["loss_pct"],
+            rde=brk["reorder_deadline_expired_pct"],
             wd=withdrawn,
         )
     )
     pol = row.get("policy")
     if pol:
         lines.append(
-            "    policy after {passes} passes: carrying {carry} "
-            "(in_bond {bond})".format(passes=pol["passes"],
-                                      carry=pol["carrying"] or "NOTHING",
-                                      bond=pol["in_bond"] or "none")
+            "    policy after {passes} passes: carrying {carry} (in_bond {bond})".format(
+                passes=pol["passes"],
+                carry=pol["carrying"] or "NOTHING",
+                bond=pol["in_bond"] or "none",
+            )
         )
+        lines.append("      state passes {sp}".format(sp=pol["state_passes"]))
         lines.append(
-            "      state passes {sp}".format(sp=pol["state_passes"])
-        )
-        lines.append(
-            "      weights {w} loss_pct {loss} carrying_passes {cp} "
-            "withdrawn_after_s {wa}".format(
-                w=pol["weights"], loss=pol["loss_pct"],
-                cp=pol["carrying_passes"], wa=pol["withdrawn_after_s"])
+            "      weights {w} loss_pct {loss} carrying_passes {cp} withdrawn_after_s {wa}".format(
+                w=pol["weights"],
+                loss=pol["loss_pct"],
+                cp=pol["carrying_passes"],
+                wa=pol["withdrawn_after_s"],
+            )
         )
         for name, err in sorted(pol["errors"].items()):
             if err:
@@ -1100,8 +1170,12 @@ def _fmt_impair(row: dict) -> str:
         lines.append(
             "    leg{pid}: offered {o:,} passed {p:,} dropped {d:,} "
             "delayed {dl:,} overflowed {ov:,}".format(
-                pid=pid, o=c["offered"], p=c["passed"], d=c["dropped"],
-                dl=c["delayed"], ov=c["overflowed"],
+                pid=pid,
+                o=c["offered"],
+                p=c["passed"],
+                d=c["dropped"],
+                dl=c["delayed"],
+                ov=c["overflowed"],
             )
         )
     return "\n".join(lines)
@@ -1130,44 +1204,74 @@ def _fmt(row: dict) -> str:
         "select/datagram {spd:>5.2f} | cpu us/payload {cpu:>6.1f} | "
         "loop_us {loop:>8.1f}"
     ).format(
-        mode=row["mode"], legs=row["legs"], dup=str(row["duplicate"]),
-        fan=row.get("fanout", "-"), skew=row.get("skew_ms", 0),
-        offered=row["offered_pps"], carried=row["payload_pps"],
-        mbit=row["mbit_s"], fpp=row.get("frames_per_payload", 0.0),
+        mode=row["mode"],
+        legs=row["legs"],
+        dup=str(row["duplicate"]),
+        fan=row.get("fanout", "-"),
+        skew=row.get("skew_ms", 0),
+        offered=row["offered_pps"],
+        carried=row["payload_pps"],
+        mbit=row["mbit_s"],
+        fpp=row.get("frames_per_payload", 0.0),
         spd=row["select_per_datagram"],
-        cpu=row.get("cpu_us_per_payload", 0.0), loop=row["loop_us"],
+        cpu=row.get("cpu_us_per_payload", 0.0),
+        loop=row["loop_us"],
     )
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--mode", choices=("up", "down", "sweep", "impair"),
-                    default="sweep")
+    ap.add_argument("--mode", choices=("up", "down", "sweep", "impair"), default="sweep")
     ap.add_argument("--legs", type=int, default=2)
     ap.add_argument("--payload", type=int, default=DEFAULT_PAYLOAD)
     ap.add_argument("--seconds", type=float, default=4.0)
-    ap.add_argument("--duplicate", dest="duplicate", action="store_true", default=True,
-                    help="classifier duplicates small packets (production default)")
-    ap.add_argument("--no-duplicate", dest="duplicate", action="store_false",
-                    help="ClassifierConfig(duplicate_enabled=False)")
-    ap.add_argument("--duplicate-fanout", type=int, default=DEFAULT_DUPLICATE_FANOUT,
-                    help="how many legs one duplicated packet is copied onto "
-                         f"(#51; default {DEFAULT_DUPLICATE_FANOUT}). Set it "
-                         "above the leg count to reproduce the unbounded "
-                         "pre-#51 fan-out and measure the difference")
-    ap.add_argument("--ack-every", type=int, default=0,
-                    help=f"inject one {ACK_PAYLOAD}-byte packet every N payloads, "
-                         "so the duplicate path is exercised the way TCP ACKs "
-                         "exercise it in production")
-    ap.add_argument("--pace-pps", type=float, default=0.0,
-                    help="offer payloads at this rate instead of saturating. "
-                         "0 saturates, which lets the loop take up to 32 "
-                         "datagrams per poll - a regime no link produces. See "
-                         "run_upstream")
-    ap.add_argument("--skew-ms", type=float, default=0.0,
-                    help="downstream only: hold leg i back by i*skew, so the "
-                         "reorder buffer stays deep the way it does on legs "
-                         "with different RTT")
+    ap.add_argument(
+        "--duplicate",
+        dest="duplicate",
+        action="store_true",
+        default=True,
+        help="classifier duplicates small packets (production default)",
+    )
+    ap.add_argument(
+        "--no-duplicate",
+        dest="duplicate",
+        action="store_false",
+        help="ClassifierConfig(duplicate_enabled=False)",
+    )
+    ap.add_argument(
+        "--duplicate-fanout",
+        type=int,
+        default=DEFAULT_DUPLICATE_FANOUT,
+        help="how many legs one duplicated packet is copied onto "
+        f"(#51; default {DEFAULT_DUPLICATE_FANOUT}). Set it "
+        "above the leg count to reproduce the unbounded "
+        "pre-#51 fan-out and measure the difference",
+    )
+    ap.add_argument(
+        "--ack-every",
+        type=int,
+        default=0,
+        help=f"inject one {ACK_PAYLOAD}-byte packet every N payloads, "
+        "so the duplicate path is exercised the way TCP ACKs "
+        "exercise it in production",
+    )
+    ap.add_argument(
+        "--pace-pps",
+        type=float,
+        default=0.0,
+        help="offer payloads at this rate instead of saturating. "
+        "0 saturates, which lets the loop take up to 32 "
+        "datagrams per poll - a regime no link produces. See "
+        "run_upstream",
+    )
+    ap.add_argument(
+        "--skew-ms",
+        type=float,
+        default=0.0,
+        help="downstream only: hold leg i back by i*skew, so the "
+        "reorder buffer stays deep the way it does on legs "
+        "with different RTT",
+    )
     ap.add_argument("--json", action="store_true", help="machine-readable output")
 
     imp = ap.add_argument_group(
@@ -1175,51 +1279,94 @@ def main(argv=None) -> int:
         "Deterministic per-leg loss and delay, so #51's loss-recovery criterion "
         "and #81's retransmit criterion can be measured without a router.",
     )
-    imp.add_argument("--impair-legs", default="",
-                     help="which legs to impair: `all`, or e.g. `1` or `0,2`. "
-                          "Empty means a clean bond, which is the control run")
-    imp.add_argument("--impair-loss", type=float, default=0.0,
-                     help="fraction of datagrams to drop on each impaired leg")
-    imp.add_argument("--impair-delay-ms", type=float, default=0.0,
-                     help="fixed added latency on each impaired leg, FIFO - "
-                          "this is the #81 bufferbloat condition")
-    imp.add_argument("--seed", type=int, default=None,
-                     help="PRNG seed for the drop pattern. Printed on every "
-                          "run; pass the printed value to repeat it exactly")
-    imp.add_argument("--control", choices=("shed", "policy"), default="shed",
-                     help="which control loop runs over the impaired bond. "
-                          "`shed` is #81's bufferbloat verdict alone, over legs "
-                          "pinned UP at zero loss, and is what every #51/#81 "
-                          "number was measured with. `policy` runs the agent's "
-                          "whole packet-mode control pass - probe, classify, "
-                          "weight, join gate, shed, reconcile - which is what "
-                          "#6 needs to see a leg's PathState and whether it "
-                          "leaves the bond")
-    imp.add_argument("--shed-ratio", type=float, default=0.0,
-                     help="policy.bufferbloat_shed_ratio. 0 switches leg "
-                          "shedding OFF (the default here, so the impairment "
-                          "is the only variable); 5.0 is the production value")
-    imp.add_argument("--payloads", type=int, default=DEFAULT_IMPAIR_PAYLOADS,
-                     help="exact number of payloads to offer, so two runs "
-                          f"share a denominator (default {DEFAULT_IMPAIR_PAYLOADS})")
-    imp.add_argument("--offered-pps", type=float, default=DEFAULT_IMPAIR_PPS,
-                     help="offered payload rate, deliberately far below the "
-                          "ceiling so the harness adds no loss of its own "
-                          f"(default {DEFAULT_IMPAIR_PPS:.0f})")
-    imp.add_argument("--reorder-deadline-ms", type=int, default=250,
-                     help="both ends; matches the agent's packet-mode default")
-    imp.add_argument("--repeat", type=int, default=1,
-                     help="run the same configuration N times. A single run "
-                          "over real sockets and a real clock is not a result")
-    imp.add_argument("--min-delivered-pct", type=float, default=None,
-                     help="#63: turn this run into a PASS/FAIL check. Exits "
-                          "1 if delivered_pct on ANY repeat falls below this "
-                          "(the worst repeat, not the average - a soak that "
-                          "only has to clear its bar most of the time is a "
-                          "soak with a snooze button). Omit to keep the old "
-                          "report-only behaviour: this tool cannot regress "
-                          "an existing caller's exit code by adding a check "
-                          "nobody asked for.")
+    imp.add_argument(
+        "--impair-legs",
+        default="",
+        help="which legs to impair: `all`, or e.g. `1` or `0,2`. "
+        "Empty means a clean bond, which is the control run",
+    )
+    imp.add_argument(
+        "--impair-loss",
+        type=float,
+        default=0.0,
+        help="fraction of datagrams to drop on each impaired leg",
+    )
+    imp.add_argument(
+        "--impair-delay-ms",
+        type=float,
+        default=0.0,
+        help="fixed added latency on each impaired leg, FIFO - "
+        "this is the #81 bufferbloat condition",
+    )
+    imp.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="PRNG seed for the drop pattern. Printed on every "
+        "run; pass the printed value to repeat it exactly",
+    )
+    imp.add_argument(
+        "--control",
+        choices=("shed", "policy"),
+        default="shed",
+        help="which control loop runs over the impaired bond. "
+        "`shed` is #81's bufferbloat verdict alone, over legs "
+        "pinned UP at zero loss, and is what every #51/#81 "
+        "number was measured with. `policy` runs the agent's "
+        "whole packet-mode control pass - probe, classify, "
+        "weight, join gate, shed, reconcile - which is what "
+        "#6 needs to see a leg's PathState and whether it "
+        "leaves the bond",
+    )
+    imp.add_argument(
+        "--shed-ratio",
+        type=float,
+        default=0.0,
+        help="policy.bufferbloat_shed_ratio. 0 switches leg "
+        "shedding OFF (the default here, so the impairment "
+        "is the only variable); 5.0 is the production value",
+    )
+    imp.add_argument(
+        "--payloads",
+        type=int,
+        default=DEFAULT_IMPAIR_PAYLOADS,
+        help="exact number of payloads to offer, so two runs "
+        f"share a denominator (default {DEFAULT_IMPAIR_PAYLOADS})",
+    )
+    imp.add_argument(
+        "--offered-pps",
+        type=float,
+        default=DEFAULT_IMPAIR_PPS,
+        help="offered payload rate, deliberately far below the "
+        "ceiling so the harness adds no loss of its own "
+        f"(default {DEFAULT_IMPAIR_PPS:.0f})",
+    )
+    imp.add_argument(
+        "--reorder-deadline-ms",
+        type=int,
+        default=250,
+        help="both ends; matches the agent's packet-mode default",
+    )
+    imp.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="run the same configuration N times. A single run "
+        "over real sockets and a real clock is not a result",
+    )
+    imp.add_argument(
+        "--min-delivered-pct",
+        type=float,
+        default=None,
+        help="#63: turn this run into a PASS/FAIL check. Exits "
+        "1 if delivered_pct on ANY repeat falls below this "
+        "(the worst repeat, not the average - a soak that "
+        "only has to clear its bar most of the time is a "
+        "soak with a snooze button). Omit to keep the old "
+        "report-only behaviour: this tool cannot regress "
+        "an existing caller's exit code by adding a check "
+        "nobody asked for.",
+    )
     args = ap.parse_args(argv)
 
     fan = args.duplicate_fanout
@@ -1230,14 +1377,24 @@ def main(argv=None) -> int:
         seed = args.seed if args.seed is not None else int.from_bytes(os.urandom(4), "big")
         impaired = _parse_impair_legs(args.impair_legs, args.legs)
         for _ in range(max(1, args.repeat)):
-            rows.append(run_impaired(
-                args.legs, args.payload, seed=seed, impair_legs=impaired,
-                loss=args.impair_loss, delay_ms=args.impair_delay_ms,
-                fanout=fan, duplicate=args.duplicate,
-                shed_ratio=args.shed_ratio, payloads=args.payloads,
-                pps=args.offered_pps, reorder_ms=args.reorder_deadline_ms,
-                ack_every=args.ack_every, control=args.control,
-            ))
+            rows.append(
+                run_impaired(
+                    args.legs,
+                    args.payload,
+                    seed=seed,
+                    impair_legs=impaired,
+                    loss=args.impair_loss,
+                    delay_ms=args.impair_delay_ms,
+                    fanout=fan,
+                    duplicate=args.duplicate,
+                    shed_ratio=args.shed_ratio,
+                    payloads=args.payloads,
+                    pps=args.offered_pps,
+                    reorder_ms=args.reorder_deadline_ms,
+                    ack_every=args.ack_every,
+                    control=args.control,
+                )
+            )
         verdict = None
         if args.min_delivered_pct is not None:
             worst = min(row["delivered_pct"] for row in rows)
@@ -1257,8 +1414,10 @@ def main(argv=None) -> int:
             out = rows if verdict is None else {"rows": rows, "verdict": verdict}
             print(json.dumps(out, indent=2))
         else:
-            print(f"zippie packet datapath, loopback, IMPAIRED, seed={seed}, "
-                  f"payload={args.payload} bytes")
+            print(
+                f"zippie packet datapath, loopback, IMPAIRED, seed={seed}, "
+                f"payload={args.payload} bytes"
+            )
             for row in rows:
                 print(_fmt_impair(row))
             if verdict is not None:
@@ -1276,26 +1435,32 @@ def main(argv=None) -> int:
         return 0
 
     if args.mode == "up":
-        rows.append(run_upstream(args.legs, args.payload, args.seconds,
-                                 args.duplicate, args.ack_every, fan,
-                                 args.pace_pps))
+        rows.append(
+            run_upstream(
+                args.legs,
+                args.payload,
+                args.seconds,
+                args.duplicate,
+                args.ack_every,
+                fan,
+                args.pace_pps,
+            )
+        )
     elif args.mode == "down":
-        rows.append(run_downstream(args.legs, args.payload, args.seconds,
-                                   args.duplicate, args.skew_ms, fan))
+        rows.append(
+            run_downstream(args.legs, args.payload, args.seconds, args.duplicate, args.skew_ms, fan)
+        )
     else:
         for legs in (1, 2, 3):
-            rows.append(run_upstream(legs, args.payload, args.seconds,
-                                     args.duplicate, 0, fan))
+            rows.append(run_upstream(legs, args.payload, args.seconds, args.duplicate, 0, fan))
         rows.append(run_upstream(2, args.payload, args.seconds, True, 4, fan))
         rows.append(run_upstream(2, args.payload, args.seconds, False, 4, fan))
         for legs in (1, 2, 3):
-            rows.append(run_downstream(legs, args.payload, args.seconds,
-                                       args.duplicate, 0.0, fan))
+            rows.append(run_downstream(legs, args.payload, args.seconds, args.duplicate, 0.0, fan))
         # The production shape: legs that differ in latency, so nothing is ever
         # in order. This is the row #22 is about.
         for skew in (20.0, 60.0):
-            rows.append(run_downstream(2, args.payload, args.seconds,
-                                       args.duplicate, skew, fan))
+            rows.append(run_downstream(2, args.payload, args.seconds, args.duplicate, skew, fan))
 
     if args.json:
         print(json.dumps(rows, indent=2))

@@ -116,9 +116,7 @@ def scan_ssids() -> set[str]:
 def _pending_ssid_paths(paths: list[PathConfig]) -> list[tuple[str, PathConfig]]:
     """(ssid, path) pairs still needing a join, ssid narrowed to a plain str."""
     wanted = [
-        (p.match.ssid, p)
-        for p in paths
-        if p.enabled and p.match.type == "ssid" and p.match.ssid
+        (p.match.ssid, p) for p in paths if p.enabled and p.match.type == "ssid" and p.match.ssid
     ]
     already = {link.ssid for link in net.list_links() if link.ssid}
     return [(s, p) for s, p in wanted if s and s not in already]

@@ -1,0 +1,53 @@
+name: Check · Python lint (ruff)
+
+# Whole-tree ruff check + format --check, pinned to the standard ruff build
+# the provisioned pre-commit hook runs (infra#995), so local hooks and CI
+# lint identically. Per-file config still applies: travel/bond-agent/ keeps
+# its own pyproject (line length 100, py39, S310), and the shipped package
+# copy under deploy/oke/zippie-home/zippie-pkg/ extends it.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.py'
+      - '**/pyproject.toml'
+      - '**/ruff.toml'
+      - '.github/workflows/check.python-lint.yml'
+  pull_request:
+    paths:
+      - '**/*.py'
+      - '**/pyproject.toml'
+      - '**/ruff.toml'
+      - '.github/workflows/check.python-lint.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zippie-python-lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: trust gate (collaborator-only on self-hosted)
+    runs-on: arc-zippie
+    timeout-minutes: 2
+    steps:
+      - name: "Block untrusted (non-collaborator) PRs on self-hosted runner"
+        if: ${{ github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) }}
+        run: |
+          echo "::error::PR validation restricted to repo collaborators."
+          exit 1
+
+  ruff:
+    needs: guard
+    name: ruff (check + format)
+    uses: quadseven/infra-public/.github/workflows/check.python.yml@3d7eb0b00e8bfe949783d772ab777100182ab05d
+    with:
+      runner: arc-zippie
+      install-cmd: "true"
+      ruff: true
+      ruff-version: "0.15.10"
+      test-cmd: ""
+      timeout-minutes: 5

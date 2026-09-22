@@ -50,6 +50,7 @@ a route on one of the bond's OWN matched interfaces no longer counts as a
 fallback, so `_install_default_route` HOLDS instead - see
 test_standdown_holds_when_the_only_fallback_is_a_bond_legs_own_interface.
 """
+
 from __future__ import annotations
 
 import logging
@@ -74,16 +75,26 @@ def _agent(tmp_path, **policy):
     reason). Mirrors test_dns_survives_route_flips.py's own helper.
     """
     cfg = {
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path),
-                  "run_dir": str(tmp_path / "run")},
-        "home": {"endpoint": "h:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
+        "agent": {
+            "private_key": "cGtleQ==",
+            "state_dir": str(tmp_path),
+            "run_dir": str(tmp_path / "run"),
+        },
+        "home": {
+            "endpoint": "h:51900",
+            "server_public_key": "c2VydmVy",
+            "address_cidr": "10.66.0.10/24",
+            "ports": [51900],
+        },
         # join_streak_min=0: these tests are about the route seam, not
         # membership. resolver_kick_service="" - no DNS side effects here.
-        "policy": dict({"mode": "aggregate", "join_streak_min": 0,
-                         "resolver_kick_service": ""}, **policy),
-        "paths": [{"name": "ethernet", "interface": "eth0"},
-                  {"name": "hotspot", "interface": "apclix0"}],
+        "policy": dict(
+            {"mode": "aggregate", "join_streak_min": 0, "resolver_kick_service": ""}, **policy
+        ),
+        "paths": [
+            {"name": "ethernet", "interface": "eth0"},
+            {"name": "hotspot", "interface": "apclix0"},
+        ],
     }
     agent = BondAgent(parse_config(cfg))
     for path, wg in zip(agent.paths, ("pb0", "pb1")):
@@ -128,7 +139,8 @@ class _Spy:
 def spy(monkeypatch):
     recorder = _Spy()
     monkeypatch.setattr(
-        net, "ip_route_replace_multipath",
+        net,
+        "ip_route_replace_multipath",
         lambda hops: recorder.routes.append(list(hops)),
     )
     monkeypatch.setattr(net, "ensure_firewall", lambda ifaces, force=False: None)
@@ -149,18 +161,18 @@ def test_a_sole_leg_running_hot_stands_the_bond_down(tmp_path, spy):
     withdraw it so the kernel's own physical-WAN default takes over."""
     agent = _agent(tmp_path)
     now = _clocked(agent)
-    _kill(agent.paths[0])                    # ethernet: gone
-    agent.paths[1].rtt_ms = 661.0             # hotspot: alive, terrible
+    _kill(agent.paths[0])  # ethernet: gone
+    agent.paths[1].rtt_ms = 661.0  # hotspot: alive, terrible
     agent.paths[1].rtt_tail_ms = 661.0
 
-    agent.apply_policy()                      # pass 1: bad, but not sustained
+    agent.apply_policy()  # pass 1: bad, but not sustained
     assert spy.routes[-1] != [], (
         "test setup is wrong: a single bad pass already withdrew the route, "
         "so the sustain window below proves nothing"
     )
 
     now[0] += agent.config.policy.standdown_enter_after_s + 1.0
-    agent.apply_policy()                      # pass 2: sustained past the bar
+    agent.apply_policy()  # pass 2: sustained past the bar
 
     assert spy.routes[-1] == [], (
         "the bond stayed installed at metric 1 while its sole leg ran at "
@@ -179,8 +191,8 @@ def test_a_single_bad_spike_does_not_stand_the_bond_down(tmp_path, spy):
     agent.paths[1].rtt_ms = 900.0
     agent.paths[1].rtt_tail_ms = 900.0
 
-    agent.apply_policy()                      # one bad pass
-    now[0] += 0.5                             # well under standdown_enter_after_s
+    agent.apply_policy()  # one bad pass
+    now[0] += 0.5  # well under standdown_enter_after_s
     agent.apply_policy()
 
     assert spy.routes[-1] != [], (
@@ -201,12 +213,11 @@ def test_a_healthy_leg_beside_a_terrible_one_still_carries_normally(tmp_path, sp
     agent.paths[1].rtt_tail_ms = 900.0
 
     agent.apply_policy()
-    now[0] += 60.0                            # far past any sustain window
+    now[0] += 60.0  # far past any sustain window
     agent.apply_policy()
 
     assert spy.routes[-1] != [], (
-        "the bond stood down while a healthy leg was carrying fine beside "
-        "the bad one"
+        "the bond stood down while a healthy leg was carrying fine beside the bad one"
     )
 
 
@@ -258,9 +269,7 @@ def test_standdown_never_substitutes_a_specific_interface(tmp_path, spy):
     # standdown - the only two shapes ip_route_replace_multipath may see are
     # "our real hops" and "nothing".
     for installed in spy.routes:
-        assert installed == [] or all(
-            dev in ("pb0", "pb1") for dev, _w in installed
-        )
+        assert installed == [] or all(dev in ("pb0", "pb1") for dev, _w in installed)
 
 
 class _RouteProc:
@@ -270,7 +279,9 @@ class _RouteProc:
 
 
 def test_standdown_holds_when_the_only_fallback_is_a_bond_legs_own_interface(
-    tmp_path, spy, monkeypatch,
+    tmp_path,
+    spy,
+    monkeypatch,
 ):
     """THE #70 FIX ITSELF. The travel router's own incident, replayed exactly:
     ethernet gone, hotspot (interface apclix0) the sole survivor and running
@@ -279,15 +290,16 @@ def test_standdown_holds_when_the_only_fallback_is_a_bond_legs_own_interface(
     the bond must hold rather than withdraw its route and strand every
     other leg for nothing."""
     monkeypatch.setattr(
-        net, "run",
+        net,
+        "run",
         lambda *a, **k: _RouteProc(
             '[{"dst":"default","dev":"apclix0","gateway":"192.0.2.1","metric":20}]'
         ),
     )
     agent = _agent(tmp_path)
     now = _clocked(agent)
-    _kill(agent.paths[0])                     # ethernet: gone
-    agent.paths[1].rtt_ms = 661.0              # hotspot (apclix0): alive, terrible
+    _kill(agent.paths[0])  # ethernet: gone
+    agent.paths[1].rtt_ms = 661.0  # hotspot (apclix0): alive, terrible
     agent.paths[1].rtt_tail_ms = 661.0
 
     agent.apply_policy()
@@ -305,13 +317,16 @@ def test_standdown_holds_when_the_only_fallback_is_a_bond_legs_own_interface(
 
 
 def test_standdown_still_fires_for_a_genuinely_different_interface(
-    tmp_path, spy, monkeypatch,
+    tmp_path,
+    spy,
+    monkeypatch,
 ):
     """The exclusion must not swallow every fallback - only ones that are
     actually a bond leg's own interface. A real independent WAN beside the
     same dying leg must still let the bond stand aside for it."""
     monkeypatch.setattr(
-        net, "run",
+        net,
+        "run",
         lambda *a, **k: _RouteProc(
             '[{"dst":"default","dev":"eth1","gateway":"192.0.2.1","metric":20}]'
         ),
@@ -333,7 +348,8 @@ def test_standdown_still_fires_for_a_genuinely_different_interface(
 
 
 def test_an_idle_reserve_legs_stale_tail_does_not_stop_the_bond_standing_down(
-    tmp_path, spy,
+    tmp_path,
+    spy,
 ):
     """#124, one layer deeper than the incident itself: the mechanism that
     fixed #124 has the SAME failure shape #124 describes, once a second tier
@@ -354,14 +370,22 @@ def test_an_idle_reserve_legs_stale_tail_does_not_stop_the_bond_standing_down(
     (a reserve tier) instead of outside it (netifd's own default).
     """
     cfg = {
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path),
-                  "run_dir": str(tmp_path / "run")},
-        "home": {"endpoint": "h:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"mode": "aggregate", "join_streak_min": 0,
-                   "resolver_kick_service": ""},
-        "paths": [{"name": "ethernet", "interface": "eth0", "tier": 1},
-                  {"name": "reserve", "interface": "wwan0", "tier": 2}],
+        "agent": {
+            "private_key": "cGtleQ==",
+            "state_dir": str(tmp_path),
+            "run_dir": str(tmp_path / "run"),
+        },
+        "home": {
+            "endpoint": "h:51900",
+            "server_public_key": "c2VydmVy",
+            "address_cidr": "10.66.0.10/24",
+            "ports": [51900],
+        },
+        "policy": {"mode": "aggregate", "join_streak_min": 0, "resolver_kick_service": ""},
+        "paths": [
+            {"name": "ethernet", "interface": "eth0", "tier": 1},
+            {"name": "reserve", "interface": "wwan0", "tier": 2},
+        ],
     }
     agent = BondAgent(parse_config(cfg))
     for path, wg in zip(agent.paths, ("pb0", "pb1")):
@@ -382,7 +406,7 @@ def test_an_idle_reserve_legs_stale_tail_does_not_stop_the_bond_standing_down(
     # because an excluded leg is dropped from the transport and stops being
     # probed.
 
-    agent.apply_policy()                      # pass 1: bad, but not sustained
+    agent.apply_policy()  # pass 1: bad, but not sustained
     assert spy.routes[-1] != [], (
         "test setup is wrong: a single bad pass already withdrew the "
         "route, so the sustain window below proves nothing"
@@ -394,7 +418,7 @@ def test_an_idle_reserve_legs_stale_tail_does_not_stop_the_bond_standing_down(
     )
 
     now[0] += agent.config.policy.standdown_enter_after_s + 1.0
-    agent.apply_policy()                      # pass 2: sustained past the bar
+    agent.apply_policy()  # pass 2: sustained past the bar
 
     assert spy.routes[-1] == [], (
         "the tier-1 leg carrying 100% of the bond's traffic ran at 900ms "
@@ -420,7 +444,7 @@ def test_the_bond_retakes_the_route_after_a_proven_recovery(tmp_path, spy):
 
     agent.paths[1].rtt_ms = 40.0
     agent.paths[1].rtt_tail_ms = 40.0
-    agent.apply_policy()                      # recovery clock starts here
+    agent.apply_policy()  # recovery clock starts here
     now[0] += agent.config.policy.standdown_recover_after_s + 1.0
     agent.apply_policy()
 
@@ -481,11 +505,11 @@ def test_a_relapse_during_the_recovery_streak_resets_the_clock(tmp_path, spy):
     agent.apply_policy()
     assert spy.routes[-1] == [], "setup: recovered too early, test proves nothing"
 
-    agent.paths[1].rtt_ms = 661.0             # relapse
+    agent.paths[1].rtt_ms = 661.0  # relapse
     agent.paths[1].rtt_tail_ms = 661.0
     agent.apply_policy()
 
-    agent.paths[1].rtt_ms = 40.0              # good again
+    agent.paths[1].rtt_ms = 40.0  # good again
     agent.paths[1].rtt_tail_ms = 40.0
     agent.apply_policy()
     now[0] += agent.config.policy.standdown_recover_after_s - 1.0  # old credit, if any
@@ -519,8 +543,7 @@ def test_periodic_force_reassert_does_not_override_a_standdown(tmp_path, spy):
         agent.apply_policy()
 
     assert spy.routes[-1] == [], (
-        "the periodic forced re-assert reinstalled the bonded route over an "
-        "active standdown"
+        "the periodic forced re-assert reinstalled the bonded route over an active standdown"
     )
 
 
@@ -578,9 +601,7 @@ def test_the_standdown_is_logged_with_its_reason(tmp_path, spy, caplog):
 
     said = [r.getMessage() for r in caplog.records if "standing down" in r.getMessage()]
     assert len(said) == 1, f"expected one standdown log line, got {said}"
-    assert "661" in said[0] or "500" in said[0], (
-        f"the log line does not say WHY: {said[0]!r}"
-    )
+    assert "661" in said[0] or "500" in said[0], f"the log line does not say WHY: {said[0]!r}"
 
 
 def test_status_dict_reports_standdown_state(tmp_path, spy):
@@ -651,7 +672,9 @@ def test_the_counter_does_not_climb_every_pass_while_still_down(tmp_path, spy):
 
 
 def test_the_seams_own_telemetry_and_log_fire_once_not_every_pass(
-    tmp_path, spy, caplog,
+    tmp_path,
+    spy,
+    caplog,
 ):
     """BondStanddown.standdowns has its own internal one-shot guard (see
     TestBondStanddown.test_counters_increment_once_per_transition) - this
@@ -672,14 +695,13 @@ def test_the_seams_own_telemetry_and_log_fire_once_not_every_pass(
         agent.apply_policy()
         now[0] += agent.config.policy.standdown_enter_after_s + 1.0
         agent.apply_policy()
-        for _ in range(30):                # continuously down, many more passes
+        for _ in range(30):  # continuously down, many more passes
             now[0] += 5.0
             agent.apply_policy()
 
     standdown_events = [e for e in events if e == ("bond_standdown", 1)]
     assert standdown_events == [("bond_standdown", 1)], (
-        f"expected exactly one bond_standdown telemetry event, got "
-        f"{standdown_events}"
+        f"expected exactly one bond_standdown telemetry event, got {standdown_events}"
     )
     said = [r.getMessage() for r in caplog.records if "standing down" in r.getMessage()]
     assert len(said) == 1, f"expected one 'standing down' log line, got {len(said)}"
@@ -693,12 +715,17 @@ def test_the_default_threshold_and_its_config_knobs_parse(tmp_path):
     assert PolicyConfig().standdown_enter_after_s == 5.0
     assert PolicyConfig().standdown_recover_after_s == 30.0
 
-    cfg = parse_config({
-        "home": {"endpoint": "h:51900"},
-        "policy": {"standdown_rtt_ms": 800.0, "standdown_enter_after_s": 2.0,
-                   "standdown_recover_after_s": 15.0},
-        "paths": [{"name": "a", "interface": "eth0"}],
-    })
+    cfg = parse_config(
+        {
+            "home": {"endpoint": "h:51900"},
+            "policy": {
+                "standdown_rtt_ms": 800.0,
+                "standdown_enter_after_s": 2.0,
+                "standdown_recover_after_s": 15.0,
+            },
+            "paths": [{"name": "a", "interface": "eth0"}],
+        }
+    )
     assert cfg.policy.standdown_rtt_ms == 800.0
     assert cfg.policy.standdown_enter_after_s == 2.0
     assert cfg.policy.standdown_recover_after_s == 15.0
@@ -710,7 +737,7 @@ def test_a_higher_configured_threshold_tolerates_a_slower_leg(tmp_path, spy):
     agent = _agent(tmp_path, standdown_rtt_ms=2000.0)
     now = _clocked(agent)
     _kill(agent.paths[0])
-    agent.paths[1].rtt_ms = 661.0             # would trip the DEFAULT of 500
+    agent.paths[1].rtt_ms = 661.0  # would trip the DEFAULT of 500
     agent.paths[1].rtt_tail_ms = 661.0
 
     agent.apply_policy()
@@ -765,23 +792,23 @@ class TestBondStanddown:
 
     def test_stays_down_while_bad_persists(self):
         now = [0.0]
-        sd = BondStanddown(PolicyConfig(standdown_rtt_ms=500.0,
-                                        standdown_enter_after_s=5.0),
-                           clock=lambda: now[0])
-        assert sd.evaluate(661.0) is False       # first sighting
+        sd = BondStanddown(
+            PolicyConfig(standdown_rtt_ms=500.0, standdown_enter_after_s=5.0), clock=lambda: now[0]
+        )
+        assert sd.evaluate(661.0) is False  # first sighting
         now[0] = 5.5
         assert sd.evaluate(661.0) is True
         now[0] = 100.0
-        assert sd.evaluate(661.0) is True         # stays down
+        assert sd.evaluate(661.0) is True  # stays down
 
     def test_a_good_reading_resets_the_bad_timer(self):
         now = [0.0]
-        sd = BondStanddown(PolicyConfig(standdown_rtt_ms=500.0,
-                                        standdown_enter_after_s=5.0),
-                           clock=lambda: now[0])
+        sd = BondStanddown(
+            PolicyConfig(standdown_rtt_ms=500.0, standdown_enter_after_s=5.0), clock=lambda: now[0]
+        )
         assert sd.evaluate(661.0) is False
         now[0] = 4.0
-        assert sd.evaluate(100.0) is False        # good pass: timer resets
+        assert sd.evaluate(100.0) is False  # good pass: timer resets
         now[0] = 8.0
         assert sd.evaluate(661.0) is False, (
             "the bad streak carried over a good reading in the middle"
@@ -791,9 +818,9 @@ class TestBondStanddown:
         """Absence of evidence is not evidence of badness - the same rule
         policy._clear_and_collect already applies to #81's shedding."""
         now = [0.0]
-        sd = BondStanddown(PolicyConfig(standdown_rtt_ms=500.0,
-                                        standdown_enter_after_s=0.0),
-                           clock=lambda: now[0])
+        sd = BondStanddown(
+            PolicyConfig(standdown_rtt_ms=500.0, standdown_enter_after_s=0.0), clock=lambda: now[0]
+        )
         assert sd.evaluate(None) is False
         now[0] = 100.0
         assert sd.evaluate(None) is False
@@ -811,35 +838,42 @@ class TestBondStanddown:
     def test_recovery_requires_the_margin(self):
         now = [0.0]
         sd = BondStanddown(
-            PolicyConfig(standdown_rtt_ms=500.0, standdown_enter_after_s=0.0,
-                        standdown_recover_after_s=10.0, recovery_margin=0.8),
+            PolicyConfig(
+                standdown_rtt_ms=500.0,
+                standdown_enter_after_s=0.0,
+                standdown_recover_after_s=10.0,
+                recovery_margin=0.8,
+            ),
             clock=lambda: now[0],
         )
         now[0] = 1.0
-        assert sd.evaluate(600.0) is False        # first sighting, even at 0s
+        assert sd.evaluate(600.0) is False  # first sighting, even at 0s
         now[0] = 1.0
         assert sd.evaluate(600.0) is True
         now[0] = 2.0
         assert sd.evaluate(450.0) is True, (
-            "450 is under the 500 floor but not under 500*0.8=400 - must "
-            "still be standing down"
+            "450 is under the 500 floor but not under 500*0.8=400 - must still be standing down"
         )
         now[0] = 3.0
-        assert sd.evaluate(390.0) is True          # under margin, clock just started
+        assert sd.evaluate(390.0) is True  # under margin, clock just started
         now[0] = 13.5
-        assert sd.evaluate(390.0) is False         # sustained past the margin
+        assert sd.evaluate(390.0) is False  # sustained past the margin
 
     def test_counters_increment_once_per_transition(self):
         now = [0.0]
         sd = BondStanddown(
-            PolicyConfig(standdown_rtt_ms=500.0, standdown_enter_after_s=0.0,
-                        standdown_recover_after_s=0.0, recovery_margin=0.8),
+            PolicyConfig(
+                standdown_rtt_ms=500.0,
+                standdown_enter_after_s=0.0,
+                standdown_recover_after_s=0.0,
+                recovery_margin=0.8,
+            ),
             clock=lambda: now[0],
         )
         now[0] = 1.0
         sd.evaluate(600.0)
         now[0] = 2.0
-        sd.evaluate(600.0)                         # already down; must not double count
+        sd.evaluate(600.0)  # already down; must not double count
         assert sd.standdowns == 1
         now[0] = 3.0
         sd.evaluate(10.0)
@@ -851,8 +885,12 @@ class TestBondStanddown:
     def test_reason_is_cleared_on_recovery(self):
         now = [0.0]
         sd = BondStanddown(
-            PolicyConfig(standdown_rtt_ms=500.0, standdown_enter_after_s=0.0,
-                        standdown_recover_after_s=0.0, recovery_margin=0.8),
+            PolicyConfig(
+                standdown_rtt_ms=500.0,
+                standdown_enter_after_s=0.0,
+                standdown_recover_after_s=0.0,
+                recovery_margin=0.8,
+            ),
             clock=lambda: now[0],
         )
         now[0] = 1.0
@@ -880,7 +918,7 @@ class TestCarryingBestTailMs:
     def test_ignores_legs_without_an_interface(self, tmp_path):
         agent = _agent(tmp_path)
         agent.paths[0].interface = None
-        agent.paths[0].rtt_tail_ms = 5.0        # would otherwise win as "best"
+        agent.paths[0].rtt_tail_ms = 5.0  # would otherwise win as "best"
         agent.paths[1].rtt_tail_ms = 200.0
         assert agent._carrying_best_tail_ms() == 200.0
 
@@ -897,7 +935,8 @@ class TestCarryingBestTailMs:
         assert agent._carrying_best_tail_ms() == 30.0
 
     def test_a_down_leg_with_an_interface_and_a_tail_is_still_excluded_from_tier_1(
-        self, tmp_path,
+        self,
+        tmp_path,
     ):
         """Distinct from test_ignores_down_legs, which kills BOTH interface
         and state together and so cannot tell the two exclusions apart. Here
@@ -908,12 +947,13 @@ class TestCarryingBestTailMs:
         a genuinely bad survivor."""
         agent = _agent(tmp_path)
         agent.paths[0].state = PathState.DOWN
-        agent.paths[0].rtt_tail_ms = 5.0        # would otherwise win as "best"
+        agent.paths[0].rtt_tail_ms = 5.0  # would otherwise win as "best"
         agent.paths[1].rtt_tail_ms = 200.0
         assert agent._carrying_best_tail_ms() == 200.0
 
     def test_a_down_legs_raw_rtt_is_used_only_when_nothing_else_has_a_tail(
-        self, tmp_path,
+        self,
+        tmp_path,
     ):
         """Tier 2 (#124's own mechanism - see the method's docstring): a leg
         marked DOWN by RTT alone still has its raw rtt_ms, unlike its tail.
@@ -923,19 +963,19 @@ class TestCarryingBestTailMs:
         agent.paths[0].state = PathState.DOWN
         agent.paths[0].rtt_tail_ms = None
         agent.paths[0].rtt_ms = 661.0
-        agent.paths[1].rtt_tail_ms = 40.0       # alive, tier 1 wins
+        agent.paths[1].rtt_tail_ms = 40.0  # alive, tier 1 wins
         assert agent._carrying_best_tail_ms() == 40.0
 
         agent.paths[1].state = PathState.DOWN
         agent.paths[1].rtt_tail_ms = None
-        agent.paths[1].rtt_ms = None            # silent: no tier-2 evidence either
+        agent.paths[1].rtt_ms = None  # silent: no tier-2 evidence either
         assert agent._carrying_best_tail_ms() == 661.0, (
-            "tier 2 did not fall back to the DOWN leg's raw rtt_ms once "
-            "tier 1 had nothing left"
+            "tier 2 did not fall back to the DOWN leg's raw rtt_ms once tier 1 had nothing left"
         )
 
     def test_a_tier_gated_reserve_legs_stale_tail_cannot_mask_the_carrying_leg(
-        self, tmp_path,
+        self,
+        tmp_path,
     ):
         """#124 one layer deeper: a leg the TIER GATE has excluded is not
         the same thing as a leg that is DOWN, and this method used to treat
@@ -966,9 +1006,8 @@ class TestCarryingBestTailMs:
         reserve.rtt_tail_ms = 40.0
 
         from zippie import policy as policy_mod
-        assert [p.name for p in policy_mod.tier_legs(agent.paths)] == [
-            "ethernet"
-        ], (
+
+        assert [p.name for p in policy_mod.tier_legs(agent.paths)] == ["ethernet"], (
             "test setup is wrong: the reserve leg must be tier-gated out, "
             "or this proves nothing about a leg that is not carrying"
         )
@@ -1041,7 +1080,8 @@ class _FakePacketTransport:
 
 
 def test_the_112_harness_reproduces_the_incident_through_the_real_control_pass(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     """VERIFY WITH THE HARNESS, NOT REASONING (#124's own bar).
 
@@ -1066,10 +1106,12 @@ def test_the_112_harness_reproduces_the_incident_through_the_real_control_pass(
     from tools.impairment import PolicyController
 
     transport = _FakePacketTransport(
-        rx_age={0: None, 1: 0.05}, rtt={0: None, 1: 661.0},
+        rx_age={0: None, 1: 0.05},
+        rtt={0: None, 1: 661.0},
     )
     ctl = PolicyController(
-        transport, ["leg0", "leg1"],
+        transport,
+        ["leg0", "leg1"],
         [("127.0.0.1", 51900), ("127.0.0.1", 51901)],
         state_dir=str(tmp_path),
     )
@@ -1087,19 +1129,21 @@ def test_the_112_harness_reproduces_the_incident_through_the_real_control_pass(
 
     installed: list[list] = []
     monkeypatch.setattr(
-        net, "ip_route_replace_multipath",
+        net,
+        "ip_route_replace_multipath",
         lambda hops: installed.append(list(hops)),
     )
     monkeypatch.setattr(net, "ensure_firewall", lambda ifaces, force=False: None)
     monkeypatch.setattr(
-        net, "run_or_dry",
+        net,
+        "run_or_dry",
         lambda args, **kw: subprocess.CompletedProcess(args, 0, "", ""),
     )
 
     now = [0.0]
     ctl.agent._standdown = BondStanddown(ctl.agent.config.policy, clock=lambda: now[0])
 
-    for _ in range(3):                     # bootstrap: adopt both legs
+    for _ in range(3):  # bootstrap: adopt both legs
         ctl.pass_once()
 
     # BEFORE #124: the tunnel is still delivering (leg1 answers), so the

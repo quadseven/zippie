@@ -50,22 +50,28 @@ def _agent(tmp_path, *, tls: bool) -> BondAgent:
         "dashboard_port": 0,
     }
     if tls:
-        agent.update({
-            "dashboard_tls_port": 0,
-            "dashboard_tls_cert": str(FIXTURES / "console-test.crt"),
-            "dashboard_tls_key": str(FIXTURES / "console-test.key"),
-        })
-    return BondAgent(parse_config({
-        "agent": agent,
-        "home": {
-            "endpoint": "home.example:51900",
-            "server_public_key": "c2VydmVy",
-            "address_cidr": "10.66.0.10/24",
-            "ports": [51900],
-        },
-        "policy": {"datapath": "packet", "transport_port": 51830},
-        "paths": [{"name": "att", "interface": "eth0"}],
-    }))
+        agent.update(
+            {
+                "dashboard_tls_port": 0,
+                "dashboard_tls_cert": str(FIXTURES / "console-test.crt"),
+                "dashboard_tls_key": str(FIXTURES / "console-test.key"),
+            }
+        )
+    return BondAgent(
+        parse_config(
+            {
+                "agent": agent,
+                "home": {
+                    "endpoint": "home.example:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"datapath": "packet", "transport_port": 51830},
+                "paths": [{"name": "att", "interface": "eth0"}],
+            }
+        )
+    )
 
 
 @pytest.fixture
@@ -125,9 +131,7 @@ def test_status_stays_open_on_both_listeners(served):
 
 def test_https_serves_the_configured_leaf(served):
     agent, _http, _https, context = served
-    expected = ssl.PEM_cert_to_DER_cert(
-        (FIXTURES / "console-test.crt").read_text(encoding="ascii")
-    )
+    expected = ssl.PEM_cert_to_DER_cert((FIXTURES / "console-test.crt").read_text(encoding="ascii"))
 
     connection = socket.create_connection(agent._https.server_address, timeout=5)
     with connection, context.wrap_socket(connection, server_hostname="127.0.0.1") as tls:

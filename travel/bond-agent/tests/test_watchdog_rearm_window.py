@@ -14,6 +14,7 @@ and the true in-window count was 0 - while `/api/status` and
 during an incident intervenes by hand on a remote router that was about to heal
 itself (infra#2276).
 """
+
 from __future__ import annotations
 
 import re
@@ -100,20 +101,23 @@ def test_both_numbers_are_reported_because_they_answer_different_questions(watch
     started = int(time.time()) - int(WINDOW) - 1
     _write(tmp, f"2 {started}\n")
     state = stub._watchdog_state()
-    assert state["rearms_used"] == 0          # live budget
-    assert state["rearms_recorded"] == 2      # raw file
+    assert state["rearms_used"] == 0  # live budget
+    assert state["rearms_recorded"] == 2  # raw file
     assert state["rearm_window_started_at"] == float(started)
 
 
 # ------------------------------------------------------- must never blow up
-@pytest.mark.parametrize("content,why", [
-    ("", "empty file"),
-    ("   \n", "whitespace only"),
-    ("notanumber 123\n", "count is not an integer"),
-    ("2\n", "count with no window timestamp"),
-    ("2 notatime\n", "window timestamp is not a number"),
-    ("2 1785715991 extra junk\n", "trailing fields"),
-])
+@pytest.mark.parametrize(
+    "content,why",
+    [
+        ("", "empty file"),
+        ("   \n", "whitespace only"),
+        ("notanumber 123\n", "count is not an integer"),
+        ("2\n", "count with no window timestamp"),
+        ("2 notatime\n", "window timestamp is not a number"),
+        ("2 1785715991 extra junk\n", "trailing fields"),
+    ],
+)
 def test_malformed_file_still_yields_a_usable_status(watchdog, content, why):
     """The status endpoint must not go down over a file the agent does not own.
 
@@ -157,9 +161,7 @@ def test_watchdog_rearm_window_matches_the_shell_script():
     against a different window produces a number that disagrees with the thing
     it describes, which is a subtler version of the bug this module tests.
     """
-    script = (
-        Path(__file__).resolve().parents[2] / "gl-mt3000" / "watchdog.sh"
-    )
+    script = Path(__file__).resolve().parents[2] / "gl-mt3000" / "watchdog.sh"
     assert script.is_file(), f"watchdog.sh not found at {script}"
     m = re.search(r"^REARM_WINDOW=(\d+)", script.read_text(), re.MULTILINE)
     assert m, "REARM_WINDOW not found in watchdog.sh - did it get renamed?"

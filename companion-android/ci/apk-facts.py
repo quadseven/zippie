@@ -22,6 +22,7 @@ format, a build fails rather than an install.
 
 Stdlib only, and deliberately read-only: it never writes, unpacks or executes.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -71,11 +72,11 @@ def _string_pool(chunk: bytes) -> list[str]:
                     p += 2
                 else:
                     p += 1
-            out.append(chunk[p:p + n].decode("utf-8", "replace"))
+            out.append(chunk[p : p + n].decode("utf-8", "replace"))
         else:
             n = struct.unpack_from("<H", chunk, p)[0]
             p += 2
-            out.append(chunk[p:p + n * 2].decode("utf-16-le", "replace"))
+            out.append(chunk[p : p + n * 2].decode("utf-16-le", "replace"))
     return out
 
 
@@ -94,8 +95,11 @@ def _element_attrs(axml: bytes, p: int, pool: list, res_map: list) -> dict:
             key = pool[name_idx]
         # 0x03 is TYPE_STRING, whose real value is the raw pool entry; anything
         # else (versionCode is an int) is in the typed data word.
-        out[key] = (pool[raw_idx] if data_type == 0x03 and raw_idx >= 0
-                    else struct.unpack_from("<I", axml, a + 16)[0])
+        out[key] = (
+            pool[raw_idx]
+            if data_type == 0x03 and raw_idx >= 0
+            else struct.unpack_from("<I", axml, a + 16)[0]
+        )
     return out
 
 
@@ -109,7 +113,7 @@ def manifest_facts(axml: bytes) -> dict:
         if size == 0:
             break
         if chunk_type == 0x0001:  # RES_STRING_POOL_TYPE
-            pool = _string_pool(axml[off:off + size])
+            pool = _string_pool(axml[off : off + size])
         elif chunk_type == 0x0180:  # RES_XML_RESOURCE_MAP_TYPE
             n = (size - header_size) // 4
             res_map = list(struct.unpack_from("<%dI" % n, axml, off + header_size))
@@ -128,26 +132,26 @@ def _signing_block(blob: bytes) -> bytes:
     end = len(blob) - 22
     floor = max(0, end - 65536)  # the comment field bounds how far back it can be
     for i in range(end, floor - 1, -1):
-        if blob[i:i + 4] == b"PK\x05\x06":
+        if blob[i : i + 4] == b"PK\x05\x06":
             cd_offset = struct.unpack_from("<I", blob, i + 16)[0]
             break
     else:
         raise NotAnApk("no end-of-central-directory record")
-    if blob[cd_offset - 16:cd_offset] != SIG_BLOCK_MAGIC:
+    if blob[cd_offset - 16 : cd_offset] != SIG_BLOCK_MAGIC:
         raise NotAnApk("no APK Signing Block - the APK is unsigned or v1 only")
     size_at_end = struct.unpack_from("<Q", blob, cd_offset - 24)[0]
     start = cd_offset - 8 - size_at_end
     size_at_start = struct.unpack_from("<Q", blob, start)[0]
     if size_at_start != size_at_end:
         raise NotAnApk("APK Signing Block size fields disagree - the file is damaged")
-    return blob[start + 8:cd_offset - 24]
+    return blob[start + 8 : cd_offset - 24]
 
 
 def _length_prefixed(buf: bytes):
     off = 0
     while off < len(buf):
         n = struct.unpack_from("<I", buf, off)[0]
-        yield buf[off + 4:off + 4 + n]
+        yield buf[off + 4 : off + 4 + n]
         off += 4 + n
 
 
@@ -159,7 +163,7 @@ def signer_digests(path: str) -> list[str]:
     while off < len(block):
         pair_size = struct.unpack_from("<Q", block, off)[0]
         pair_id = struct.unpack_from("<I", block, off + 8)[0]
-        value = block[off + 12:off + 8 + pair_size]
+        value = block[off + 12 : off + 8 + pair_size]
         if pair_id == V2_BLOCK_ID:
             # A truncated or malformed block must say so, not raise
             # StopIteration or IndexError out of a generator: this runs in the
@@ -203,7 +207,13 @@ def main(argv: list[str]) -> int:
     for path in paths:
         try:
             got = facts(path)
-        except (NotAnApk, KeyError, IndexError, struct.error, zipfile.BadZipFile) as exc:
+        except (
+            NotAnApk,
+            KeyError,
+            IndexError,
+            struct.error,
+            zipfile.BadZipFile,
+        ) as exc:
             sys.stderr.write("%s: %s\n" % (path, exc))
             return 1
         if as_json:

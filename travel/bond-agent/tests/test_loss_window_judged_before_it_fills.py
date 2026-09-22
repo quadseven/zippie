@@ -25,6 +25,7 @@ THE TESTS BELOW ARE DRIVEN BY THE DENOMINATOR GROWING, not by hardcoded
 percentages, so retuning `_KA_LOSS_WINDOW` or a threshold cannot silently
 desync them from what they are meant to prove.
 """
+
 from __future__ import annotations
 
 from zippie.agent import BondAgent
@@ -111,7 +112,7 @@ def test_a_leg_answering_nothing_is_down_on_the_rtt_arm_not_the_loss_arm():
     the leg is still DOWN.
     """
     assert classify_state(None, 0.0, PolicyConfig()) is PathState.DOWN
-    assert _judged(1, 1) == 0.0            # coarse: suppressed to no evidence
+    assert _judged(1, 1) == 0.0  # coarse: suppressed to no evidence
     assert classify_state(None, _judged(1, 1), PolicyConfig()) is PathState.DOWN
 
 

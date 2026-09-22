@@ -97,9 +97,17 @@ class DynamicLegs:
         self._legs: dict[str, DynamicLeg] = {}
         self._clock = clock
 
-    def announce(self, *, name: str, host: str, port: int,
-                 label: str = "", weight: int = 60, tier: int | None = None,
-                 lease_s: float = DEFAULT_LEASE_S) -> DynamicLeg:
+    def announce(
+        self,
+        *,
+        name: str,
+        host: str,
+        port: int,
+        label: str = "",
+        weight: int = 60,
+        tier: int | None = None,
+        lease_s: float = DEFAULT_LEASE_S,
+    ) -> DynamicLeg:
         """Accept or renew a leg. Raises ValueError on anything unusable.
 
         VALIDATED HARD, because this is the one path where a leg's identity
@@ -124,8 +132,12 @@ class DynamicLegs:
         lease = max(5.0, min(float(lease_s), 300.0))
 
         leg = DynamicLeg(
-            name=name, label=(label or name)[:64], host=host, port=int(port),
-            weight=int(weight), tier=(None if tier is None else int(tier)),
+            name=name,
+            label=(label or name)[:64],
+            host=host,
+            port=int(port),
+            weight=int(weight),
+            tier=(None if tier is None else int(tier)),
             expires_at=self._clock() + lease,
         )
         with self._lock:
@@ -143,7 +155,7 @@ class DynamicLegs:
         is no window where a caller sees a leg the clock has already killed."""
         now = self._clock()
         with self._lock:
-            gone = [n for n, l in self._legs.items() if l.expires_at <= now]
+            gone = [n for n, leg in self._legs.items() if leg.expires_at <= now]
             for n in gone:
                 del self._legs[n]
             return list(self._legs.values())

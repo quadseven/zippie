@@ -51,6 +51,7 @@ It is also nearly free, because weight is a SHARE and not a rate. A leg held at
 40 instead of 72 still carries; if its peers die it carries everything, whatever
 number it is holding. There is no throughput a damped rise can cost.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -94,8 +95,13 @@ def _leg(name: str = "ethernet") -> PathRuntime:
     # loss_pct MUST be explicit: PathRuntime defaults to 100.0 (and DOWN), and
     # the whole premise of #81 is a leg that loses NOTHING while being unusable.
     return PathRuntime(
-        name=name, config=cfg, interface=name, wg_iface=f"pb-{name}",
-        state=PathState.UP, loss_pct=0.0, rtt_ms=93.0,
+        name=name,
+        config=cfg,
+        interface=name,
+        wg_iface=f"pb-{name}",
+        state=PathState.UP,
+        loss_pct=0.0,
+        rtt_ms=93.0,
     )
 
 
@@ -126,10 +132,7 @@ def _pass(leg: PathRuntime, sample: float, policy: PolicyConfig) -> int:
 def _replay(policy: PolicyConfig, passes: int = PASSES_PER_MINUTE) -> list[int]:
     """The measured profile, at probe cadence, as a list of installed weights."""
     leg = _leg()
-    return [
-        _pass(leg, MEASURED_RTT_MS[i % len(MEASURED_RTT_MS)], policy)
-        for i in range(passes)
-    ]
+    return [_pass(leg, MEASURED_RTT_MS[i % len(MEASURED_RTT_MS)], policy) for i in range(passes)]
 
 
 def _changes(weights: list[int]) -> int:
@@ -145,8 +148,7 @@ def _worst_window(weights: list[int], window: int) -> int:
     """The most rises found in any `window` consecutive passes."""
     rises = _rise_passes(weights)
     return max(
-        sum(1 for r in rises if start <= r < start + window)
-        for start in range(len(weights))
+        sum(1 for r in rises if start <= r < start + window) for start in range(len(weights))
     )
 
 
@@ -309,7 +311,7 @@ def test_the_limiter_never_holds_a_leg_at_zero() -> None:
         _pass(leg, MEASURED_RTT_MS[i % len(MEASURED_RTT_MS)], pol)
     assert len(leg.weight_rise_ages) >= pol.weight_rises_per_window, "budget not spent"
 
-    leg.effective_weight = 0          # what the join gate leaves behind
+    leg.effective_weight = 0  # what the join gate leaves behind
     assert effective_weight(leg, pol) > 0, (
         "a leg carrying nothing was refused any weight because its rise budget "
         "was spent; the damper has become absorbing"
@@ -394,9 +396,7 @@ def test_nonsense_values_damp_less_never_more(kwargs) -> None:
     for months, and the failure mode of too much is a leg that cannot recover.
     """
     weights = _replay(PolicyConfig(**kwargs))
-    assert _changes(weights) >= 30, (
-        f"{kwargs} damped rather than degrading to no damping"
-    )
+    assert _changes(weights) >= 30, f"{kwargs} damped rather than degrading to no damping"
 
 
 def test_the_knobs_are_readable_from_the_config_file() -> None:
@@ -404,11 +404,14 @@ def test_the_knobs_are_readable_from_the_config_file() -> None:
     label were in the model, used by policy, and unreadable from zippie.toml).
     """
     from zippie.config import parse_config
-    cfg = parse_config({
-        "home": {"endpoint": "h:51900", "server_public_key": "c2VydmVy"},
-        "policy": {"weight_rise_window_passes": 12, "weight_rises_per_window": 7},
-        "paths": [{"name": "ethernet", "interface": "eth0"}],
-    })
+
+    cfg = parse_config(
+        {
+            "home": {"endpoint": "h:51900", "server_public_key": "c2VydmVy"},
+            "policy": {"weight_rise_window_passes": 12, "weight_rises_per_window": 7},
+            "paths": [{"name": "ethernet", "interface": "eth0"}],
+        }
+    )
     assert cfg.policy.weight_rise_window_passes == 12
     assert cfg.policy.weight_rises_per_window == 7
 
@@ -427,14 +430,25 @@ def test_apply_policy_advances_the_budget(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr(agentmod.net, "ensure_firewall", lambda *a, **k: None)
     monkeypatch.setattr(agentmod.net, "ip_route_replace_multipath", lambda *a, **k: None)
-    a = BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path / "s"),
-                  "run_dir": str(tmp_path / "r")},
-        "home": {"endpoint": "h:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"mode": "aggregate"},
-        "paths": [{"name": "ethernet", "interface": "eth0"}],
-    }))
+    a = BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path / "s"),
+                    "run_dir": str(tmp_path / "r"),
+                },
+                "home": {
+                    "endpoint": "h:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"mode": "aggregate"},
+                "paths": [{"name": "ethernet", "interface": "eth0"}],
+            }
+        )
+    )
     leg = a.paths[0]
     leg.interface, leg.wg_iface = "eth0", "pb0"
     leg.state, leg.loss_pct, leg.rtt_ms = PathState.UP, 0.0, 54.0
@@ -461,8 +475,8 @@ def test_the_console_reports_how_much_budget_is_left(tmp_path) -> None:
     assert leg.to_dict()["weight_rises_in_window"] > 0
 
     import zippie.telemetry as tel
-    status = {"mode": "aggregate", "primary": leg.name, "uptime_s": 1.0,
-              "paths": [leg.to_dict()]}
+
+    status = {"mode": "aggregate", "primary": leg.name, "uptime_s": 1.0, "paths": [leg.to_dict()]}
     series = {name: value for name, value, _tags in tel._samples(status)}
     assert series["path.weight_rises_in_window"] == len(leg.weight_rise_ages), (
         "the budget is on the console but not in the metrics, so nobody watching "

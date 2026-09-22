@@ -2,13 +2,13 @@
 
 Proves the control plane works without real WANs, WireGuard, or root.
 """
+
 from __future__ import annotations
 
 import json
 import os
 import subprocess
 import sys
-import threading
 import time
 import urllib.request
 from dataclasses import dataclass
@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from zippie.agent import BondAgent, load_wifi_secrets
-from zippie.config import load_client_bundle, load_config
+from zippie.agent import BondAgent
+from zippie.config import load_config
 from zippie.models import BondMode, PathState
 from zippie import net as netmod
 
@@ -55,9 +55,15 @@ class FakeWorld:
 
     def __init__(self) -> None:
         self.links: list[FakeLink] = [
-            FakeLink("wlan0", ssid="STARLINK", addr_info=[{"family": "inet", "local": "192.168.1.50"}]),
-            FakeLink("wlan1", ssid="PHONE-TMO", addr_info=[{"family": "inet", "local": "192.168.43.2"}]),
-            FakeLink("wlan2", ssid="PHONE-VZ", addr_info=[{"family": "inet", "local": "192.168.42.2"}]),
+            FakeLink(
+                "wlan0", ssid="STARLINK", addr_info=[{"family": "inet", "local": "192.168.1.50"}]
+            ),
+            FakeLink(
+                "wlan1", ssid="PHONE-TMO", addr_info=[{"family": "inet", "local": "192.168.43.2"}]
+            ),
+            FakeLink(
+                "wlan2", ssid="PHONE-VZ", addr_info=[{"family": "inet", "local": "192.168.42.2"}]
+            ),
         ]
         # path name -> (rtt_ms, loss_pct) keyed later by iface mapping in probes
         self.path_health: dict[str, tuple[float | None, float]] = {
@@ -74,7 +80,7 @@ class FakeWorld:
         # also drop the SSID link for realism
         ssid_map = {"starlink": "STARLINK", "tmobile": "PHONE-TMO", "verizon": "PHONE-VZ"}
         ssid = ssid_map.get(name)
-        self.links = [l for l in self.links if l.ssid != ssid]
+        self.links = [link for link in self.links if link.ssid != ssid]
 
     def degrade_path(self, name: str, rtt: float = 250.0, loss: float = 8.0) -> None:
         self.path_health[name] = (rtt, loss)
@@ -339,8 +345,6 @@ def test_dashboard_api(provisioned, monkeypatch):
     agent.apply_policy()
 
     # bind ephemeral
-    from http.server import ThreadingHTTPServer
-    from zippie.agent import BondAgent as BA
 
     agent.start_dashboard()
     assert agent._http is not None
@@ -349,7 +353,7 @@ def test_dashboard_api(provisioned, monkeypatch):
     url = f"http://127.0.0.1:{port}/api/status"
     # allow server thread to start
     time.sleep(0.05)
-    with urllib.request.urlopen(url, timeout=2) as resp:
+    with urllib.request.urlopen(url, timeout=2) as resp:  # noqa: S310
         body = json.loads(resp.read().decode())
     assert body["version"]
     assert len(body["paths"]) == 3
@@ -377,9 +381,7 @@ def test_degraded_starlink_still_used_but_downweighted(provisioned, monkeypatch)
     assert star.effective_weight > 0
 
 
-def test_addr_loss_withdraws_the_dead_link_without_waiting_for_probes(
-    provisioned, monkeypatch
-):
+def test_addr_loss_withdraws_the_dead_link_without_waiting_for_probes(provisioned, monkeypatch):
     """The whole point of the monitor: the route changes on the EVENT.
 
     No probe may run between the address-loss callback and the reinstalled
@@ -427,9 +429,7 @@ def test_addr_loss_withdraws_the_dead_link_without_waiting_for_probes(
     assert counts == [("addr_loss_withdrawn", 1, ["interface:wlan0", "path:starlink"])]
 
 
-def test_addr_loss_on_the_last_link_withdraws_the_bonded_route(
-    provisioned, monkeypatch
-):
+def test_addr_loss_on_the_last_link_withdraws_the_bonded_route(provisioned, monkeypatch):
     world = FakeWorld()
     cfg = provisioned["cfg"]
     cfg.policy.mode = BondMode.AGGREGATE
@@ -449,9 +449,7 @@ def test_addr_loss_on_the_last_link_withdraws_the_bonded_route(
     assert world.routes[-1] == [], world.routes[-3:]
 
 
-def test_addr_loss_for_an_unbonded_interface_changes_nothing(
-    provisioned, monkeypatch
-):
+def test_addr_loss_for_an_unbonded_interface_changes_nothing(provisioned, monkeypatch):
     world = FakeWorld()
     agent = BondAgent(provisioned["cfg"])
     _install_fakes(monkeypatch, world, agent)
@@ -502,9 +500,7 @@ def test_status_reports_monitor_liveness(provisioned, monkeypatch):
     assert agent.status_dict()["addr_monitor_alive"] is False
 
 
-def test_interface_glob_binds_whatever_iface_the_hotspot_landed_on(
-    provisioned, monkeypatch
-):
+def test_interface_glob_binds_whatever_iface_the_hotspot_landed_on(provisioned, monkeypatch):
     """SSIDs are user-editable at any moment and must never be load-bearing.
 
     The hotspot was renamed mid-trip on 2026-07-30 and the SSID-matched path
@@ -570,9 +566,9 @@ def test_reserve_tier_firewall_is_preprovisioned_and_promotion_is_route_only(
     agent = _bonded_agent(provisioned, monkeypatch, world, cfg)
 
     verizon = next(p for p in agent.paths if p.name == "verizon")
-    assert verizon.wg_iface not in {
-        d for d, _w in _multipath_installs(world.routes)[-1]
-    }, "reserve carries nothing"
+    assert verizon.wg_iface not in {d for d, _w in _multipath_installs(world.routes)[-1]}, (
+        "reserve carries nothing"
+    )
     assert verizon.wg_iface in _iptables_out_ifaces(world.routes), (
         "reserve chains must exist BEFORE promotion, not be built during it"
     )
@@ -587,9 +583,7 @@ def test_reserve_tier_firewall_is_preprovisioned_and_promotion_is_route_only(
     assert promoted and promoted[-1] == [(verizon.wg_iface, verizon.effective_weight)]
 
 
-def test_steady_state_loop_does_not_rebuild_the_firewall_every_pass(
-    provisioned, monkeypatch
-):
+def test_steady_state_loop_does_not_rebuild_the_firewall_every_pass(provisioned, monkeypatch):
     """The declarative rebuild costs ~20 iptables execs (~1.8s live); an
     unchanged iface set must cost zero."""
     world = FakeWorld()
@@ -649,9 +643,9 @@ def test_add_path_mints_one_new_peer_for_an_existing_client(provisioned):
     names = [p["name"] for p in meta["clients"]["smoke-pi"]["paths"]]
     assert names == ["starlink", "tmobile", "verizon", "ethernet"]
     assert meta["next_host_octet"] == 6, "octet advanced past the new peer"
-    assert path["private_key"] not in (home_state / "server.json").read_text(
-        encoding="utf-8"
-    ), "server state must never hold a client private key"
+    assert path["private_key"] not in (home_state / "server.json").read_text(encoding="utf-8"), (
+        "server state must never hold a client private key"
+    )
 
 
 def test_add_path_refuses_duplicates_and_unknown_clients(provisioned):
@@ -668,9 +662,7 @@ def test_add_path_refuses_duplicates_and_unknown_clients(provisioned):
     assert conf.count("[Peer]") == 4, "failed calls must not append peers"
 
 
-def test_route_loss_withdraws_and_requests_one_cooldown_guarded_renew(
-    provisioned, monkeypatch
-):
+def test_route_loss_withdraws_and_requests_one_cooldown_guarded_renew(provisioned, monkeypatch):
     """Default-route loss on a live uplink: withdraw like address loss AND
     ask netifd to renew - the lease stays valid after an upstream renumber,
     so nothing else ever re-adds the route (#2106, three manual recoveries
@@ -685,7 +677,8 @@ def test_route_loss_withdraws_and_requests_one_cooldown_guarded_renew(
     renews = []
     monkeypatch.setattr(netmod, "netifd_renew", lambda ifn: renews.append(ifn) or True)
     monkeypatch.setattr(
-        netmod, "ping_rtt_ms",
+        netmod,
+        "ping_rtt_ms",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no probes on the event path")),
     )
 
@@ -743,9 +736,7 @@ def test_status_carries_runtime_identity(provisioned, monkeypatch):
     assert status["config_sha256"] == hashlib.sha256(cfg_file.read_bytes()).hexdigest()
 
 
-def test_pin_failure_escalates_renew_then_bounce_with_cooldown(
-    provisioned, monkeypatch
-):
+def test_pin_failure_escalates_renew_then_bounce_with_cooldown(provisioned, monkeypatch):
     """GL's multi-WAN daemon owns the uplink default (proto static) and
     ignores DHCP renews - measured live 2026-07-30: renew acked, route
     absent 8 minutes until a manual ifup. The ladder goes renew -> bounce,
@@ -791,15 +782,21 @@ def test_flapped_leg_is_held_out_until_streak_proves_it(provisioned, monkeypatch
     assert star.effective_weight > 0, "startup join is exempt from the gate"
 
     world.kill_path("starlink")
-    agent.match_interfaces(); agent.probe_paths(); agent.apply_policy()
+    agent.match_interfaces()
+    agent.probe_paths()
+    agent.apply_policy()
     assert star.effective_weight == 0
 
     # Link comes back healthy - but it must now prove itself.
-    world.links.append(FakeLink("wlan0", ssid="STARLINK",
-                                addr_info=[{"family": "inet", "local": "192.168.1.50"}]))
+    world.links.append(
+        FakeLink("wlan0", ssid="STARLINK", addr_info=[{"family": "inet", "local": "192.168.1.50"}])
+    )
     world.path_health["starlink"] = (45.0, 0.0)
     for expected_held in (True, True, False):  # passes 1,2 held; pass 3 admits
-        agent.match_interfaces(); agent.ensure_tunnels(); agent.probe_paths(); agent.apply_policy()
+        agent.match_interfaces()
+        agent.ensure_tunnels()
+        agent.probe_paths()
+        agent.apply_policy()
         if expected_held:
             assert star.effective_weight == 0, "held out while streak builds"
             assert "held out of bond" in (star.last_error or "")
@@ -818,16 +815,22 @@ def test_degraded_passes_build_streak_at_half_rate(provisioned, monkeypatch):
     star = next(p for p in agent.paths if p.name == "starlink")
 
     world.kill_path("starlink")
-    agent.match_interfaces(); agent.probe_paths(); agent.apply_policy()
-    world.links.append(FakeLink("wlan0", ssid="STARLINK",
-                                addr_info=[{"family": "inet", "local": "192.168.1.50"}]))
+    agent.match_interfaces()
+    agent.probe_paths()
+    agent.apply_policy()
+    world.links.append(
+        FakeLink("wlan0", ssid="STARLINK", addr_info=[{"family": "inet", "local": "192.168.1.50"}])
+    )
     # Degraded revival: rtt unknown but carrying (ICMP-filtered class) - must
     # still be able to rejoin, just slower (0.5/pass -> 4 passes for 2.0).
     world.path_health["starlink"] = (None, 0.0)
     monkeypatch.setattr(netmod, "tunnel_is_carrying", lambda *a, **k: True)
     held = []
     for _ in range(4):
-        agent.match_interfaces(); agent.ensure_tunnels(); agent.probe_paths(); agent.apply_policy()
+        agent.match_interfaces()
+        agent.ensure_tunnels()
+        agent.probe_paths()
+        agent.apply_policy()
         held.append(star.effective_weight == 0)
     assert held == [True, True, True, False], held
 
@@ -866,7 +869,7 @@ def test_series_endpoint_is_capped_and_gzipped(provisioned, monkeypatch):
             f"http://127.0.0.1:{port}/api/series",
             headers={"Accept-Encoding": "gzip"},
         )
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310
             wire = resp.read()
             encoding = resp.headers.get("Content-Encoding")
             vary = resp.headers.get("Vary")
@@ -909,9 +912,7 @@ def test_series_endpoint_serves_plain_json_without_accept_encoding(provisioned, 
     try:
         port = agent._http.server_address[1]
         time.sleep(0.05)
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/api/series", timeout=5
-        ) as resp:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/series", timeout=5) as resp:
             assert resp.headers.get("Content-Encoding") is None
             body = json.loads(resp.read().decode())
         assert len(body["points"]) <= 180

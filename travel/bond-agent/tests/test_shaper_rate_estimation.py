@@ -11,6 +11,7 @@ the very next burst on a link that was never actually limited.
 floor behaviour agent.py depends on to avoid re-applying on every tick's
 throughput noise.
 """
+
 from __future__ import annotations
 
 import math
@@ -50,8 +51,7 @@ def test_capacity_decays_toward_observed_over_a_long_idle_span():
     est.observe(rx_bps=8_000_000.0, tx_bps=0.0, now=0.0)
     est.observe(rx_bps=0.0, tx_bps=0.0, now=600.0)  # 10 decay constants
     assert est.download_bps < 8_000_000.0 * math.exp(-9), (
-        f"ten decay constants of silence left {est.download_bps}, "
-        f"barely decayed at all"
+        f"ten decay constants of silence left {est.download_bps}, barely decayed at all"
     )
 
 
@@ -134,8 +134,9 @@ def test_target_is_a_fraction_of_summed_capacity_across_carrying_legs():
 
 
 def test_a_small_change_within_the_hysteresis_band_is_suppressed():
-    ctl = ShaperRateController(capacity_fraction=1.0, min_download_kbit=0.0,
-                               min_upload_kbit=0.0, hysteresis_pct=20.0)
+    ctl = ShaperRateController(
+        capacity_fraction=1.0, min_download_kbit=0.0, min_upload_kbit=0.0, hysteresis_pct=20.0
+    )
     ctl.update({"leg0": (10_000_000.0, 1_000_000.0)}, now=0.0)
     # A rise from 10 to 11 Mbit is 10% - inside the 20% band.
     result = ctl.update({"leg0": (11_000_000.0, 1_000_000.0)}, now=1.0)
@@ -143,8 +144,9 @@ def test_a_small_change_within_the_hysteresis_band_is_suppressed():
 
 
 def test_a_change_past_the_hysteresis_band_is_applied():
-    ctl = ShaperRateController(capacity_fraction=1.0, min_download_kbit=0.0,
-                               min_upload_kbit=0.0, hysteresis_pct=20.0)
+    ctl = ShaperRateController(
+        capacity_fraction=1.0, min_download_kbit=0.0, min_upload_kbit=0.0, hysteresis_pct=20.0
+    )
     ctl.update({"leg0": (10_000_000.0, 1_000_000.0)}, now=0.0)
     result = ctl.update({"leg0": (15_000_000.0, 1_000_000.0)}, now=1.0)
     assert result is not None, "a 50% move past a 20% band was suppressed"
@@ -155,8 +157,9 @@ def test_membership_change_forces_a_reapply_within_the_band():
     """Re-apply on leg join/leave, not only on a sustained change (#41's own
     words) - a new leg joining must count immediately even if the AGGREGATE
     total happens to move by less than the hysteresis band."""
-    ctl = ShaperRateController(capacity_fraction=1.0, min_download_kbit=0.0,
-                               min_upload_kbit=0.0, hysteresis_pct=99.0)
+    ctl = ShaperRateController(
+        capacity_fraction=1.0, min_download_kbit=0.0, min_upload_kbit=0.0, hysteresis_pct=99.0
+    )
     ctl.update({"leg0": (10_000_000.0, 1_000_000.0)}, now=0.0)
     # Same total, but leg1 replaces leg0 - a 99% band would otherwise suppress this.
     result = ctl.update({"leg1": (10_000_000.0, 1_000_000.0)}, now=1.0)
@@ -164,8 +167,9 @@ def test_membership_change_forces_a_reapply_within_the_band():
 
 
 def test_floors_hold_even_when_every_leg_is_silent():
-    ctl = ShaperRateController(capacity_fraction=0.85, min_download_kbit=1000.0,
-                               min_upload_kbit=500.0)
+    ctl = ShaperRateController(
+        capacity_fraction=0.85, min_download_kbit=1000.0, min_upload_kbit=500.0
+    )
     down_kbit, up_kbit = ctl.update({"leg0": (0.0, 0.0)}, now=0.0)
     assert down_kbit == 1000.0
     assert up_kbit == 500.0
@@ -178,8 +182,9 @@ def test_an_out_of_range_fraction_clamps_to_the_reasoned_default_not_to_one():
 
 
 def test_force_reapply_makes_the_next_update_ignore_the_band():
-    ctl = ShaperRateController(capacity_fraction=1.0, min_download_kbit=0.0,
-                               min_upload_kbit=0.0, hysteresis_pct=99.0)
+    ctl = ShaperRateController(
+        capacity_fraction=1.0, min_download_kbit=0.0, min_upload_kbit=0.0, hysteresis_pct=99.0
+    )
     ctl.update({"leg0": (10_000_000.0, 1_000_000.0)}, now=0.0)
     assert ctl.update({"leg0": (10_100_000.0, 1_000_000.0)}, now=1.0) is None
     ctl.force_reapply()
@@ -188,8 +193,9 @@ def test_force_reapply_makes_the_next_update_ignore_the_band():
 
 
 def test_a_leg_that_leaves_the_bond_stops_counting_toward_the_total():
-    ctl = ShaperRateController(capacity_fraction=1.0, min_download_kbit=0.0,
-                               min_upload_kbit=0.0, hysteresis_pct=0.0)
+    ctl = ShaperRateController(
+        capacity_fraction=1.0, min_download_kbit=0.0, min_upload_kbit=0.0, hysteresis_pct=0.0
+    )
     ctl.update({"leg0": (10_000_000.0, 0.0), "leg1": (5_000_000.0, 0.0)}, now=0.0)
     down_kbit, _ = ctl.update({"leg0": (10_000_000.0, 0.0)}, now=1.0)
     assert down_kbit == 10_000.0, "a leg that left the bond still counted toward capacity"
@@ -198,9 +204,13 @@ def test_a_leg_that_leaves_the_bond_stops_counting_toward_the_total():
 def test_a_legs_own_peak_survives_a_brief_absence_from_the_bond():
     """A leg's estimator persists across membership changes - it left the
     bond, it did not un-prove what it already showed it can carry."""
-    ctl = ShaperRateController(capacity_fraction=1.0, min_download_kbit=0.0,
-                               min_upload_kbit=0.0, hysteresis_pct=0.0,
-                               decay_s=300.0)
+    ctl = ShaperRateController(
+        capacity_fraction=1.0,
+        min_download_kbit=0.0,
+        min_upload_kbit=0.0,
+        hysteresis_pct=0.0,
+        decay_s=300.0,
+    )
     ctl.update({"leg0": (10_000_000.0, 0.0)}, now=0.0)
     ctl.update({}, now=1.0)  # leg0 briefly out of the bond
     down_kbit, _ = ctl.update({"leg0": (0.0, 0.0)}, now=2.0)  # rejoins, quiet so far

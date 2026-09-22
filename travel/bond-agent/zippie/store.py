@@ -327,12 +327,20 @@ class UsageStore:
                 # migration of a counter that has been running since it was
                 # first written.
                 if rec.period_start:
-                    log.warning("leg %s: unreadable period_start %r; adopting %s",
-                                name, rec.period_start, stamp)
+                    log.warning(
+                        "leg %s: unreadable period_start %r; adopting %s",
+                        name,
+                        rec.period_start,
+                        stamp,
+                    )
                 else:
-                    log.info("leg %s: %.3f GB has no period recorded; adopting it into "
-                             "the period starting %s rather than discarding it",
-                             name, gb, stamp)
+                    log.info(
+                        "leg %s: %.3f GB has no period recorded; adopting it into "
+                        "the period starting %s rather than discarding it",
+                        name,
+                        gb,
+                        stamp,
+                    )
                 rec.period_start = stamp
                 continue
             if start <= stored:
@@ -342,8 +350,13 @@ class UsageStore:
             rec.usage_gb = 0.0
             rec.period_start = stamp
             out[name] = 0.0
-            log.info("leg %s: usage period rolled %s -> %s; %.3f GB kept as the previous period",
-                     name, rec.previous_period_start, stamp, rec.previous_usage_gb)
+            log.info(
+                "leg %s: usage period rolled %s -> %s; %.3f GB kept as the previous period",
+                name,
+                rec.previous_period_start,
+                stamp,
+                rec.previous_usage_gb,
+            )
         return out
 
     def mark_dirty(self) -> None:
@@ -405,8 +418,16 @@ class LegStore:
     #: Fields an operator may override. Deliberately a whitelist - an arbitrary
     #: key would let a typo silently shadow config, and there is no schema
     #: check on a hand-edited file.
-    OVERRIDABLE = {"tier", "priority", "weight", "max_kbps", "monthly_cap_gb",
-                   "cost_class", "label", "enabled"}
+    OVERRIDABLE = {
+        "tier",
+        "priority",
+        "weight",
+        "max_kbps",
+        "monthly_cap_gb",
+        "cost_class",
+        "label",
+        "enabled",
+    }
     #: The carrier's cycle day. NOT descriptive and not overridable: it names
     #: no field of PathConfig, so nothing copies it onto a leg's config, but it
     #: decides which billing period usage is counted against and therefore when
@@ -450,7 +471,7 @@ class LegStore:
         entry = dict(legs.get(name) or {})
         for k, v in fields.items():
             if v is None:
-                entry.pop(k, None)   # explicit null clears an override
+                entry.pop(k, None)  # explicit null clears an override
             else:
                 entry[k] = v
         legs[name] = entry

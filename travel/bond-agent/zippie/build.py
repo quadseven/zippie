@@ -25,6 +25,7 @@ only part a deploy can lie about; the fingerprint is recomputed from the files
 every time it is asked for, so a stale or forged stamp shows up as a mismatch
 rather than as agreement.
 """
+
 from __future__ import annotations
 
 import hashlib

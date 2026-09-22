@@ -19,6 +19,7 @@ over. That is the exact self-severing shape that took this router down twice on
 2026-08-24 and needed a physical power cycle both times. The setting must be
 committed and left for a restart somebody else causes.
 """
+
 from __future__ import annotations
 
 import re
@@ -56,10 +57,10 @@ def test_the_value_is_read_back(body: str, radio: str) -> None:
 
     A `uci set` that silently did not stick looks exactly like success.
     """
-    assert re.search(r"uci -q get wireless\.\$\{radio\}\.random_bssid", body) or \
-        f"uci -q get wireless.{radio}.random_bssid" in body, (
-        "the deploy must read the value back rather than trust the set"
-    )
+    assert (
+        re.search(r"uci -q get wireless\.\$\{radio\}\.random_bssid", body)
+        or f"uci -q get wireless.{radio}.random_bssid" in body
+    ), "the deploy must read the value back rather than trust the set"
 
 
 def test_the_deploy_never_reloads_wifi(body: str) -> None:
@@ -86,7 +87,5 @@ def test_a_failed_pin_stops_the_deploy(body: str) -> None:
     # Anchored on the CODE, not the first mention. The comment above it is long,
     # and a window measured from there tests the prose rather than the script.
     idx = body.index("uci set wireless.mt798111.random_bssid=0")
-    window = body[idx:idx + 1200]
-    assert "die" in window, (
-        "a random_bssid that did not stick must fail the deploy, not be logged"
-    )
+    window = body[idx : idx + 1200]
+    assert "die" in window, "a random_bssid that did not stick must fail the deploy, not be logged"

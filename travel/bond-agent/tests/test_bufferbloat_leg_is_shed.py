@@ -29,6 +29,7 @@ transport that reassembles in order is the bad case, not the acceptable one.
 So the gap this file pins is: a leg whose latency is wildly unstable must be
 shed on the strength of its TAIL, not excused by its MEAN.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -57,15 +58,49 @@ from zippie.policy import (
 # test_the_mean_hides_the_tail asserts exactly that, and caught an earlier
 # draft of this profile that was too aggressive to be representative.
 BLOATED_PROFILE = [
-    83.0, 93.0, 54.0, 370.0, 73.0, 148.0, 54.0, 402.0,
-    62.0, 524.0, 71.0, 148.0, 58.0, 407.0, 66.0, 93.0,
-    54.0, 370.0, 73.0, 148.0,
+    83.0,
+    93.0,
+    54.0,
+    370.0,
+    73.0,
+    148.0,
+    54.0,
+    402.0,
+    62.0,
+    524.0,
+    71.0,
+    148.0,
+    58.0,
+    407.0,
+    66.0,
+    93.0,
+    54.0,
+    370.0,
+    73.0,
+    148.0,
 ]
 # The hotspot over the same window: unremarkable and steady.
 HEALTHY_PROFILE = [
-    58.0, 54.0, 50.0, 64.0, 77.0, 70.0, 55.0, 61.0,
-    53.0, 57.0, 59.0, 52.0, 56.0, 60.0, 54.0, 58.0,
-    55.0, 62.0, 51.0, 57.0,
+    58.0,
+    54.0,
+    50.0,
+    64.0,
+    77.0,
+    70.0,
+    55.0,
+    61.0,
+    53.0,
+    57.0,
+    59.0,
+    52.0,
+    56.0,
+    60.0,
+    54.0,
+    58.0,
+    55.0,
+    62.0,
+    51.0,
+    57.0,
 ]
 
 
@@ -81,8 +116,12 @@ def _leg(name: str, tier: int = 1) -> PathRuntime:
     # so a leg built without it is a dead leg wearing an UP label - which would
     # make the zero-loss premise of this whole file vacuously false.
     return PathRuntime(
-        name=name, config=cfg, interface=name,
-        state=PathState.UP, loss_pct=0.0, rtt_ms=60.0,
+        name=name,
+        config=cfg,
+        interface=name,
+        state=PathState.UP,
+        loss_pct=0.0,
+        rtt_ms=60.0,
     )
 
 
@@ -215,9 +254,7 @@ def test_a_recovered_leg_can_rejoin(bonded_pair) -> None:
         for good_s in HEALTHY_PROFILE:
             _pass([bad, good], [55.0, good_s], policy)
     carrying = {p.name for p in packet_mode_legs([bad, good])}
-    assert carrying == {"ethernet", "hotspot"}, (
-        f"the recovered leg did not rejoin; got {carrying}"
-    )
+    assert carrying == {"ethernet", "hotspot"}, f"the recovered leg did not rejoin; got {carrying}"
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +295,7 @@ def test_recovery_cost_scales_with_how_bad_the_spike_was() -> None:
     one: a single good sample never readmits a leg, and sustained bloat produces
     no oscillation at all.
     """
+
     def _passes_to_rejoin(spike: float) -> int:
         # INTERMITTENT, one spike in five. A leg held at a high latency
         # CONSTANTLY is a different failure and the existing 400 ms failover
@@ -304,15 +342,29 @@ def test_recovery_cost_scales_with_how_bad_the_spike_was() -> None:
 def _agent(tmp_path):
     from zippie.agent import BondAgent
     from zippie.config import parse_config
-    return BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path / "s"),
-                  "run_dir": str(tmp_path / "r")},
-        "home": {"endpoint": "home.example:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
-        "paths": [{"name": "ethernet", "interface": "eth0"},
-                  {"name": "hotspot", "interface": "wlan0"}],
-    }))
+
+    return BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path / "s"),
+                    "run_dir": str(tmp_path / "r"),
+                },
+                "home": {
+                    "endpoint": "home.example:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
+                "paths": [
+                    {"name": "ethernet", "interface": "eth0"},
+                    {"name": "hotspot", "interface": "wlan0"},
+                ],
+            }
+        )
+    )
 
 
 def _wired_agent(tmp_path, monkeypatch):
@@ -373,9 +425,7 @@ def test_sync_transport_stops_the_shed_leg_carrying(tmp_path, monkeypatch) -> No
     assert links[bad]["weight"] == 0, "a shed leg must not hold a weight either"
 
 
-def test_a_shed_leg_stays_in_the_transport_so_it_keeps_being_probed(
-    tmp_path, monkeypatch
-) -> None:
+def test_a_shed_leg_stays_in_the_transport_so_it_keeps_being_probed(tmp_path, monkeypatch) -> None:
     """THE ABSORBING BUG, and the reason `usable` and `carrying` are separate.
 
     The first version dropped a shed leg from the transport entirely. That looks
@@ -397,9 +447,7 @@ def test_a_shed_leg_stays_in_the_transport_so_it_keeps_being_probed(
         "the shed leg was removed from the transport, so it will never be "
         "probed again and its tail can never decay - shedding is absorbing"
     )
-    assert links[bad]["healthy"] is False, (
-        "it must still be a link, but must not be carrying"
-    )
+    assert links[bad]["healthy"] is False, "it must still be a link, but must not be carrying"
 
 
 # ---------------------------------------------------------------------------

@@ -31,8 +31,12 @@ def test_datapath_parses_from_config():
     cfg = parse_config(
         {
             "home": {"endpoint": "h.example", "server_public_key": "k"},
-            "policy": {"datapath": "packet", "transport_port": 51830,
-                       "reorder_deadline_ms": 300, "transport_roam": True},
+            "policy": {
+                "datapath": "packet",
+                "transport_port": 51830,
+                "reorder_deadline_ms": 300,
+                "transport_roam": True,
+            },
             "paths": [{"name": "eth", "interface": "eth0"}],
         }
     )
@@ -69,6 +73,7 @@ def test_bad_datapath_fails_loud():
 
 
 # ---- endpoint roaming (the home-side primitive) ------------------------
+
 
 class _FakeSock:
     """Records sendto targets; feeds queued datagrams to recvfrom."""
@@ -156,8 +161,9 @@ def test_roam_updates_link_remote_to_source():
     """A home-side link follows the travel router across ISPs: a frame arriving
     from a new source makes replies go back there."""
     t, socks = _transport(roam=True)
-    t.add_link(LinkEndpoint(path_id=0, name="wan", device=None,
-                            remote=("1.1.1.1", 51901), weight=100))
+    t.add_link(
+        LinkEndpoint(path_id=0, name="wan", device=None, remote=("1.1.1.1", 51901), weight=100)
+    )
     link_sock = socks[-1]
 
     link_sock.feed(_framed(0, 0, b"hello"), ("203.0.113.9", 40000))
@@ -170,8 +176,9 @@ def test_no_roam_keeps_fixed_remote():
     """The travel side dials fixed remotes and must NOT roam - a spoofed source
     could otherwise redirect its traffic."""
     t, socks = _transport(roam=False)
-    t.add_link(LinkEndpoint(path_id=0, name="eth", device=None,
-                            remote=("1.1.1.1", 51901), weight=100))
+    t.add_link(
+        LinkEndpoint(path_id=0, name="eth", device=None, remote=("1.1.1.1", 51901), weight=100)
+    )
     link_sock = socks[-1]
 
     link_sock.feed(_framed(0, 0, b"hello"), ("203.0.113.9", 40000))
@@ -190,12 +197,15 @@ def test_stats_dict_shape():
 
 # ------------------------------------------------- adopt any uplink, safely --
 
+
 class _L:
     """Minimal LinkInfo stand-in."""
+
     def __init__(self, ifname, v4=True, state="UP", ssid=None):
         self.ifname, self.operstate, self.ssid = ifname, state, ssid
         self.addr_info = [{"family": "inet", "local": "1.2.3.4"}] if v4 else []
         self.is_wireless = ssid is not None
+
     @property
     def has_v4(self):
         return any(a.get("family") == "inet" for a in self.addr_info)
@@ -206,8 +216,9 @@ def test_any_match_never_adopts_the_lan_bridge():
     on the travel router carries 10.99.0.1. Adopting it bonds the router through its own
     LAN - a loop whose traffic exits via the very uplinks being balanced."""
     from zippie.agent import BondAgent
+
     links = [_L("br-lan"), _L("apclix0", ssid="_HOTEL")]
-    gateways = {"apclix0": "10.3.0.1"}          # br-lan has none: we ARE its gw
+    gateways = {"apclix0": "10.3.0.1"}  # br-lan has none: we ARE its gw
     got = BondAgent._match_by_any(links, set(), gateways)
     assert got is not None and got.ifname == "apclix0", "adopted the LAN bridge"
 
@@ -215,6 +226,7 @@ def test_any_match_never_adopts_the_lan_bridge():
 def test_any_match_adopts_whatever_uplink_is_present():
     """A hotel, a hotspot, Starlink - a leg is a SLOT, not a named device."""
     from zippie.agent import BondAgent
+
     for iface, ssid in (("apclix0", "HotelGuest"), ("eth0", None), ("wwan0", None)):
         got = BondAgent._match_by_any([_L(iface, ssid=ssid)], set(), {iface: "192.168.1.1"})
         assert got is not None and got.ifname == iface, f"{iface} was not adopted"
@@ -223,6 +235,7 @@ def test_any_match_adopts_whatever_uplink_is_present():
 def test_any_match_skips_an_interface_already_claimed():
     """Two 'any' slots must not both land on one uplink."""
     from zippie.agent import BondAgent
+
     links = [_L("apclix0"), _L("eth2")]
     gws = {"apclix0": "10.3.0.1", "eth2": "192.168.1.1"}
     first = BondAgent._match_by_any(links, set(), gws)
@@ -234,33 +247,40 @@ def test_a_gatewayless_uplink_is_not_adopted():
     """A link that cannot say where to send a packet is not an uplink - the
     same multi-access trap _pin_endpoint_route already refuses."""
     from zippie.agent import BondAgent
+
     assert BondAgent._match_by_any([_L("eth2")], set(), {}) is None
 
 
 def test_an_interface_with_no_address_is_not_adopted():
     from zippie.agent import BondAgent
+
     assert BondAgent._match_by_any([_L("eth0", v4=False)], set(), {"eth0": "1.1.1.1"}) is None
 
 
 # ------------------------------------------------------- hijack primitives --
 
-@pytest.mark.parametrize("addr,private", [
-    ("192.168.3.95", True),    # the actual hijacked answer, 2026-08-02
-    ("10.99.0.1", True),
-    ("172.16.4.4", True),
-    ("172.32.4.4", False),     # just OUTSIDE 172.16/12 - the classic off-by-one
-    ("100.100.100.100", True),  # CGNAT / tailscale
-    ("100.128.0.1", False),    # outside 100.64/10
-    ("169.254.1.1", True),     # link-local
-    ("127.0.0.1", True),
-    ("203.0.113.33", False),   # home's real address
-    ("8.8.8.8", False),
-    (None, False),
-    ("not-an-ip", False),
-    ("999.1.1.1", False),
-])
+
+@pytest.mark.parametrize(
+    "addr,private",
+    [
+        ("192.168.3.95", True),  # the actual hijacked answer, 2026-08-02
+        ("10.99.0.1", True),
+        ("172.16.4.4", True),
+        ("172.32.4.4", False),  # just OUTSIDE 172.16/12 - the classic off-by-one
+        ("100.100.100.100", True),  # CGNAT / tailscale
+        ("100.128.0.1", False),  # outside 100.64/10
+        ("169.254.1.1", True),  # link-local
+        ("127.0.0.1", True),
+        ("203.0.113.33", False),  # home's real address
+        ("8.8.8.8", False),
+        (None, False),
+        ("not-an-ip", False),
+        ("999.1.1.1", False),
+    ],
+)
 def test_private_address_detection(addr, private):
     from zippie import net
+
     assert net.is_private_v4(addr) is private, addr
 
 
@@ -279,9 +299,12 @@ def test_auth_rung_parses_from_config():
     cfg = parse_config(
         {
             "home": {"endpoint": "h.example", "server_public_key": "k"},
-            "policy": {"datapath": "packet", "auth_level": "require",
-                       "auth_key_file": "/etc/zippie/bond.key",
-                       "auth_peer_id": 9},
+            "policy": {
+                "datapath": "packet",
+                "auth_level": "require",
+                "auth_key_file": "/etc/zippie/bond.key",
+                "auth_peer_id": 9,
+            },
             "paths": [{"name": "eth", "interface": "eth0"}],
         }
     )

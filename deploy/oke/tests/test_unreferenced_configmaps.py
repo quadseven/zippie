@@ -17,6 +17,7 @@ anything.
 A missed route does not fail loudly. It silently moves a ConfigMap into the
 "referenced by NOTHING" list, which is the one output that gets acted on.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -58,20 +59,32 @@ def _pod(*, volumes=None, containers=None, init=None):
 # ------------------------------------------------- the four reference routes
 def test_a_plain_volume_mount_counts():
     """The only route production currently exercises."""
-    got = cm._configmap_names(cm._pod_spec(_pod(
-        volumes=[{"name": "v", "configMap": {"name": "wanted"}}])))
+    got = cm._configmap_names(
+        cm._pod_spec(_pod(volumes=[{"name": "v", "configMap": {"name": "wanted"}}]))
+    )
     assert got == {"wanted"}
 
 
 def test_a_projected_volume_source_counts():
     """Projected sources nest the reference one level deeper. A walk that stops
     at `volume["configMap"]` sees an empty dict here and reports nothing."""
-    got = cm._configmap_names(cm._pod_spec(_pod(volumes=[
-        {"name": "v", "projected": {"sources": [
-            {"secret": {"name": "not-a-configmap"}},
-            {"configMap": {"name": "wanted"}},
-        ]}},
-    ])))
+    got = cm._configmap_names(
+        cm._pod_spec(
+            _pod(
+                volumes=[
+                    {
+                        "name": "v",
+                        "projected": {
+                            "sources": [
+                                {"secret": {"name": "not-a-configmap"}},
+                                {"configMap": {"name": "wanted"}},
+                            ]
+                        },
+                    },
+                ]
+            )
+        )
+    )
     assert "wanted" in got, (
         "a ConfigMap projected into a volume was not seen as a reference - it "
         "would be listed as referenced by NOTHING while a pod has it mounted"
@@ -81,65 +94,116 @@ def test_a_projected_volume_source_counts():
 def test_env_from_counts():
     """`envFrom` pins the whole ConfigMap into the environment. No volume, no
     mount, and invisible to anything that only reads `spec.volumes`."""
-    got = cm._configmap_names(cm._pod_spec(_pod(containers=[
-        {"name": "c", "envFrom": [
-            {"secretRef": {"name": "not-a-configmap"}},
-            {"configMapRef": {"name": "wanted"}},
-        ]},
-    ])))
+    got = cm._configmap_names(
+        cm._pod_spec(
+            _pod(
+                containers=[
+                    {
+                        "name": "c",
+                        "envFrom": [
+                            {"secretRef": {"name": "not-a-configmap"}},
+                            {"configMapRef": {"name": "wanted"}},
+                        ],
+                    },
+                ]
+            )
+        )
+    )
     assert got == {"wanted"}
 
 
 def test_a_single_key_env_var_counts():
     """The thinnest possible reference - one key into one env var - pins the
     ConfigMap exactly as hard as a mount does."""
-    got = cm._configmap_names(cm._pod_spec(_pod(containers=[
-        {"name": "c", "env": [
-            {"name": "OTHER", "value": "literal"},
-            {"name": "X", "valueFrom": {"secretKeyRef": {"name": "nope"}}},
-            {"name": "Y", "valueFrom": {"configMapKeyRef": {
-                "name": "wanted", "key": "k"}}},
-        ]},
-    ])))
+    got = cm._configmap_names(
+        cm._pod_spec(
+            _pod(
+                containers=[
+                    {
+                        "name": "c",
+                        "env": [
+                            {"name": "OTHER", "value": "literal"},
+                            {
+                                "name": "X",
+                                "valueFrom": {"secretKeyRef": {"name": "nope"}},
+                            },
+                            {
+                                "name": "Y",
+                                "valueFrom": {
+                                    "configMapKeyRef": {"name": "wanted", "key": "k"}
+                                },
+                            },
+                        ],
+                    },
+                ]
+            )
+        )
+    )
     assert got == {"wanted"}
 
 
 def test_init_containers_count_too():
     """An init container that fails to find its ConfigMap wedges the pod in
     CreateContainerConfigError, so its references are just as load-bearing."""
-    got = cm._configmap_names(cm._pod_spec(_pod(
-        init=[{"name": "i", "envFrom": [{"configMapRef": {"name": "wanted"}}]}])))
+    got = cm._configmap_names(
+        cm._pod_spec(
+            _pod(
+                init=[{"name": "i", "envFrom": [{"configMapRef": {"name": "wanted"}}]}]
+            )
+        )
+    )
     assert got == {"wanted"}
 
 
 def test_all_four_routes_at_once():
     """Union, not first-match. Splitting the walk into two helpers made it
     possible to return only one half's answer."""
-    got = cm._configmap_names(cm._pod_spec(_pod(
-        volumes=[
-            {"name": "a", "configMap": {"name": "by-volume"}},
-            {"name": "b", "projected": {"sources": [
-                {"configMap": {"name": "by-projection"}}]}},
-        ],
-        containers=[{"name": "c",
-                     "envFrom": [{"configMapRef": {"name": "by-envfrom"}}],
-                     "env": [{"name": "K", "valueFrom": {"configMapKeyRef": {
-                         "name": "by-key", "key": "k"}}}]}],
-    )))
+    got = cm._configmap_names(
+        cm._pod_spec(
+            _pod(
+                volumes=[
+                    {"name": "a", "configMap": {"name": "by-volume"}},
+                    {
+                        "name": "b",
+                        "projected": {
+                            "sources": [{"configMap": {"name": "by-projection"}}]
+                        },
+                    },
+                ],
+                containers=[
+                    {
+                        "name": "c",
+                        "envFrom": [{"configMapRef": {"name": "by-envfrom"}}],
+                        "env": [
+                            {
+                                "name": "K",
+                                "valueFrom": {
+                                    "configMapKeyRef": {"name": "by-key", "key": "k"}
+                                },
+                            }
+                        ],
+                    }
+                ],
+            )
+        )
+    )
     assert got == {"by-volume", "by-projection", "by-envfrom", "by-key"}
 
 
 # ------------------------------------------------------- shapes that mislead
-@pytest.mark.parametrize("spec", [
-    {},
-    {"volumes": None, "containers": None},
-    {"volumes": [{"name": "empty"}]},
-    {"volumes": [{"name": "s", "secret": {"secretName": "s"}}]},
-    {"containers": [{"name": "c"}]},
-    {"containers": [{"name": "c", "env": [{"name": "N", "value": "v"}]}]},
-    {"volumes": [{"name": "v", "projected": {}}]},
-    {"volumes": [{"name": "v", "projected": {"sources": None}}]},
-])
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {},
+        {"volumes": None, "containers": None},
+        {"volumes": [{"name": "empty"}]},
+        {"volumes": [{"name": "s", "secret": {"secretName": "s"}}]},
+        {"containers": [{"name": "c"}]},
+        {"containers": [{"name": "c", "env": [{"name": "N", "value": "v"}]}]},
+        {"volumes": [{"name": "v", "projected": {}}]},
+        {"volumes": [{"name": "v", "projected": {"sources": None}}]},
+    ],
+)
 def test_specs_with_no_configmap_reference_yield_nothing(spec):
     """Every one of these is a real shape kubectl emits. None may raise: an
     exception here aborts the whole report, and a crash is the good outcome -
@@ -152,21 +216,35 @@ def test_a_replicaset_template_is_unwrapped():
     `spec.template.spec`. Reading the wrong level finds no containers and no
     volumes, which fails SILENTLY as "this ReplicaSet references nothing" -
     and rollback references are half the point of this report."""
-    rs = {"kind": "ReplicaSet", "spec": {"replicas": 1, "template": {"spec": {
-        "volumes": [{"name": "v", "configMap": {"name": "held-for-rollback"}}]}}}}
+    rs = {
+        "kind": "ReplicaSet",
+        "spec": {
+            "replicas": 1,
+            "template": {
+                "spec": {
+                    "volumes": [
+                        {"name": "v", "configMap": {"name": "held-for-rollback"}}
+                    ]
+                }
+            },
+        },
+    }
     assert cm._configmap_names(cm._pod_spec(rs)) == {"held-for-rollback"}
 
 
 # -------------------------------------------------------- the report itself
 def _cmobj(name, created="2026-08-08T00:00:00Z"):
-    return {"kind": "ConfigMap",
-            "metadata": {"name": name, "creationTimestamp": created}}
+    return {
+        "kind": "ConfigMap",
+        "metadata": {"name": name, "creationTimestamp": created},
+    }
 
 
 def test_only_the_genuinely_unreferenced_are_returned(capsys):
     unreferenced = cm._report(
         [_cmobj("live"), _cmobj("rollback"), _cmobj("orphan")],
-        live={"live"}, rollback={"rollback"},
+        live={"live"},
+        rollback={"rollback"},
     )
     assert unreferenced == ["orphan"]
     out = capsys.readouterr().out
@@ -197,8 +275,11 @@ def test_it_exits_nonzero_when_kubectl_fails(monkeypatch, capsys):
 
 
 def test_it_exits_nonzero_on_unparseable_output(monkeypatch, capsys):
-    monkeypatch.setattr(cm.subprocess, "run", lambda *a, **k: type(
-        "R", (), {"stdout": "not json at all"})())
+    monkeypatch.setattr(
+        cm.subprocess,
+        "run",
+        lambda *a, **k: type("R", (), {"stdout": "not json at all"})(),
+    )
     monkeypatch.setattr("sys.argv", ["x"])
     assert cm.main() == 2
 
@@ -209,8 +290,13 @@ def test_it_refuses_when_it_sees_configmaps_but_no_workloads(monkeypatch, capsys
     wrong namespace, a wrong --context, or an RBAC hole that lets you list
     ConfigMaps but not pods. In every one of those cases the honest answer is
     "I cannot tell", and the tempting one is "all 11 of these are orphans"."""
-    monkeypatch.setattr(cm.subprocess, "run", lambda *a, **k: type("R", (), {
-        "stdout": json.dumps({"items": [_cmobj("a"), _cmobj("b")]})})())
+    monkeypatch.setattr(
+        cm.subprocess,
+        "run",
+        lambda *a, **k: type(
+            "R", (), {"stdout": json.dumps({"items": [_cmobj("a"), _cmobj("b")]})}
+        )(),
+    )
     monkeypatch.setattr("sys.argv", ["x"])
     assert cm.main() == 2, "it reported orphans from a namespace it could not read"
     err = capsys.readouterr().err
@@ -219,11 +305,28 @@ def test_it_refuses_when_it_sees_configmaps_but_no_workloads(monkeypatch, capsys
 
 def test_a_healthy_namespace_still_reports_zero(monkeypatch, capsys):
     """The refusal above must not swallow the legitimate all-clear."""
-    monkeypatch.setattr(cm.subprocess, "run", lambda *a, **k: type("R", (), {
-        "stdout": json.dumps({"items": [
-            _cmobj("mounted"),
-            _pod(volumes=[{"name": "v", "configMap": {"name": "mounted"}}]),
-        ]})})())
+    monkeypatch.setattr(
+        cm.subprocess,
+        "run",
+        lambda *a, **k: type(
+            "R",
+            (),
+            {
+                "stdout": json.dumps(
+                    {
+                        "items": [
+                            _cmobj("mounted"),
+                            _pod(
+                                volumes=[
+                                    {"name": "v", "configMap": {"name": "mounted"}}
+                                ]
+                            ),
+                        ]
+                    }
+                )
+            },
+        )(),
+    )
     monkeypatch.setattr("sys.argv", ["x"])
     assert cm.main() == 0
     assert "referenced by NOTHING    : 0" in capsys.readouterr().out
@@ -248,15 +351,22 @@ def test_no_mutating_verb_reaches_a_subprocess_call():
     import ast
 
     tree = ast.parse(SCRIPT.read_text())
-    spawns = {"run", "call", "check_call", "check_output", "Popen", "system",
-              "execv", "execvp"}
+    spawns = {
+        "run",
+        "call",
+        "check_call",
+        "check_output",
+        "Popen",
+        "system",
+        "execv",
+        "execvp",
+    }
     found = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        name = func.attr if isinstance(func, ast.Attribute) else getattr(
-            func, "id", "")
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
         if name not in spawns:
             continue
         for literal in ast.walk(node):
@@ -281,11 +391,13 @@ def test_the_guard_above_would_catch_a_real_delete(tmp_path):
         "    subprocess.run(['kubectl', 'delete', 'cm', name], check=True)\n"
     )
     tree = ast.parse(sneaky.read_text())
-    hits = [c.value for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-            and getattr(node.func, "attr", "") == "run"
-            for c in ast.walk(node)
-            if isinstance(c, ast.Constant) and c.value in MUTATING]
+    hits = [
+        c.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "run"
+        for c in ast.walk(node)
+        if isinstance(c, ast.Constant) and c.value in MUTATING
+    ]
     assert hits == ["delete"], (
         "the guard's own detection logic missed a literal kubectl delete"
     )
@@ -297,10 +409,22 @@ def test_the_only_kubectl_invocation_is_a_read(monkeypatch):
 
     def record(cmd, *a, **k):
         seen.append(cmd)
-        return type("R", (), {"stdout": json.dumps({"items": [
-            _cmobj("orphan"),
-            _pod(volumes=[{"name": "v", "configMap": {"name": "other"}}]),
-        ]})})()
+        return type(
+            "R",
+            (),
+            {
+                "stdout": json.dumps(
+                    {
+                        "items": [
+                            _cmobj("orphan"),
+                            _pod(
+                                volumes=[{"name": "v", "configMap": {"name": "other"}}]
+                            ),
+                        ]
+                    }
+                )
+            },
+        )()
 
     monkeypatch.setattr(cm.subprocess, "run", record)
     monkeypatch.setattr("sys.argv", ["x"])

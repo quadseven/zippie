@@ -93,7 +93,7 @@ class TestNackTracker:
         clock = _Clock()
         n = NackTracker(initial_delay_ms=60, _clock=clock)
         n.note_gap([7])
-        n.resolve(7)          # arrived on the slow path after all
+        n.resolve(7)  # arrived on the slow path after all
         clock.advance(0.5)
         assert n.due() == [], "must not ask for a packet that already turned up"
 

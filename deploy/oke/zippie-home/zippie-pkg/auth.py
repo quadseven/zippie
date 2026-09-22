@@ -235,8 +235,7 @@ def parse_auth_level(s: str) -> AuthLevel:
     for level in (AuthLevel.OBSERVE, AuthLevel.SIGN, AuthLevel.REQUIRE):
         if key == level.name.lower():
             return level
-    raise ValueError(
-        f"{s!r} is not an auth level; want off, observe, sign or require")
+    raise ValueError(f"{s!r} is not an auth level; want off, observe, sign or require")
 
 
 # Domain-separates the bond MAC key from every other use of the same secret.
@@ -275,7 +274,8 @@ def derive_bond_key(secret: bytes) -> bytes:
     if len(secret) < MIN_BOND_SECRET:
         raise ValueError(
             f"auth level needs a key: secret is {len(secret)} bytes, "
-            f"want at least {MIN_BOND_SECRET}")
+            f"want at least {MIN_BOND_SECRET}"
+        )
     return hashlib.sha256(_BOND_KEY_LABEL + secret).digest()
 
 
@@ -299,14 +299,15 @@ def load_bond_secret(path: str) -> bytes:
     perm = st.st_mode & 0o777
     if perm & 0o077:
         raise PermissionError(
-            f"key file is readable by others: {path} is mode {perm:#o}; "
-            f"run chmod 600 {path}")
+            f"key file is readable by others: {path} is mode {perm:#o}; run chmod 600 {path}"
+        )
     with open(path, "rb") as fh:
         secret = fh.read().strip()
     if len(secret) < MIN_BOND_SECRET:
         raise ValueError(
             f"auth level needs a key: {path} holds {len(secret)} bytes after "
-            f"trimming, want at least {MIN_BOND_SECRET}")
+            f"trimming, want at least {MIN_BOND_SECRET}"
+        )
     return secret
 
 
@@ -398,7 +399,9 @@ class Identity:
 
 
 def new_bond_identity(
-    peer_id: int, secret: bytes, previous_secret: bytes | None = None,
+    peer_id: int,
+    secret: bytes,
+    previous_secret: bytes | None = None,
 ) -> Identity:
     """The credential for the router-to-home bond: one shared symmetric key,
     used by both ends to sign and to verify.
@@ -430,8 +433,7 @@ def new_bond_identity(
     return Identity(
         client_id=peer_id,
         key=derive_bond_key(secret),
-        previous_key=(None if previous_secret is None
-                      else derive_bond_key(previous_secret)),
+        previous_key=(None if previous_secret is None else derive_bond_key(previous_secret)),
     )
 
 
@@ -460,8 +462,13 @@ def pack_as(frame: Frame, identity: Identity) -> bytes:
     overlap exists to prevent, arriving from the other direction.
     """
     signed = _HEADER_V3_SIGNED.pack(
-        _MAGIC, _VERSION_V3, frame.flags, frame.path_id, frame.seq,
-        frame.epoch, identity.client_id,
+        _MAGIC,
+        _VERSION_V3,
+        frame.flags,
+        frame.path_id,
+        frame.seq,
+        frame.epoch,
+        identity.client_id,
     )
     return signed + compute_mac(identity.key, signed, frame.payload) + frame.payload
 
@@ -500,33 +507,33 @@ def unpack_as(raw: bytes, identity: Identity) -> Frame:
     """
     if len(raw) < HEADER_LEN_V3:
         raise DatapathError(f"short frame: {len(raw)} < {HEADER_LEN_V3}")
-    magic, version, flags, path_id, seq, epoch, claimed = (
-        _HEADER_V3_SIGNED.unpack(raw[:_HEADER_V3_SIGNED.size]))
+    magic, version, flags, path_id, seq, epoch, claimed = _HEADER_V3_SIGNED.unpack(
+        raw[: _HEADER_V3_SIGNED.size]
+    )
     if magic != _MAGIC:
         raise DatapathError(f"bad magic: {magic!r}")
     if version != _VERSION_V3:
         # Includes v2. See the docstring: refusing this is the point.
-        raise UnauthenticatedError(
-            f"version {version} offered to an authenticated reader")
+        raise UnauthenticatedError(f"version {version} offered to an authenticated reader")
     if claimed != identity.client_id:
         raise UnauthenticatedError("client id mismatch")
 
-    signed = raw[:_HEADER_V3_SIGNED.size]
+    signed = raw[: _HEADER_V3_SIGNED.size]
     payload = raw[HEADER_LEN_V3:]
-    got = raw[_HEADER_V3_SIGNED.size:HEADER_LEN_V3]
+    got = raw[_HEADER_V3_SIGNED.size : HEADER_LEN_V3]
     # Constant time, for BOTH keys: a byte-at-a-time comparison leaks the MAC
     # one byte per forgery attempt, which is a practical attack on an open UDP
     # port, and a retired key that is still accepted is still a key that a
     # forged MAC under it would steer the tunnel with.
     verified = hmac.compare_digest(compute_mac(identity.key, signed, payload), got)
     if not verified and identity.previous_key is not None:
-        verified = hmac.compare_digest(
-            compute_mac(identity.previous_key, signed, payload), got)
+        verified = hmac.compare_digest(compute_mac(identity.previous_key, signed, payload), got)
     if not verified:
         raise UnauthenticatedError("frame failed authentication")
 
-    return Frame(seq=seq, path_id=path_id, payload=payload, flags=flags,
-                 epoch=epoch, client_id=claimed)
+    return Frame(
+        seq=seq, path_id=path_id, payload=payload, flags=flags, epoch=epoch, client_id=claimed
+    )
 
 
 def pack_auth(frame: Frame, identity: Identity | None, level: AuthLevel) -> bytes:
@@ -542,7 +549,9 @@ def pack_auth(frame: Frame, identity: Identity | None, level: AuthLevel) -> byte
 
 
 def unpack_auth(
-    raw: bytes, identity: Identity | None, level: AuthLevel,
+    raw: bytes,
+    identity: Identity | None,
+    level: AuthLevel,
 ) -> tuple[Frame, bool]:
     """Parse one datagram under this endpoint's rung.
 
@@ -565,13 +574,14 @@ def unpack_auth(
     # counter.
     frame = Frame.unpack(raw)
     if not level.accepts_legacy:
-        raise UnauthenticatedError(
-            f"unauthenticated v{_VERSION} frame at auth level {level}")
+        raise UnauthenticatedError(f"unauthenticated v{_VERSION} frame at auth level {level}")
     return frame, False
 
 
 def build_identity(
-    level: AuthLevel, key_file: str, peer_id: int,
+    level: AuthLevel,
+    key_file: str,
+    peer_id: int,
 ) -> Identity | None:
     """Load the credential a rung needs, or refuse the configuration.
 
@@ -606,13 +616,18 @@ def build_identity(
         if key_file:
             raise ValueError(
                 "an auth key file was configured with auth level off: set the "
-                "level to observe, sign or require, or remove the key file")
+                "level to observe, sign or require, or remove the key file"
+            )
         return None
     if not key_file:
         raise ValueError(f"auth level {level} needs a key file")
     identity = new_bond_identity(
-        peer_id, load_bond_secret(key_file), load_previous_bond_secret(key_file))
+        peer_id, load_bond_secret(key_file), load_previous_bond_secret(key_file)
+    )
     if identity.previous_key is not None:
-        log.info("header MAC also accepts retired key %s (current %s)",
-                 identity.previous_key_id(), identity.key_id())
+        log.info(
+            "header MAC also accepts retired key %s (current %s)",
+            identity.previous_key_id(),
+            identity.key_id(),
+        )
     return identity

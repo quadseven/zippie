@@ -28,6 +28,7 @@ unusable on 2026-07-30. Latency shedding (#81) is NOT affected - a shed leg is
 also marked unhealthy and never reaches `healthy` - but #81's comment claiming
 its weight 0 lands is wrong, and is corrected with this.
 """
+
 from __future__ import annotations
 
 from zippie.datapath import PathState, Scheduler, SendMode
@@ -37,8 +38,7 @@ def _bond(gated_weight: int = 0, *, via_set_weight: bool) -> Scheduler:
     """Two legs, one healthy and weighted, one held out at weight 0."""
     s = Scheduler()
     s.add_path(PathState(path_id=0, name="good", weight=100, healthy=True))
-    s.add_path(PathState(path_id=1, name="gated", weight=gated_weight,
-                         healthy=True))
+    s.add_path(PathState(path_id=1, name="gated", weight=gated_weight, healthy=True))
     if via_set_weight:
         # What _reconcile_link actually does, every pass, after the add.
         s.set_weight(1, gated_weight)

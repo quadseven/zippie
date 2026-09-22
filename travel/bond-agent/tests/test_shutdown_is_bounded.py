@@ -101,4 +101,3 @@ def test_no_specific_timeout_exit_code_is_assumed():
         "a specific timeout exit code is hardcoded; treat any non-zero as "
         "'did not finish cleanly' instead"
     )
-

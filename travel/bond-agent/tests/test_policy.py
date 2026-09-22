@@ -111,7 +111,9 @@ def test_prefer_soft_cap_demotes_path():
 
 def test_prefer_still_uses_over_cap_if_only_option():
     paths = [
-        _path("starlink", priority=10, cost=CostClass.METERED, cap=50, usage=49, state=PathState.UP),
+        _path(
+            "starlink", priority=10, cost=CostClass.METERED, cap=50, usage=49, state=PathState.UP
+        ),
         _path("fi", priority=20, state=PathState.DOWN, rtt=None, loss=100),
     ]
     primary = recompute(paths, PolicyConfig(mode=BondMode.PREFER))

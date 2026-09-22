@@ -146,8 +146,10 @@ class Frame:
             raise DatapathError(f"seq out of range: {self.seq}")
         if not 0 <= self.path_id <= MAX_PATH_ID:
             raise DatapathError(f"path_id out of range: {self.path_id}")
-        return _HEADER.pack(_MAGIC, _VERSION, self.flags, self.path_id,
-                            self.seq, self.epoch) + self.payload
+        return (
+            _HEADER.pack(_MAGIC, _VERSION, self.flags, self.path_id, self.seq, self.epoch)
+            + self.payload
+        )
 
     @classmethod
     def unpack(cls, raw: bytes) -> Frame:
@@ -164,8 +166,7 @@ class Frame:
             raise DatapathError(f"bad magic: {magic!r}")
         if version != _VERSION:
             raise DatapathError(f"unsupported version: {version}")
-        return cls(seq=seq, path_id=path_id, payload=raw[HEADER_LEN:],
-                   flags=flags, epoch=epoch)
+        return cls(seq=seq, path_id=path_id, payload=raw[HEADER_LEN:], flags=flags, epoch=epoch)
 
 
 # Where the sequence sits inside the header, derived from the format rather
@@ -367,10 +368,11 @@ class Scheduler:
         if len(carrying) <= self.duplicate_fanout:
             return [p.path_id for p in carrying]
         ranked = sorted(carrying, key=lambda p: -p.weight)
-        return [p.path_id for p in ranked[:self.duplicate_fanout]]
+        return [p.path_id for p in ranked[: self.duplicate_fanout]]
 
-    def build(self, payload: bytes, mode: SendMode,
-              epoch: int = 0, pack=None) -> tuple[list[int], list[bytes]]:
+    def build(
+        self, payload: bytes, mode: SendMode, epoch: int = 0, pack=None
+    ) -> tuple[list[int], list[bytes]]:
         """Returns (path_ids, wire_frames) sharing ONE sequence number.
 
         Duplicates share a seq deliberately: that is how the receiver knows
@@ -389,9 +391,10 @@ class Scheduler:
         seq = self.next_seq()
         flags = FLAG_DUPLICATE if len(targets) > 1 else 0
         pack = pack if pack is not None else Frame.pack
-        frames = [pack(Frame(seq=seq, path_id=pid, payload=payload, flags=flags,
-                             epoch=epoch))
-                  for pid in targets]
+        frames = [
+            pack(Frame(seq=seq, path_id=pid, payload=payload, flags=flags, epoch=epoch))
+            for pid in targets
+        ]
         return targets, frames
 
 
@@ -612,8 +615,7 @@ class Reassembler:
             arrivals.popleft()
         while heap and heap[0] not in buf:
             heappop(heap)
-        return (arrivals[0][1] if arrivals else None,
-                heap[0] if heap else None)
+        return (arrivals[0][1] if arrivals else None, heap[0] if heap else None)
 
     def tick(self) -> list[bytes]:
         """Call periodically. Releases packets stuck behind a gap that has now

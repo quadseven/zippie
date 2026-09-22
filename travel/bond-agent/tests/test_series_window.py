@@ -98,8 +98,7 @@ def test_the_real_store_spans_the_documented_window():
     pts = store.to_dict()["points"]
     span_min = (pts[-1]["t"] - pts[0]["t"]) / 1000.0 / 60.0
     assert abs(span_min - DOCUMENTED_SERIES_WINDOW_MIN) < 0.5, (
-        f"a full store spans {span_min:.1f} min, documented as "
-        f"{DOCUMENTED_SERIES_WINDOW_MIN}"
+        f"a full store spans {span_min:.1f} min, documented as {DOCUMENTED_SERIES_WINDOW_MIN}"
     )
 
 
@@ -132,8 +131,7 @@ def test_the_response_cap_keeps_the_whole_window_at_the_resolution_claimed():
     did: it is the window divided by the cap, nothing more."""
     served_s = _derived_window_min() * 60.0 / DEFAULT_SERIES_MAX_RESPONSE_POINTS
     assert 6.0 <= served_s <= 11.0, (
-        f"the cap now serves one point per {served_s:.1f}s; counters.py says "
-        "~8 s. Restate it."
+        f"the cap now serves one point per {served_s:.1f}s; counters.py says ~8 s. Restate it."
     )
 
 
@@ -213,12 +211,12 @@ def test_nothing_else_appends_to_the_series():
         "derived from one append per control-loop pass; a second appender "
         "invalidates SERIES_APPEND_INTERVAL_S and the documented window."
     )
-    assert "self._series.append" in inspect.getsource(
-        agent_mod.BondAgent.sample_counters
-    ), "the append moved out of sample_counters; re-check what calls it"
-    assert "self.sample_counters()" in inspect.getsource(
-        agent_mod.BondAgent.loop_once
-    ), "sample_counters is no longer called from the control loop"
+    assert "self._series.append" in inspect.getsource(agent_mod.BondAgent.sample_counters), (
+        "the append moved out of sample_counters; re-check what calls it"
+    )
+    assert "self.sample_counters()" in inspect.getsource(agent_mod.BondAgent.loop_once), (
+        "sample_counters is no longer called from the control loop"
+    )
 
 
 def test_the_measured_interval_is_at_least_the_loops_own_sleep():
@@ -238,6 +236,5 @@ def test_the_measured_interval_is_at_least_the_loops_own_sleep():
     )
     run_src = inspect.getsource(agent_mod.BondAgent.run)
     assert "probe_interval_ms / 1000.0" in run_src, (
-        "the loop's sleep is no longer probe_interval_ms; the bound above no "
-        "longer describes it"
+        "the loop's sleep is no longer probe_interval_ms; the bound above no longer describes it"
     )

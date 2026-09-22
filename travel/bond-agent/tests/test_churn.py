@@ -53,7 +53,7 @@ def test_ewma_absorbs_a_single_bad_ping():
     settled = p.rtt_ewma_ms
     assert settled is not None and abs(settled - 80.0) < 1.0
 
-    p.rtt_ms = 400.0        # one bad sample
+    p.rtt_ms = 400.0  # one bad sample
     policy.update_rtt_ewma(p, pol)
 
     # Moved toward the spike but nowhere near it.
@@ -184,18 +184,30 @@ def test_a_leg_that_never_answered_is_not_called_healthy(tmp_path, monkeypatch):
     """
     from zippie.agent import BondAgent
     from zippie.config import parse_config
-    a = BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path),
-                  "run_dir": str(tmp_path / "run")},
-        "home": {"endpoint": "h:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"datapath": "packet", "join_streak_min": 8},
-        "paths": [{"name": "ghost", "interface": "br-lan"}],
-    }))
+
+    a = BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path),
+                    "run_dir": str(tmp_path / "run"),
+                },
+                "home": {
+                    "endpoint": "h:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"datapath": "packet", "join_streak_min": 8},
+                "paths": [{"name": "ghost", "interface": "br-lan"}],
+            }
+        )
+    )
     p = a.paths[0]
     p.state = PathState.UP
     p.effective_weight = 10
-    p.rtt_ms = None                 # never round-tripped
+    p.rtt_ms = None  # never round-tripped
     a._flapped.add("ghost")
 
     a._gate_flapped_paths()
@@ -208,19 +220,31 @@ def test_a_leg_that_never_answered_is_not_called_healthy(tmp_path, monkeypatch):
 def test_a_leg_that_has_answered_keeps_the_healthy_wording(tmp_path):
     from zippie.agent import BondAgent
     from zippie.config import parse_config
-    a = BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path),
-                  "run_dir": str(tmp_path / "run")},
-        "home": {"endpoint": "h:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"datapath": "packet", "join_streak_min": 8},
-        "paths": [{"name": "real", "interface": "br-lan"}],
-    }))
+
+    a = BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path),
+                    "run_dir": str(tmp_path / "run"),
+                },
+                "home": {
+                    "endpoint": "h:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"datapath": "packet", "join_streak_min": 8},
+                "paths": [{"name": "real", "interface": "br-lan"}],
+            }
+        )
+    )
     p = a.paths[0]
     p.state = PathState.UP
     p.effective_weight = 10
-    p.rtt_ms = 42.0                 # it has replied, this sample
-    p.has_ever_answered = True      # ...and the sticky record agrees (#26:
+    p.rtt_ms = 42.0  # it has replied, this sample
+    p.has_ever_answered = True  # ...and the sticky record agrees (#26:
     # this is the field the gate now reads, not the current sample - see
     # test_a_stale_current_sample_does_not_undo_a_real_answer below for why).
     a._flapped.add("real")
@@ -240,19 +264,31 @@ def test_a_stale_current_sample_does_not_undo_a_real_answer(tmp_path):
     """
     from zippie.agent import BondAgent
     from zippie.config import parse_config
-    a = BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path),
-                  "run_dir": str(tmp_path / "run")},
-        "home": {"endpoint": "h:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"datapath": "packet", "join_streak_min": 8},
-        "paths": [{"name": "quiet-but-proven", "interface": "br-lan"}],
-    }))
+
+    a = BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path),
+                    "run_dir": str(tmp_path / "run"),
+                },
+                "home": {
+                    "endpoint": "h:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"datapath": "packet", "join_streak_min": 8},
+                "paths": [{"name": "quiet-but-proven", "interface": "br-lan"}],
+            }
+        )
+    )
     p = a.paths[0]
     p.state = PathState.UP
     p.effective_weight = 10
-    p.rtt_ms = None                 # this exact pass missed its reply...
-    p.has_ever_answered = True      # ...but it has definitely answered before
+    p.rtt_ms = None  # this exact pass missed its reply...
+    p.has_ever_answered = True  # ...but it has definitely answered before
     a._flapped.add("quiet-but-proven")
 
     a._gate_flapped_paths()
@@ -266,14 +302,26 @@ def test_a_stale_current_sample_does_not_undo_a_real_answer(tmp_path):
 def _gate_agent(tmp_path, names):
     from zippie.agent import BondAgent
     from zippie.config import parse_config
-    return BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path),
-                  "run_dir": str(tmp_path / "run")},
-        "home": {"endpoint": "h:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"datapath": "packet", "join_streak_min": 8},
-        "paths": [{"name": n, "interface": "eth0"} for n in names],
-    }))
+
+    return BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path),
+                    "run_dir": str(tmp_path / "run"),
+                },
+                "home": {
+                    "endpoint": "h:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"datapath": "packet", "join_streak_min": 8},
+                "paths": [{"name": n, "interface": "eth0"} for n in names],
+            }
+        )
+    )
 
 
 def test_the_join_gate_never_starves_the_bond(tmp_path):
@@ -290,14 +338,13 @@ def test_the_join_gate_never_starves_the_bond(tmp_path):
         p.state = PathState.UP
         p.effective_weight = 10
         p.interface = "eth0"
-        a._flapped.add(p.name)          # every leg flapped, as a restart does
+        a._flapped.add(p.name)  # every leg flapped, as a restart does
 
     a._gate_flapped_paths()
 
     carrying = [p for p in a.paths if p.effective_weight > 0]
     assert len(carrying) == 1, (
-        f"{len(carrying)} legs carrying; the gate held every leg out and the "
-        "bond carries nothing"
+        f"{len(carrying)} legs carrying; the gate held every leg out and the bond carries nothing"
     )
     assert "released" in (carrying[0].last_error or ""), (
         "the released leg does not say why it was released"
@@ -311,7 +358,7 @@ def test_the_gate_still_holds_legs_out_when_one_is_already_carrying(tmp_path):
     a = _gate_agent(tmp_path, ["good", "flappy"])
     good, flappy = a.paths
     good.state = PathState.UP
-    good.effective_weight = 100        # already carrying
+    good.effective_weight = 100  # already carrying
     good.interface = "eth0"
     flappy.state = PathState.UP
     flappy.effective_weight = 10
@@ -329,15 +376,29 @@ def test_the_release_respects_the_tier_gate(tmp_path):
     defeat the reservation the tier exists to make."""
     from zippie.config import parse_config
     from zippie.agent import BondAgent
-    a = BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path),
-                  "run_dir": str(tmp_path / "run")},
-        "home": {"endpoint": "h:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"datapath": "packet", "join_streak_min": 8},
-        "paths": [{"name": "cheap", "interface": "eth1", "tier": 3},
-                  {"name": "main", "interface": "eth0", "tier": 1}],
-    }))
+
+    a = BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path),
+                    "run_dir": str(tmp_path / "run"),
+                },
+                "home": {
+                    "endpoint": "h:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"datapath": "packet", "join_streak_min": 8},
+                "paths": [
+                    {"name": "cheap", "interface": "eth1", "tier": 3},
+                    {"name": "main", "interface": "eth0", "tier": 1},
+                ],
+            }
+        )
+    )
     for p in a.paths:
         p.state = PathState.UP
         p.effective_weight = 10

@@ -121,6 +121,7 @@ def _stub_iwinfo(monkeypatch, outputs: dict[str, str]):
 
 # ============================================================ station_info
 
+
 def test_associated_ssid_is_quoted_and_returned(monkeypatch):
     _stub_iwinfo(monkeypatch, {"apclix0": IWINFO_APCLIX0_ASSOCIATED})
     info = wifi_uci.station_info("apclix0")
@@ -180,6 +181,7 @@ def test_ssid_with_non_ascii_and_spaces_is_preserved(monkeypatch):
 
 # ==================================================== apply_auto_labels()
 
+
 def _cfg(**kwargs):
     kwargs.setdefault("name", "hotspot")
     kwargs.setdefault("match", PathMatch(type="interface", interface="apcli*"))
@@ -221,8 +223,11 @@ def test_ethernet_leg_is_never_auto_labelled(monkeypatch):
     the real-world behaviour this exercises."""
     path = PathRuntime(
         name="ethernet",
-        config=_cfg(name="ethernet", match=PathMatch(type="interface", interface="eth0"),
-                    label="Ethernet WAN"),
+        config=_cfg(
+            name="ethernet",
+            match=PathMatch(type="interface", interface="eth0"),
+            label="Ethernet WAN",
+        ),
         interface="eth0",
     )
     a = _agent_with([path])
@@ -237,12 +242,16 @@ def test_ap_mode_interface_is_never_auto_labelled(monkeypatch):
     leg somehow resolved onto an AP radio, Mode != Client must still refuse
     it."""
     path = PathRuntime(
-        name="weird", config=_cfg(name="weird", match=PathMatch(type="interface", interface="ra0")),
+        name="weird",
+        config=_cfg(name="weird", match=PathMatch(type="interface", interface="ra0")),
         interface="ra0",
     )
     a = _agent_with([path])
-    monkeypatch.setattr(agent_mod.wifi_uci, "station_info",
-                         lambda i: _station("TravelRouter", ap="00:00:00:00:00:01", mode="Master"))
+    monkeypatch.setattr(
+        agent_mod.wifi_uci,
+        "station_info",
+        lambda i: _station("TravelRouter", ap="00:00:00:00:00:01", mode="Master"),
+    )
 
     agent_mod.BondAgent.apply_auto_labels(a)
     assert path.auto_label is None
@@ -268,9 +277,9 @@ def test_unassociated_station_gets_no_label(monkeypatch):
     path = PathRuntime(name="hotspot", config=_cfg(), interface="apcli0")
     a = _agent_with([path])
     monkeypatch.setattr(
-        agent_mod.wifi_uci, "station_info",
-        lambda i: wifi_uci.StationInfo(mode="Client", ssid=None,
-                                        access_point="00:00:00:00:00:00"),
+        agent_mod.wifi_uci,
+        "station_info",
+        lambda i: wifi_uci.StationInfo(mode="Client", ssid=None, access_point="00:00:00:00:00:00"),
     )
 
     agent_mod.BondAgent.apply_auto_labels(a)
@@ -284,14 +293,16 @@ def test_a_stale_auto_label_is_cleared_on_dropped_association(monkeypatch):
     association - auto_label is recomputed to None every pass, never left
     holding its previous value."""
     path = PathRuntime(
-        name="hotspot", config=_cfg(), interface="apclix0",
+        name="hotspot",
+        config=_cfg(),
+        interface="apclix0",
         auto_label="Wi-Fi Repeater - UpstreamAP",
     )
     a = _agent_with([path])
     monkeypatch.setattr(
-        agent_mod.wifi_uci, "station_info",
-        lambda i: wifi_uci.StationInfo(mode="Client", ssid=None,
-                                        access_point="00:00:00:00:00:00"),
+        agent_mod.wifi_uci,
+        "station_info",
+        lambda i: wifi_uci.StationInfo(mode="Client", ssid=None, access_point="00:00:00:00:00:00"),
     )
 
     agent_mod.BondAgent.apply_auto_labels(a)
@@ -302,8 +313,7 @@ def test_relabel_follows_a_changed_association_without_a_restart(monkeypatch):
     path = PathRuntime(name="hotspot", config=_cfg(), interface="apclix0")
     a = _agent_with([path])
     current = {"ssid": "UpstreamAP"}
-    monkeypatch.setattr(agent_mod.wifi_uci, "station_info",
-                         lambda i: _station(current["ssid"]))
+    monkeypatch.setattr(agent_mod.wifi_uci, "station_info", lambda i: _station(current["ssid"]))
 
     agent_mod.BondAgent.apply_auto_labels(a)
     assert path.auto_label == "Wi-Fi Repeater - UpstreamAP"
@@ -333,9 +343,11 @@ def test_operator_override_suppresses_the_automatic_label_entirely(monkeypatch):
 
 # ==================================================== to_dict() precedence
 
+
 def test_to_dict_label_precedence():
-    cfg = PathConfig(name="hotspot", match=PathMatch(type="interface", interface="apcli*"),
-                      label="Phone hotspot")
+    cfg = PathConfig(
+        name="hotspot", match=PathMatch(type="interface", interface="apcli*"), label="Phone hotspot"
+    )
     rt = PathRuntime(name="hotspot", config=cfg)
     assert rt.to_dict()["label"] == "Phone hotspot", "no auto label yet -> configured default"
 
@@ -354,25 +366,36 @@ def test_ssid_with_spaces_and_non_ascii_survives_json_round_trip():
     """Acceptance criterion (#153): a weird SSID must come back unchanged
     through the exact serialisation the console and phone apps consume."""
     cfg = PathConfig(name="hotspot", match=PathMatch(type="interface", interface="apcli*"))
-    rt = PathRuntime(name="hotspot", config=cfg,
-                      auto_label=f"Wi-Fi Repeater - {_NON_ASCII_SSID}")
+    rt = PathRuntime(name="hotspot", config=cfg, auto_label=f"Wi-Fi Repeater - {_NON_ASCII_SSID}")
     payload = json.loads(json.dumps(rt.to_dict()))
     assert payload["label"] == f"Wi-Fi Repeater - {_NON_ASCII_SSID}"
 
 
 # ============================================ full-agent integration tests
 
+
 def _real_agent(tmp_path, paths_raw):
     from zippie.agent import BondAgent
 
-    return BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path / "s"),
-                  "run_dir": str(tmp_path / "r")},
-        "home": {"endpoint": "home.example:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"mode": "aggregate"},
-        "paths": paths_raw,
-    }))
+    return BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path / "s"),
+                    "run_dir": str(tmp_path / "r"),
+                },
+                "home": {
+                    "endpoint": "home.example:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"mode": "aggregate"},
+                "paths": paths_raw,
+            }
+        )
+    )
 
 
 class _Link:
@@ -393,11 +416,18 @@ def test_name_and_wireguard_identity_survive_a_label_change(tmp_path, monkeypatc
     usage counters and retransmit state, and an automatic label must never be
     able to touch any of it - driven through the real agent, across a real
     association change."""
-    agent = _real_agent(tmp_path, [
-        {"name": "hotspot", "label": "Phone hotspot",
-         "match": {"type": "interface", "interface": "apcli*"},
-         "private_key": "aGVsbG8=", "public_key": "d29ybGQ="},
-    ])
+    agent = _real_agent(
+        tmp_path,
+        [
+            {
+                "name": "hotspot",
+                "label": "Phone hotspot",
+                "match": {"type": "interface", "interface": "apcli*"},
+                "private_key": "aGVsbG8=",
+                "public_key": "d29ybGQ=",
+            },
+        ],
+    )
     leg = agent.paths[0]
     leg.usage_gb = 12.5
     leg.tx_bytes = 999
@@ -420,8 +450,7 @@ def test_name_and_wireguard_identity_survive_a_label_change(tmp_path, monkeypatc
     assert leg.rx_bytes == 111
 
     # Re-associate to a different AP: the label must follow, identity must not.
-    monkeypatch.setattr(agent_mod.wifi_uci, "station_info",
-                         lambda i: _station("Hotel Lobby"))
+    monkeypatch.setattr(agent_mod.wifi_uci, "station_info", lambda i: _station("Hotel Lobby"))
     agent.match_interfaces()
     agent.apply_auto_labels()
 
@@ -438,10 +467,16 @@ def test_name_and_wireguard_identity_survive_a_label_change(tmp_path, monkeypatc
 def test_console_set_label_beats_the_automatic_one_immediately(tmp_path, monkeypatch):
     """set_leg_fields promises "take effect immediately" - proves the
     automatic label honours that promise too, in both directions."""
-    agent = _real_agent(tmp_path, [
-        {"name": "hotspot", "label": "Phone hotspot",
-         "match": {"type": "interface", "interface": "apcli*"}},
-    ])
+    agent = _real_agent(
+        tmp_path,
+        [
+            {
+                "name": "hotspot",
+                "label": "Phone hotspot",
+                "match": {"type": "interface", "interface": "apcli*"},
+            },
+        ],
+    )
     leg = agent.paths[0]
     monkeypatch.setattr(agent_mod.net, "list_links", lambda: [_Link("apclix0")])
     monkeypatch.setattr(agent_mod.net, "wan_gateways", lambda: {"apclix0": "10.3.0.1"})
@@ -462,10 +497,16 @@ def test_console_set_label_beats_the_automatic_one_immediately(tmp_path, monkeyp
 
 
 def test_unassociated_leg_never_shows_unknown_or_a_stale_ssid_end_to_end(tmp_path, monkeypatch):
-    agent = _real_agent(tmp_path, [
-        {"name": "hotspot", "label": "Phone hotspot",
-         "match": {"type": "interface", "interface": "apcli*"}},
-    ])
+    agent = _real_agent(
+        tmp_path,
+        [
+            {
+                "name": "hotspot",
+                "label": "Phone hotspot",
+                "match": {"type": "interface", "interface": "apcli*"},
+            },
+        ],
+    )
     leg = agent.paths[0]
     monkeypatch.setattr(agent_mod.net, "list_links", lambda: [_Link("apcli0")])
     monkeypatch.setattr(agent_mod.net, "wan_gateways", lambda: {"apcli0": "10.3.0.1"})
@@ -477,14 +518,16 @@ def test_unassociated_leg_never_shows_unknown_or_a_stale_ssid_end_to_end(tmp_pat
 
     # The radio drops association - same shape apcli0 reports live on the travel router.
     monkeypatch.setattr(
-        agent_mod.wifi_uci, "station_info",
-        lambda i: wifi_uci.StationInfo(mode="Client", ssid=None,
-                                        access_point="00:00:00:00:00:00"),
+        agent_mod.wifi_uci,
+        "station_info",
+        lambda i: wifi_uci.StationInfo(mode="Client", ssid=None, access_point="00:00:00:00:00:00"),
     )
     agent.match_interfaces()
     agent.apply_auto_labels()
 
     label = leg.to_dict()["label"]
     assert label != "unknown"
-    assert label != "Wi-Fi Repeater - UpstreamAP", "a stale SSID from the old association leaked through"
+    assert label != "Wi-Fi Repeater - UpstreamAP", (
+        "a stale SSID from the old association leaked through"
+    )
     assert label == "Phone hotspot", "falls back to the configured default, not a made-up value"

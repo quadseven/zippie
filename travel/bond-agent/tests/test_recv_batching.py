@@ -40,11 +40,20 @@ class _FakeSocket:
             raise BlockingIOError()
         return self._inbox.pop(0)
 
-    def setblocking(self, _): pass
-    def setsockopt(self, *_a): pass
-    def close(self): pass
-    def fileno(self): return -1
-    def getsockname(self): return self.bind or ("127.0.0.1", 0)
+    def setblocking(self, _):
+        pass
+
+    def setsockopt(self, *_a):
+        pass
+
+    def close(self):
+        pass
+
+    def fileno(self):
+        return -1
+
+    def getsockname(self):
+        return self.bind or ("127.0.0.1", 0)
 
 
 class _CountingSelector:
@@ -79,8 +88,9 @@ def _build():
         return s
 
     sel = _CountingSelector()
-    t = Transport(("127.0.0.1", 51820), socket_factory=factory,
-                  selector_factory=lambda: sel, epoch=7)
+    t = Transport(
+        ("127.0.0.1", 51820), socket_factory=factory, selector_factory=lambda: sel, epoch=7
+    )
     return t, sel, made
 
 
@@ -92,8 +102,9 @@ class TestPollAmortisation:
     def test_a_backlog_is_drained_without_a_poll_per_datagram(self):
         """The whole point: a burst costs one poll, not one poll per packet."""
         t, sel, made = _build()
-        t.add_link(LinkEndpoint(path_id=0, name="leg", device=None,
-                                remote=("1.1.1.1", 51901), weight=100))
+        t.add_link(
+            LinkEndpoint(path_id=0, name="leg", device=None, remote=("1.1.1.1", 51901), weight=100)
+        )
         link = made[1]
         for seq in range(RECV_BATCH):
             link.deliver(_framed(seq))
@@ -111,8 +122,9 @@ class TestPollAmortisation:
     def test_polls_per_datagram_stays_far_below_one(self):
         """The number tools/loopback_throughput.py reports, asserted."""
         t, sel, made = _build()
-        t.add_link(LinkEndpoint(path_id=0, name="leg", device=None,
-                                remote=("1.1.1.1", 51901), weight=100))
+        t.add_link(
+            LinkEndpoint(path_id=0, name="leg", device=None, remote=("1.1.1.1", 51901), weight=100)
+        )
         link = made[1]
 
         total = 8 * RECV_BATCH
@@ -138,10 +150,14 @@ class TestPollAmortisation:
         """Bounded, not drain-until-EAGAIN. A leg carrying a download must not
         hold the loop while the uplink and the other legs wait."""
         t, _sel, made = _build()
-        t.add_link(LinkEndpoint(path_id=0, name="busy", device=None,
-                                remote=("1.1.1.1", 51901), weight=100))
-        t.add_link(LinkEndpoint(path_id=1, name="quiet", device=None,
-                                remote=("1.1.1.2", 51901), weight=100))
+        t.add_link(
+            LinkEndpoint(path_id=0, name="busy", device=None, remote=("1.1.1.1", 51901), weight=100)
+        )
+        t.add_link(
+            LinkEndpoint(
+                path_id=1, name="quiet", device=None, remote=("1.1.1.2", 51901), weight=100
+            )
+        )
         busy, quiet = made[1], made[2]
         for seq in range(RECV_BATCH * 10):
             busy.deliver(_framed(seq))
@@ -161,8 +177,9 @@ class TestPollAmortisation:
         ticks = []
         real_tick = t.reassembler.tick
         t.reassembler.tick = lambda: (ticks.append(1), real_tick())[1]
-        t.add_link(LinkEndpoint(path_id=0, name="leg", device=None,
-                                remote=("1.1.1.1", 51901), weight=100))
+        t.add_link(
+            LinkEndpoint(path_id=0, name="leg", device=None, remote=("1.1.1.1", 51901), weight=100)
+        )
         made[1].deliver(_framed(0))
         t.run_once()
         t.run_once()
@@ -174,8 +191,7 @@ class TestSendPathDoesNotRebuildFrames:
         from zippie.datapath import frame_seq
 
         for seq in (0, 1, 255, 65536, 2**32 + 7, 2**63):
-            wire = Frame(seq=seq, path_id=3, payload=b"p" * 40, flags=1,
-                         epoch=1234).pack()
+            wire = Frame(seq=seq, path_id=3, payload=b"p" * 40, flags=1, epoch=1234).pack()
             assert frame_seq(wire) == Frame.unpack(wire).seq == seq
 
     def test_frame_seq_refuses_a_runt(self):
@@ -191,8 +207,9 @@ class TestSendPathDoesNotRebuildFrames:
         """The seq the send path stores must match what it put on the link, or
         a NACK answers with the wrong packet."""
         t, _sel, made = _build()
-        t.add_link(LinkEndpoint(path_id=0, name="leg", device=None,
-                                remote=("1.1.1.1", 51901), weight=100))
+        t.add_link(
+            LinkEndpoint(path_id=0, name="leg", device=None, remote=("1.1.1.1", 51901), weight=100)
+        )
         link = made[1]
         t.send_payload(b"hello" * 20)
         wire, _addr = link.sent[-1]

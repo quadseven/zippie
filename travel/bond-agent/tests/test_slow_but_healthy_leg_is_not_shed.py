@@ -26,6 +26,7 @@ knows that file recognises this one at a glance; the fixtures are duplicated
 rather than imported, following the same convention test_keepalive_loss_pct.py
 uses for the same reason.
 """
+
 from __future__ import annotations
 
 from zippie.models import (
@@ -36,7 +37,13 @@ from zippie.models import (
     PathState,
     PolicyConfig,
 )
-from zippie.policy import classify_state, packet_mode_legs, update_rtt_ewma, update_rtt_tail, update_shed_state
+from zippie.policy import (
+    classify_state,
+    packet_mode_legs,
+    update_rtt_ewma,
+    update_rtt_tail,
+    update_shed_state,
+)
 
 # Shared with the regression guards below - the actual #81 incident profile,
 # imported rather than copied so the two files cannot drift apart.
@@ -47,15 +54,49 @@ from test_bufferbloat_leg_is_shed import BLOATED_PROFILE as _BLOATED_PROFILE
 # spread stays under 1.14x throughout (see test_the_slow_leg_is_a_cross_leg_
 # outlier_but_not_a_self_outlier), against #81's 1.86x-2.54x.
 STEADY_CELLULAR_PROFILE = [
-    220.0, 250.0, 210.0, 266.0, 230.0, 245.0, 215.0, 260.0,
-    225.0, 255.0, 218.0, 248.0, 232.0, 258.0, 222.0, 250.0,
-    228.0, 262.0, 215.0, 245.0,
+    220.0,
+    250.0,
+    210.0,
+    266.0,
+    230.0,
+    245.0,
+    215.0,
+    260.0,
+    225.0,
+    255.0,
+    218.0,
+    248.0,
+    232.0,
+    258.0,
+    222.0,
+    250.0,
+    228.0,
+    262.0,
+    215.0,
+    245.0,
 ]
 # The satellite leg over the same window: fast and steady, as measured.
 SATELLITE_PROFILE = [
-    38.0, 40.0, 37.0, 39.0, 41.0, 38.0, 40.0, 37.0,
-    39.0, 38.0, 41.0, 39.0, 37.0, 40.0, 38.0, 39.0,
-    40.0, 38.0, 39.0, 37.0,
+    38.0,
+    40.0,
+    37.0,
+    39.0,
+    41.0,
+    38.0,
+    40.0,
+    37.0,
+    39.0,
+    38.0,
+    41.0,
+    39.0,
+    37.0,
+    40.0,
+    38.0,
+    39.0,
+    40.0,
+    38.0,
+    39.0,
+    37.0,
 ]
 
 
@@ -68,8 +109,12 @@ def _leg(name: str, tier: int = 1) -> PathRuntime:
         cost_class=CostClass.METERED,
     )
     return PathRuntime(
-        name=name, config=cfg, interface=name,
-        state=PathState.UP, loss_pct=0.0, rtt_ms=60.0,
+        name=name,
+        config=cfg,
+        interface=name,
+        state=PathState.UP,
+        loss_pct=0.0,
+        rtt_ms=60.0,
     )
 
 
@@ -106,8 +151,7 @@ def test_the_slow_leg_is_a_cross_leg_outlier_but_not_a_self_outlier() -> None:
     # alone cannot avoid catching.
     ratio = max(1.0, policy.bufferbloat_shed_ratio)
     assert slow.rtt_tail_ms > fast.rtt_tail_ms * ratio, (
-        "profile is not a cross-leg outlier against the fast leg, so this "
-        "file proves nothing"
+        "profile is not a cross-leg outlier against the fast leg, so this file proves nothing"
     )
     # It is NOT a self outlier - its own tail has not diverged far from its
     # own smoothed baseline, which is the fact that must save it.

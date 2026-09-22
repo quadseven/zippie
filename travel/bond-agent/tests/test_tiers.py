@@ -39,7 +39,9 @@ class TestTheAskItself:
         hops = policy.multipath_nexthops([starlink, verizon, co_operators], BondMode.AGGREGATE)
         names = {dev for dev, _w in hops}
         assert names == {"pb-starlink", "pb-verizon"}
-        assert "pb-co-operators-phone" not in names, "a reserve link must carry NOTHING, not a little"
+        assert "pb-co-operators-phone" not in names, (
+            "a reserve link must carry NOTHING, not a little"
+        )
 
     def test_the_reserve_takes_over_when_everything_above_it_fails(self):
         starlink = _path("starlink", tier=1, up=False)
@@ -53,7 +55,7 @@ class TestTheAskItself:
         """The gate is 'any tier-1 link alive', not 'all of them'. Otherwise a
         single Starlink obstruction would pull a metered phone into the bond."""
         starlink = _path("starlink", tier=1, up=False)
-        verizon = _path("verizon", tier=1)          # still up
+        verizon = _path("verizon", tier=1)  # still up
         co_operators = _path("co-operators-phone", tier=2)
 
         hops = policy.multipath_nexthops([starlink, verizon, co_operators], BondMode.AGGREGATE)
@@ -67,9 +69,13 @@ class TestTheAskItself:
         co_operators = _path("co-operators-phone", tier=2)
         paths = [starlink, co_operators]
 
-        assert [d for d, _ in policy.multipath_nexthops(paths, BondMode.AGGREGATE)] == ["pb-co-operators-phone"]
-        starlink.effective_weight = 100                     # obstruction clears
-        assert [d for d, _ in policy.multipath_nexthops(paths, BondMode.AGGREGATE)] == ["pb-starlink"]
+        assert [d for d, _ in policy.multipath_nexthops(paths, BondMode.AGGREGATE)] == [
+            "pb-co-operators-phone"
+        ]
+        starlink.effective_weight = 100  # obstruction clears
+        assert [d for d, _ in policy.multipath_nexthops(paths, BondMode.AGGREGATE)] == [
+            "pb-starlink"
+        ]
 
 
 class TestMoreThanTwoTiers:
@@ -80,7 +86,9 @@ class TestMoreThanTwoTiers:
         d = _path("last-resort", tier=4)
 
         hops = policy.multipath_nexthops([a, b, c, d], BondMode.AGGREGATE)
-        assert [dev for dev, _w in hops] == ["pb-co-operators-phone"], "tier 4 must stay out while tier 3 works"
+        assert [dev for dev, _w in hops] == ["pb-co-operators-phone"], (
+            "tier 4 must stay out while tier 3 works"
+        )
 
     def test_all_links_in_the_active_tier_bond_together(self):
         """Tiers gate WHICH pool is used; within the pool everything still
@@ -105,7 +113,7 @@ class TestDefaultsAndOtherModes:
         """prefer/failover pick ONE link; without the tier gate a reserve with
         a better RTT could win and quietly become primary."""
         starlink = _path("starlink", tier=1, priority=10)
-        co_operators = _path("co-operators-phone", tier=2, priority=1)   # "better" priority
+        co_operators = _path("co-operators-phone", tier=2, priority=1)  # "better" priority
         hops = policy.multipath_nexthops([starlink, co_operators], BondMode.PREFER)
         assert [dev for dev, _w in hops] == ["pb-starlink"]
 

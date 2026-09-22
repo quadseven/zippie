@@ -26,8 +26,7 @@ def _dump(handshake_epoch: int, rx_bytes: int, tx_bytes: int = 4096) -> str:
     """One interface line plus one peer line, in `wg show <if> dump` format."""
     iface_line = "privkey\tpubkey\t51820\toff"
     peer_line = (
-        f"peerkey\t(none)\t1.2.3.4:51820\t0.0.0.0/0\t"
-        f"{handshake_epoch}\t{rx_bytes}\t{tx_bytes}\t15"
+        f"peerkey\t(none)\t1.2.3.4:51820\t0.0.0.0/0\t{handshake_epoch}\t{rx_bytes}\t{tx_bytes}\t15"
     )
     return f"{iface_line}\n{peer_line}\n"
 
@@ -35,12 +34,14 @@ def _dump(handshake_epoch: int, rx_bytes: int, tx_bytes: int = 4096) -> str:
 def _fake_run(stdout: str, returncode: int = 0):
     def run(args, **kwargs):
         return subprocess.CompletedProcess(args, returncode, stdout=stdout, stderr="")
+
     return run
 
 
 class TestReadingWireguardsOwnCounters:
     def test_a_live_tunnel_reports_its_handshake_age_and_bytes(self, monkeypatch):
         import time
+
         now = int(time.time())
         monkeypatch.setattr(net, "run", _fake_run(_dump(now - 10, rx_bytes=8192)))
         age, rx = net.wg_tunnel_evidence("pb0")
@@ -61,6 +62,7 @@ class TestReadingWireguardsOwnCounters:
 
     def test_multiple_peers_sum_their_receive_counters(self, monkeypatch):
         import time
+
         now = int(time.time())
         two = _dump(now - 5, 1000) + (
             f"peer2\t(none)\t5.6.7.8:51820\t0.0.0.0/0\t{now - 50}\t2000\t10\t15\n"
@@ -77,6 +79,7 @@ class TestReadingWireguardsOwnCounters:
 class TestIsTheTunnelCarrying:
     def test_handshake_plus_bytes_means_carrying(self, monkeypatch):
         import time
+
         monkeypatch.setattr(net, "run", _fake_run(_dump(int(time.time()) - 5, 4096)))
         assert net.tunnel_is_carrying("pb0") is True
 
@@ -88,12 +91,14 @@ class TestIsTheTunnelCarrying:
         """A handshake proves the peer was reachable once; it does not prove
         data flows. Both are required."""
         import time
+
         monkeypatch.setattr(net, "run", _fake_run(_dump(int(time.time()) - 5, 0)))
         assert net.tunnel_is_carrying("pb0") is False
 
     def test_a_stale_handshake_is_not_carrying(self, monkeypatch):
         """rx-bytes alone can be left over from a session that has since died."""
         import time
+
         monkeypatch.setattr(net, "run", _fake_run(_dump(int(time.time()) - 9999, 999999)))
         assert net.tunnel_is_carrying("pb0") is False
 
@@ -119,12 +124,21 @@ class TestTheOutageItself:
         agent.paths = paths
         agent.activity = net.TunnelActivity()
         agent._probe_misses = {}
-        agent.config = type("C", (), {
-            "policy": PolicyConfig(),
-            "home": type("H", (), {
-                "endpoint": "home.example:51820", "tunnel_ip": "10.66.0.1",
-            })(),
-        })()
+        agent.config = type(
+            "C",
+            (),
+            {
+                "policy": PolicyConfig(),
+                "home": type(
+                    "H",
+                    (),
+                    {
+                        "endpoint": "home.example:51820",
+                        "tunnel_ip": "10.66.0.1",
+                    },
+                )(),
+            },
+        )()
         # Liveness now also reads the receive counter; a first observation is
         # always "advancing", so these tests still isolate the ping/carrying path.
         monkeypatch.setattr(net, "wg_tunnel_evidence", lambda *a, **k: (5.0, 1234))
@@ -141,9 +155,7 @@ class TestTheOutageItself:
         BondAgent.probe_paths(agent)
         return paths
 
-    def test_dead_tunnels_are_DOWN_even_though_the_physical_links_are_perfect(
-        self, monkeypatch
-    ):
+    def test_dead_tunnels_are_DOWN_even_though_the_physical_links_are_perfect(self, monkeypatch):
         """THE regression test. Before the fix both paths came back UP here."""
         paths = self._run_probe(monkeypatch, tunnel_answers=False, carrying=False)
         assert [p.state for p in paths] == [PathState.DOWN, PathState.DOWN]
@@ -207,10 +219,9 @@ class TestTeardownTouchesOnlyWhatItInstalled:
             assert "pref 800" not in joined
             assert "pref 9910" not in joined
             assert "pref 9920" not in joined
-            assert any(
-                token in joined
-                for token in ("0x6400", "0x6401", "100", "101", "ZIPPIE")
-            ), f"unscoped teardown command: {joined}"
+            assert any(token in joined for token in ("0x6400", "0x6401", "100", "101", "ZIPPIE")), (
+                f"unscoped teardown command: {joined}"
+            )
 
 
 class TestTeardownFindsItsOwnTunnels:
@@ -227,6 +238,7 @@ class TestTeardownFindsItsOwnTunnels:
 
         def run(args, **kwargs):
             return subprocess.CompletedProcess(args, 0, stdout=payload, stderr="")
+
         return run
 
     def test_it_finds_the_tunnels_list_links_hides(self, monkeypatch):
@@ -238,10 +250,12 @@ class TestTeardownFindsItsOwnTunnels:
     def test_list_links_really_does_hide_them(self, monkeypatch):
         """Guards the premise: if list_links ever stops filtering pb*, this
         test fails and the two functions can be reconciled deliberately."""
-        payload = json.dumps([
-            {"ifname": "eth2", "operstate": "UP", "addr_info": []},
-            {"ifname": "pb0", "operstate": "UP", "addr_info": []},
-        ])
+        payload = json.dumps(
+            [
+                {"ifname": "eth2", "operstate": "UP", "addr_info": []},
+                {"ifname": "pb0", "operstate": "UP", "addr_info": []},
+            ]
+        )
 
         def run(args, **kwargs):
             return subprocess.CompletedProcess(args, 0, stdout=payload, stderr="")
@@ -261,6 +275,7 @@ class TestTeardownFindsItsOwnTunnels:
     def test_unreadable_ip_output_is_survivable(self, monkeypatch):
         def run(args, **kwargs):
             return subprocess.CompletedProcess(args, 0, stdout="not json", stderr="")
+
         monkeypatch.setattr(net, "run", run)
         assert net.list_tunnel_interfaces("pb") == []
 
@@ -350,9 +365,16 @@ class TestEachTunnelGetsItsOwnLink:
         monkeypatch.setattr(net, "dry_run", lambda: False)
         conf = tmp_path / "pb0.conf"
         net.write_wg_config(
-            str(conf), private_key="k", address="10.66.0.8/32", dns=[],
-            peer_public_key="p", endpoint="home:51900", allowed_ips=["0.0.0.0/0"],
-            keepalive=15, mtu=1420, fwmark=0x6400,
+            str(conf),
+            private_key="k",
+            address="10.66.0.8/32",
+            dns=[],
+            peer_public_key="p",
+            endpoint="home:51900",
+            allowed_ips=["0.0.0.0/0"],
+            keepalive=15,
+            mtu=1420,
+            fwmark=0x6400,
         )
         assert "FwMark = 0x6400" in conf.read_text()
 
@@ -360,9 +382,15 @@ class TestEachTunnelGetsItsOwnLink:
         monkeypatch.setattr(net, "dry_run", lambda: False)
         conf = tmp_path / "pb0.conf"
         net.write_wg_config(
-            str(conf), private_key="k", address="10.66.0.8/32", dns=[],
-            peer_public_key="p", endpoint="home:51900", allowed_ips=["0.0.0.0/0"],
-            keepalive=15, mtu=1420,
+            str(conf),
+            private_key="k",
+            address="10.66.0.8/32",
+            dns=[],
+            peer_public_key="p",
+            endpoint="home:51900",
+            allowed_ips=["0.0.0.0/0"],
+            keepalive=15,
+            mtu=1420,
         )
         assert "FwMark" not in conf.read_text()
 
@@ -425,13 +453,13 @@ class TestClientsCanActuallyUseTheTunnels:
 
     def test_the_jump_is_inserted_only_once(self, monkeypatch):
         """-C reports the jump already exists, so no second -I may be issued."""
-        rec = _Recorder()          # rc=0 everywhere => -C says "already there"
+        rec = _Recorder()  # rc=0 everywhere => -C says "already there"
         monkeypatch.setattr(net, "run_or_dry", rec)
         net.ensure_firewall(["pb0"])
         assert rec.issued("-I") == []
 
     def test_the_jump_is_added_when_missing(self, monkeypatch):
-        rec = _Recorder(fail_on=["-C"])   # -C fails => not present yet
+        rec = _Recorder(fail_on=["-C"])  # -C fails => not present yet
         monkeypatch.setattr(net, "run_or_dry", rec)
         net.ensure_firewall(["pb0"])
         assert len(rec.issued("-I")) == 3, "one jump per table (nat/filter/mangle)"
@@ -443,7 +471,7 @@ class TestClientsCanActuallyUseTheTunnels:
         assert rec.issued("MASQUERADE") == []
 
     def test_teardown_only_deletes(self, monkeypatch):
-        rec = _Recorder(fail_on=["-D"])   # stop the delete loop immediately
+        rec = _Recorder(fail_on=["-D"])  # stop the delete loop immediately
         monkeypatch.setattr(net, "run_or_dry", rec)
         net.clear_firewall()
         assert not [c for c in rec.calls if "-A" in c or "-I" in c or "-N" in c]
@@ -451,9 +479,14 @@ class TestClientsCanActuallyUseTheTunnels:
 
 
 class _FakeClock:
-    def __init__(self): self.t = 1000.0
-    def __call__(self): return self.t
-    def advance(self, s): self.t += s
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, s):
+        self.t += s
 
 
 class TestLivenessNeedsFreshEvidence:
@@ -472,7 +505,7 @@ class TestLivenessNeedsFreshEvidence:
         act = net.TunnelActivity(stale_after_s=25.0, _clock=clock)
         act.observe("pb1", 1000)
         clock.advance(30)
-        act.observe("pb1", 1000)          # link dead: same value
+        act.observe("pb1", 1000)  # link dead: same value
         assert act.is_advancing("pb1") is False
 
     def test_an_advancing_counter_is_alive(self):
@@ -490,7 +523,7 @@ class TestLivenessNeedsFreshEvidence:
         clock = _FakeClock()
         act = net.TunnelActivity(stale_after_s=25.0, _clock=clock)
         act.observe("pb1", 1000)
-        clock.advance(16)                 # one keepalive missed
+        clock.advance(16)  # one keepalive missed
         act.observe("pb1", 1000)
         assert act.is_advancing("pb1") is True
 
@@ -505,9 +538,9 @@ class TestLivenessNeedsFreshEvidence:
         but nothing has arrived in half a minute."""
         clock = _FakeClock()
         act = net.TunnelActivity(stale_after_s=25.0, _clock=clock)
-        act.observe("pb1", 999_999)       # plenty received historically
+        act.observe("pb1", 999_999)  # plenty received historically
         clock.advance(40)
-        act.observe("pb1", 999_999)       # ...and none of it recently
+        act.observe("pb1", 999_999)  # ...and none of it recently
         assert act.is_advancing("pb1") is False
 
     def test_tunnels_are_tracked_independently(self):
@@ -516,8 +549,8 @@ class TestLivenessNeedsFreshEvidence:
         act.observe("pb0", 100)
         act.observe("pb1", 100)
         clock.advance(30)
-        act.observe("pb0", 500)           # still moving
-        act.observe("pb1", 100)           # frozen
+        act.observe("pb0", 500)  # still moving
+        act.observe("pb1", 100)  # frozen
         assert act.is_advancing("pb0") is True
         assert act.is_advancing("pb1") is False
 
@@ -525,7 +558,7 @@ class TestLivenessNeedsFreshEvidence:
         act = net.TunnelActivity()
         act.observe("pb0", 1)
         act.forget("pb0")
-        assert act.is_advancing("pb0") is True   # back to unknown
+        assert act.is_advancing("pb0") is True  # back to unknown
 
 
 class TestTheChaosTestScenario:
@@ -541,16 +574,26 @@ class TestTheChaosTestScenario:
         agent.paths = paths
         agent.activity = net.TunnelActivity(stale_after_s=25.0, _clock=clock)
         agent._probe_misses = {}
-        agent.config = type("C", (), {
-            "policy": PolicyConfig(),
-            "home": type("H", (), {
-                "endpoint": "home.example:51901", "tunnel_ip": "10.66.0.1",
-            })(),
-        })()
+        agent.config = type(
+            "C",
+            (),
+            {
+                "policy": PolicyConfig(),
+                "home": type(
+                    "H",
+                    (),
+                    {
+                        "endpoint": "home.example:51901",
+                        "tunnel_ip": "10.66.0.1",
+                    },
+                )(),
+            },
+        )()
 
         monkeypatch.setattr(
-            net, "ping_rtt_ms",
-            lambda *a, **k: ((11.0, 0.0) if ping_ok else (None, 100.0)),
+            net,
+            "ping_rtt_ms",
+            lambda *a, **k: (11.0, 0.0) if ping_ok else (None, 100.0),
         )
         monkeypatch.setattr(net, "tunnel_is_carrying", lambda *a, **k: True)
 
@@ -565,7 +608,7 @@ class TestTheChaosTestScenario:
         tunnel_is_carrying() only consulted historical evidence."""
         path = self._probe(
             monkeypatch=__import__("pytest").MonkeyPatch(),
-            rx_sequence=[1000, 1000, 1000],   # counter frozen = link dead
+            rx_sequence=[1000, 1000, 1000],  # counter frozen = link dead
             ping_ok=False,
         )
         assert path.state == PathState.DOWN
@@ -575,7 +618,7 @@ class TestTheChaosTestScenario:
         """The fix must not evict a healthy tunnel that just drops ping."""
         path = self._probe(
             monkeypatch=__import__("pytest").MonkeyPatch(),
-            rx_sequence=[1000, 4000, 9000],   # counter advancing = alive
+            rx_sequence=[1000, 4000, 9000],  # counter advancing = alive
             ping_ok=False,
         )
         assert path.state == PathState.DEGRADED
@@ -597,60 +640,92 @@ class TestGatewayLookupIsScopedToTheInterface:
             else:
                 out = json.dumps(dev_routes or [])
             return subprocess.CompletedProcess(args, 0, stdout=out, stderr="")
+
         return run
 
     def test_it_uses_the_interfaces_own_default(self, monkeypatch):
-        monkeypatch.setattr(net, "run", self._ip(defaults=[
-            {"dev": "apclix0", "gateway": "192.0.2.1"},
-            {"dev": "eth2", "gateway": "26.113.58.201"},
-        ]))
+        monkeypatch.setattr(
+            net,
+            "run",
+            self._ip(
+                defaults=[
+                    {"dev": "apclix0", "gateway": "192.0.2.1"},
+                    {"dev": "eth2", "gateway": "26.113.58.201"},
+                ]
+            ),
+        )
         assert net.link_gateway("eth2") == "26.113.58.201"
 
     def test_it_never_returns_another_interfaces_gateway(self, monkeypatch):
         """THE regression. eth2 has no default of its own; the answer must be
         None (or derived from eth2), never apclix0's gateway."""
-        monkeypatch.setattr(net, "run", self._ip(
-            defaults=[{"dev": "apclix0", "gateway": "192.0.2.1"}],
-            dev_routes=[], addrs=[],
-        ))
+        monkeypatch.setattr(
+            net,
+            "run",
+            self._ip(
+                defaults=[{"dev": "apclix0", "gateway": "192.0.2.1"}],
+                dev_routes=[],
+                addrs=[],
+            ),
+        )
         assert net.link_gateway("eth2") != "192.0.2.1"
         assert net.link_gateway("eth2") is None
 
     def test_it_falls_back_to_a_gateway_on_that_interface(self, monkeypatch):
-        monkeypatch.setattr(net, "run", self._ip(
-            defaults=[{"dev": "apclix0", "gateway": "192.0.2.1"}],
-            dev_routes=[{"dst": "8.8.8.8", "gateway": "26.113.58.201"}],
-        ))
+        monkeypatch.setattr(
+            net,
+            "run",
+            self._ip(
+                defaults=[{"dev": "apclix0", "gateway": "192.0.2.1"}],
+                dev_routes=[{"dst": "8.8.8.8", "gateway": "26.113.58.201"}],
+            ),
+        )
         assert net.link_gateway("eth2") == "26.113.58.201"
 
     def test_it_derives_the_peer_on_a_slash_30(self, monkeypatch):
         """LTE dongles hand out a /30; the peer is the only other host, and is
         the gateway even when no default route exists."""
-        monkeypatch.setattr(net, "run", self._ip(
-            defaults=[], dev_routes=[],
-            addrs=[{"addr_info": [{"local": "26.113.58.202", "prefixlen": 30}]}],
-        ))
+        monkeypatch.setattr(
+            net,
+            "run",
+            self._ip(
+                defaults=[],
+                dev_routes=[],
+                addrs=[{"addr_info": [{"local": "26.113.58.202", "prefixlen": 30}]}],
+            ),
+        )
         assert net.link_gateway("eth2") == "26.113.58.201"
 
     def test_it_derives_the_peer_on_a_slash_31(self, monkeypatch):
-        monkeypatch.setattr(net, "run", self._ip(
-            defaults=[], dev_routes=[],
-            addrs=[{"addr_info": [{"local": "10.0.0.5", "prefixlen": 31}]}],
-        ))
+        monkeypatch.setattr(
+            net,
+            "run",
+            self._ip(
+                defaults=[],
+                dev_routes=[],
+                addrs=[{"addr_info": [{"local": "10.0.0.5", "prefixlen": 31}]}],
+            ),
+        )
         assert net.link_gateway("eth2") == "10.0.0.4"
 
     def test_a_normal_subnet_is_not_guessed_at(self, monkeypatch):
         """Only /30 and /31 have an unambiguous peer. Guessing on a /24 would
         invent a gateway."""
-        monkeypatch.setattr(net, "run", self._ip(
-            defaults=[], dev_routes=[],
-            addrs=[{"addr_info": [{"local": "192.168.8.50", "prefixlen": 24}]}],
-        ))
+        monkeypatch.setattr(
+            net,
+            "run",
+            self._ip(
+                defaults=[],
+                dev_routes=[],
+                addrs=[{"addr_info": [{"local": "192.168.8.50", "prefixlen": 24}]}],
+            ),
+        )
         assert net.link_gateway("eth2") is None
 
     def test_unparseable_output_is_survivable(self, monkeypatch):
         def run(args, **kwargs):
             return subprocess.CompletedProcess(args, 0, stdout="{{not json", stderr="")
+
         monkeypatch.setattr(net, "run", run)
         assert net.link_gateway("eth2") is None
 
@@ -659,12 +734,14 @@ class TestAFailedPinIsLoud:
     def test_it_reports_failure_instead_of_swallowing_it(self, monkeypatch):
         def run_or_dry(args, **kwargs):
             return subprocess.CompletedProcess(args, 2, stdout="", stderr="Network is unreachable")
+
         monkeypatch.setattr(net, "run_or_dry", run_or_dry)
         assert net.pin_link_table(101, "eth2", "192.0.2.1") is False
 
     def test_success_reports_true(self, monkeypatch):
         def run_or_dry(args, **kwargs):
             return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
         monkeypatch.setattr(net, "run_or_dry", run_or_dry)
         assert net.pin_link_table(101, "eth2", "26.113.58.201") is True
 
@@ -684,19 +761,30 @@ class TestConsecutiveProbeFailures:
         agent.paths = [path]
         agent.activity = net.TunnelActivity()
         agent._probe_misses = {}
-        agent.config = type("C", (), {
-            "policy": PolicyConfig(),
-            "home": type("H", (), {
-                "endpoint": "home.example:51901", "tunnel_ip": "10.66.0.1",
-            })(),
-        })()
+        agent.config = type(
+            "C",
+            (),
+            {
+                "policy": PolicyConfig(),
+                "home": type(
+                    "H",
+                    (),
+                    {
+                        "endpoint": "home.example:51901",
+                        "tunnel_ip": "10.66.0.1",
+                    },
+                )(),
+            },
+        )()
         monkeypatch.setattr(net, "wg_tunnel_evidence", lambda *a, **k: (5.0, 1234))
         monkeypatch.setattr(net, "tunnel_is_carrying", lambda *a, **k: carrying)
 
         seq = list(rtt_sequence)
+
         def ping(host, *, interface=None, count=2, timeout_s=3):
             r = seq.pop(0)
             return (r, 0.0) if r is not None else (None, 100.0)
+
         monkeypatch.setattr(net, "ping_rtt_ms", ping)
 
         for _ in range(len(rtt_sequence)):
@@ -733,24 +821,35 @@ class TestConsecutiveProbeFailures:
 
     def test_it_probes_the_tunnel_far_end_not_the_public_endpoint(self, monkeypatch):
         from zippie.agent import BondAgent
+
         seen = []
         path = _path("dongle4g", "eth2", "pb1")
         agent = object.__new__(BondAgent)
         agent.paths = [path]
         agent.activity = net.TunnelActivity()
         agent._probe_misses = {}
-        agent.config = type("C", (), {
-            "policy": PolicyConfig(),
-            "home": type("H", (), {
-                "endpoint": "home.example:51901", "tunnel_ip": "10.66.0.1",
-            })(),
-        })()
+        agent.config = type(
+            "C",
+            (),
+            {
+                "policy": PolicyConfig(),
+                "home": type(
+                    "H",
+                    (),
+                    {
+                        "endpoint": "home.example:51901",
+                        "tunnel_ip": "10.66.0.1",
+                    },
+                )(),
+            },
+        )()
         monkeypatch.setattr(net, "wg_tunnel_evidence", lambda *a, **k: (5.0, 1))
         monkeypatch.setattr(net, "tunnel_is_carrying", lambda *a, **k: True)
 
         def ping(host, *, interface=None, count=2, timeout_s=3):
             seen.append(host)
             return (50.0, 0.0)
+
         monkeypatch.setattr(net, "ping_rtt_ms", ping)
         BondAgent.probe_paths(agent)
         assert seen == ["10.66.0.1"], f"probed {seen}, must be the tunnel far end"
@@ -767,6 +866,7 @@ class TestConfigActuallyReachesTheModel:
 
     def _cfg(self, tmp_path, body):
         from zippie.config import load_config
+
         p = tmp_path / "zippie.toml"
         p.write_text(
             '[home]\nendpoint = "home.example"\nserver_public_key = "k"\n'
@@ -775,7 +875,9 @@ class TestConfigActuallyReachesTheModel:
         return load_config(str(p))
 
     def test_tier_survives_the_parser(self, tmp_path):
-        cfg = self._cfg(tmp_path, '''
+        cfg = self._cfg(
+            tmp_path,
+            """
 [[paths]]
 name = "hotspot"
 tier = 1
@@ -785,32 +887,41 @@ match = { type = "interface", interface = "apclix0" }
 name = "dongle4g"
 tier = 2
 match = { type = "interface", interface = "eth2" }
-''')
+""",
+        )
         tiers = {p.name: p.tier for p in cfg.paths}
         assert tiers == {"hotspot": 1, "dongle4g": 2}
 
     def test_label_survives_the_parser(self, tmp_path):
-        cfg = self._cfg(tmp_path, '''
+        cfg = self._cfg(
+            tmp_path,
+            """
 [[paths]]
 name = "dongle4g"
 label = "Google Fi 4G"
 match = { type = "interface", interface = "eth2" }
-''')
+""",
+        )
         assert cfg.paths[0].label == "Google Fi 4G"
 
     def test_tier_defaults_to_1_when_absent(self, tmp_path):
-        cfg = self._cfg(tmp_path, '''
+        cfg = self._cfg(
+            tmp_path,
+            """
 [[paths]]
 name = "a"
 match = { type = "any" }
-''')
+""",
+        )
         assert cfg.paths[0].tier == 1
 
     def test_a_parsed_reserve_really_is_excluded(self, tmp_path):
         """End to end: parse a tier-2 path and confirm policy keeps it out of
         the bond while tier 1 is healthy. This is the assertion whose absence
         let the feature ship broken."""
-        cfg = self._cfg(tmp_path, '''
+        cfg = self._cfg(
+            tmp_path,
+            """
 [[paths]]
 name = "hotspot"
 tier = 1
@@ -820,7 +931,8 @@ match = { type = "interface", interface = "apclix0" }
 name = "dongle4g"
 tier = 2
 match = { type = "interface", interface = "eth2" }
-''')
+""",
+        )
         runtimes = []
         for pc in cfg.paths:
             r = PathRuntime(name=pc.name, config=pc, interface=pc.match.interface)

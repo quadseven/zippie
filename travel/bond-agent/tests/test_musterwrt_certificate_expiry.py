@@ -14,6 +14,7 @@ Nothing here reaches the network or the router. Certificates are minted locally
 by the same `openssl` the router uses, at chosen validity, so a test can stand
 at any point in a certificate's life.
 """
+
 from __future__ import annotations
 
 import calendar
@@ -39,12 +40,25 @@ def certificate(days: int) -> str:
     """
     key = subprocess.run(
         ["openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout"],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     ).stdout
     return subprocess.run(
-        ["openssl", "req", "-new", "-x509", "-key", "/dev/stdin",
-         "-subj", "/CN=travel-router", "-days", str(days)],
-        input=key, check=True, capture_output=True,
+        [
+            "openssl",
+            "req",
+            "-new",
+            "-x509",
+            "-key",
+            "/dev/stdin",
+            "-subj",
+            "/CN=travel-router",
+            "-days",
+            str(days),
+        ],
+        input=key,
+        check=True,
+        capture_output=True,
     ).stdout.decode()
 
 
@@ -63,10 +77,17 @@ def test_the_verdict_walks_ok_then_attention_then_urgent():
     which is the only failure of this function that matters.
     """
     pem = certificate(90)
-    ends = subprocess.run(
-        ["openssl", "x509", "-noout", "-enddate"], input=pem.encode(),
-        check=True, capture_output=True,
-    ).stdout.decode().strip().partition("=")[2]
+    ends = (
+        subprocess.run(
+            ["openssl", "x509", "-noout", "-enddate"],
+            input=pem.encode(),
+            check=True,
+            capture_output=True,
+        )
+        .stdout.decode()
+        .strip()
+        .partition("=")[2]
+    )
     expiry = calendar.timegm(time.strptime(ends, "%b %d %H:%M:%S %Y %Z"))
 
     day = 86400

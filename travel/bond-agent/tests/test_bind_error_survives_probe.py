@@ -26,6 +26,7 @@ storage. `bind_error` is owned by `match_interfaces` and rewritten every tick;
 `last_error` is whatever the console should show. The probe reads the first to
 fill the second, which keeps the specific reason AND keeps it fresh.
 """
+
 from __future__ import annotations
 
 from zippie import agent as agent_mod

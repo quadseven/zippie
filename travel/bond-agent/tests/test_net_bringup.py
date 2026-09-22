@@ -59,8 +59,7 @@ def test_wg_up_native_removes_the_link_when_setconf_fails(tmp_path, monkeypatch)
 
     # The FINAL action must be deleting the half-made interface.
     assert calls[-1] == ["ip", "link", "del", "pbX"], (
-        "setconf failed but the wrecked interface was left behind: "
-        f"{calls[-1]}"
+        f"setconf failed but the wrecked interface was left behind: {calls[-1]}"
     )
     # And it is the cleanup del, not the idempotent one before link add.
     add_idx = calls.index(["ip", "link", "add", "pbX", "type", "wireguard"])

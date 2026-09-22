@@ -17,6 +17,7 @@ uploaded outside a distribution step land processed-but-unreleased; adding the
 build to the group is what actually pushes it to the testers (learned the hard
 way: Xcode Cloud archives uploaded fine yet never reached the phone).
 """
+
 import os
 import sys
 import time
@@ -60,7 +61,12 @@ def _get(path: str, **params) -> dict:
 def next_build_number() -> int:
     data = _get(
         "/v1/builds",
-        **{"filter[app]": APP_ID, "sort": "-version", "limit": 1, "fields[builds]": "version"},
+        **{
+            "filter[app]": APP_ID,
+            "sort": "-version",
+            "limit": 1,
+            "fields[builds]": "version",
+        },
     )["data"]
     latest = int(data[0]["attributes"]["version"]) if data else 0
     return latest + 1
@@ -111,7 +117,10 @@ def distribute(version: str, timeout_s: int = 1800) -> None:
         return internal_build_state(build_id)
 
     if internal_state() == "IN_BETA_TESTING":
-        print(f"build {version} already released to internal testers (auto-added)", flush=True)
+        print(
+            f"build {version} already released to internal testers (auto-added)",
+            flush=True,
+        )
         return
 
     r = requests.post(
@@ -182,8 +191,10 @@ def _require_distributed(build_id: str, version: str) -> None:
 
 
 def internal_build_state(build_id: str) -> str:
-    d = _get(f"/v1/builds/{build_id}/buildBetaDetail",
-             **{"fields[buildBetaDetails]": "internalBuildState"})["data"]
+    d = _get(
+        f"/v1/builds/{build_id}/buildBetaDetail",
+        **{"fields[buildBetaDetails]": "internalBuildState"},
+    )["data"]
     return d["attributes"].get("internalBuildState", "")
 
 
@@ -205,13 +216,20 @@ def _clean_notes(raw: str) -> str:
     a phone.
     """
     drop_prefixes = (
-        "Co-Authored-By:", "Co-authored-by:", "Claude-Session:",
-        "Generated with", "Signed-off-by:",
+        "Co-Authored-By:",
+        "Co-authored-by:",
+        "Claude-Session:",
+        "Generated with",
+        "Signed-off-by:",
         # Provenance trailers: real and useful in the repo, meaningless here.
-        "AI-REVIEW(", "Refs ", "Part of ", "Closes ",
+        "AI-REVIEW(",
+        "Refs ",
+        "Part of ",
+        "Closes ",
     )
     lines = [
-        ln for ln in raw.splitlines()
+        ln
+        for ln in raw.splitlines()
         if not any(ln.strip().startswith(p) for p in drop_prefixes)
     ]
 
@@ -224,10 +242,7 @@ def _clean_notes(raw: str) -> str:
             buf.clear()
 
     def is_item(t: str) -> bool:
-        return (
-            t[:2] in ("- ", "* ")
-            or (t[:1].isdigit() and t[1:3] in (". ", ") "))
-        )
+        return t[:2] in ("- ", "* ") or (t[:1].isdigit() and t[1:3] in (". ", ") "))
 
     in_item = False
     for ln in lines:
@@ -300,19 +315,28 @@ def set_notes(version: str) -> None:
         r = requests.patch(
             BASE + f"/v1/betaBuildLocalizations/{loc_id}",
             headers=_headers(),
-            json={"data": {"type": "betaBuildLocalizations", "id": loc_id,
-                           "attributes": {"whatsNew": notes}}},
+            json={
+                "data": {
+                    "type": "betaBuildLocalizations",
+                    "id": loc_id,
+                    "attributes": {"whatsNew": notes},
+                }
+            },
             timeout=60,
         )
     else:
         r = requests.post(
             BASE + "/v1/betaBuildLocalizations",
             headers=_headers(),
-            json={"data": {
-                "type": "betaBuildLocalizations",
-                "attributes": {"locale": NOTES_LOCALE, "whatsNew": notes},
-                "relationships": {"build": {"data": {"type": "builds", "id": build_id}}},
-            }},
+            json={
+                "data": {
+                    "type": "betaBuildLocalizations",
+                    "attributes": {"locale": NOTES_LOCALE, "whatsNew": notes},
+                    "relationships": {
+                        "build": {"data": {"type": "builds", "id": build_id}}
+                    },
+                }
+            },
             timeout=60,
         )
     if r.status_code in (200, 201):
@@ -323,7 +347,9 @@ def set_notes(version: str) -> None:
 
 def main() -> None:
     if len(sys.argv) < 2:
-        sys.exit("usage: asc.py {next-build-number|distribute <version>|set-notes <version>}")
+        sys.exit(
+            "usage: asc.py {next-build-number|distribute <version>|set-notes <version>}"
+        )
     cmd = sys.argv[1]
     if cmd == "next-build-number":
         print(next_build_number())

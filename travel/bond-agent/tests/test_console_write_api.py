@@ -15,14 +15,25 @@ from zippie.config import parse_config
 
 
 def _agent(tmp_path):
-    return BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path),
-                  "run_dir": str(tmp_path / "run")},
-        "home": {"endpoint": "home.example:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
-        "paths": [{"name": "att", "interface": "eth0", "monthly_cap_gb": 5.0, "tier": 1}],
-    }))
+    return BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path),
+                    "run_dir": str(tmp_path / "run"),
+                },
+                "home": {
+                    "endpoint": "home.example:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
+                "paths": [{"name": "att", "interface": "eth0", "monthly_cap_gb": 5.0, "tier": 1}],
+            }
+        )
+    )
 
 
 def test_a_token_is_generated_and_stable(tmp_path):

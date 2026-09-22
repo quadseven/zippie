@@ -31,16 +31,14 @@ def test_a_sustained_sender_is_held_to_the_cap():
     bucket = _TokenBucket(500, clock=clock)
 
     passed = 0
-    for _ in range(6000):            # 60s in 10ms steps
+    for _ in range(6000):  # 60s in 10ms steps
         clock.advance(0.01)
-        for _ in range(20):          # offer far more than the cap can take
+        for _ in range(20):  # offer far more than the cap can take
             if bucket.allow(1400):
                 passed += 1400
 
     kbps = passed * 8 / 1000 / 60
-    assert kbps <= 500 * 1.05, (
-        f"passed {kbps:.0f} kbit/s through a 500 kbit/s cap - not limiting"
-    )
+    assert kbps <= 500 * 1.05, f"passed {kbps:.0f} kbit/s through a 500 kbit/s cap - not limiting"
     assert kbps >= 500 * 0.9, (
         f"passed only {kbps:.0f} kbit/s - throttled far below the configured cap"
     )
@@ -64,7 +62,7 @@ def test_an_idle_link_does_not_bank_unlimited_budget():
 def test_a_frame_larger_than_the_bucket_still_passes():
     """Otherwise the link is dead rather than slow, which reads as a bug."""
     clock = FakeClock()
-    bucket = _TokenBucket(8, clock=clock)   # 1000 bytes/sec
+    bucket = _TokenBucket(8, clock=clock)  # 1000 bytes/sec
     clock.advance(2)
     assert bucket.allow(1400), (
         "a frame larger than the bucket was refused forever; the link is dead "
@@ -96,6 +94,7 @@ def test_rate_limited_frames_are_reported_not_just_counted():
     exists to draw.
     """
     from zippie.transport import TransportStats
+
     st = TransportStats()
     st.rate_limited = 7
     assert st.as_dict().get("rate_limited") == 7, (

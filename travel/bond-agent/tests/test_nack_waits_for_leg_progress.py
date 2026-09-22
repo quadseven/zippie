@@ -102,11 +102,20 @@ class FakeSocket:
     def deliver(self, data, addr=("10.0.0.9", 51900)):
         self._inbox.append((data, addr))
 
-    def setblocking(self, _): pass
-    def setsockopt(self, *_a): pass
-    def close(self): self.closed = True
-    def fileno(self): return -1
-    def getsockname(self): return self.bind or ("127.0.0.1", 0)
+    def setblocking(self, _):
+        pass
+
+    def setsockopt(self, *_a):
+        pass
+
+    def close(self):
+        self.closed = True
+
+    def fileno(self):
+        return -1
+
+    def getsockname(self):
+        return self.bind or ("127.0.0.1", 0)
 
 
 class _Key:
@@ -126,8 +135,9 @@ class _FakeSelector:
         self.registered.pop(id(fileobj), None)
 
     def select(self, _timeout=0):
-        return [(_Key(f, d), 1) for f, d in list(self.registered.values())
-                if getattr(f, "_inbox", None)]
+        return [
+            (_Key(f, d), 1) for f, d in list(self.registered.values()) if getattr(f, "_inbox", None)
+        ]
 
     def close(self):
         self.registered.clear()
@@ -149,7 +159,7 @@ class Receiver:
             socket_factory=self._factory,
             selector_factory=_FakeSelector,
             _clock=self._clock,
-            **kw
+            **kw,
         )
         self.t.add_link(LinkEndpoint(0, "wan", None, ("10.0.0.9", 51901)))
         self.link = self.created[-1]
@@ -168,12 +178,11 @@ class Receiver:
         return 100.0 + self.ms / 1000.0
 
     def arrive(self, seq, leg):
-        self.link.deliver(Frame(seq=seq, path_id=leg, payload=PAYLOAD,
-                                epoch=EPOCH).pack())
+        self.link.deliver(Frame(seq=seq, path_id=leg, payload=PAYLOAD, epoch=EPOCH).pack())
 
     def step(self):
         self.t.run_once()
-        for data, _addr in self.link.sent[self.seen:]:
+        for data, _addr in self.link.sent[self.seen :]:
             frame = Frame.unpack(data)
             if frame.flags & FLAG_NACK:
                 self.first_nack.setdefault(frame.seq, self.ms)
@@ -209,8 +218,9 @@ class TestSkewIsNotLoss:
         its own gap had already been declared lost."""
         r = _steady_skew(skew_ms=80)
         assert r.nacked() == [], (
-            "asked for {n} sequences that were merely in flight on the slow "
-            "leg".format(n=len(r.nacked()))
+            "asked for {n} sequences that were merely in flight on the slow leg".format(
+                n=len(r.nacked())
+            )
         )
 
     def test_the_hold_scales_with_the_skew_rather_than_stepping(self):
@@ -354,8 +364,7 @@ class TestTheNewFlagBitIsActuallyFree:
         found: dict[str, str] = {}
         for path in self.GO_FLAG_FILES:
             text = path.read_text(encoding="utf-8")
-            for name, value in re.findall(r"^\s*(Flag\w+)\s*=\s*(0x[0-9a-fA-F]+)",
-                                           text, re.M):
+            for name, value in re.findall(r"^\s*(Flag\w+)\s*=\s*(0x[0-9a-fA-F]+)", text, re.M):
                 found[name] = value
         assert found, f"no flag constants parsed from {[str(p) for p in self.GO_FLAG_FILES]}"
         return {name: int(value, 16) for name, value in found.items()}
@@ -368,8 +377,14 @@ class TestTheNewFlagBitIsActuallyFree:
                 "is unguarded across the two implementations"
             )
         flags = self._go_flags()
-        missing = {"FlagDuplicate", "FlagKeepalive", "FlagNack",
-                   "FlagKeepaliveReply", "FlagParity", "FlagEncrypted"} - set(flags)
+        missing = {
+            "FlagDuplicate",
+            "FlagKeepalive",
+            "FlagNack",
+            "FlagKeepaliveReply",
+            "FlagParity",
+            "FlagEncrypted",
+        } - set(flags)
         assert not missing, (
             f"{[str(p) for p in self.GO_FLAG_FILES]} no longer define "
             f"{sorted(missing)}. Either the registry moved or the parse below "
@@ -420,10 +435,13 @@ class TestTheNewFlagBitIsActuallyFree:
     VERSION_GATED_GO_FLAGS = {"FlagEncrypted"}
 
     def test_the_retransmit_bit_collides_with_nothing_on_either_side(self):
-        ours = {"FLAG_NACK": FLAG_NACK, "FLAG_RETRANSMIT": FLAG_RETRANSMIT,
-                "FLAG_DUPLICATE": FLAG_DUPLICATE,
-                "FLAG_KEEPALIVE": FLAG_KEEPALIVE,
-                "FLAG_KEEPALIVE_REPLY": FLAG_KEEPALIVE_REPLY}
+        ours = {
+            "FLAG_NACK": FLAG_NACK,
+            "FLAG_RETRANSMIT": FLAG_RETRANSMIT,
+            "FLAG_DUPLICATE": FLAG_DUPLICATE,
+            "FLAG_KEEPALIVE": FLAG_KEEPALIVE,
+            "FLAG_KEEPALIVE_REPLY": FLAG_KEEPALIVE_REPLY,
+        }
         for name, bit in ours.items():
             assert bit and not bit & (bit - 1), f"{name} is not one bit"
         assert len(set(ours.values())) == len(ours), f"two names, one bit: {ours}"
@@ -463,8 +481,9 @@ class TestARetransmitSaysSoOnTheWire:
         spare = other if carried is r.link else r.link
         seq = Frame.unpack(carried.sent[0][0]).seq
         before = len(spare.sent)
-        r.t._on_link_data(Frame(seq=seq, path_id=0, payload=b"",
-                                flags=FLAG_NACK, epoch=r.t._epoch).pack())
+        r.t._on_link_data(
+            Frame(seq=seq, path_id=0, payload=b"", flags=FLAG_NACK, epoch=r.t._epoch).pack()
+        )
 
         assert len(spare.sent) > before, "the resend must use the OTHER link"
         resend = Frame.unpack(spare.sent[-1][0])
@@ -489,8 +508,9 @@ class TestARetransmitSaysSoOnTheWire:
             r.step()
         # An answer to a NACK turns up on SLOW carrying seq 79 - twenty
         # sequences beyond anything SLOW's own traffic has reached.
-        r.link.deliver(Frame(seq=79, path_id=SLOW, payload=PAYLOAD,
-                             flags=FLAG_RETRANSMIT, epoch=EPOCH).pack())
+        r.link.deliver(
+            Frame(seq=79, path_id=SLOW, payload=PAYLOAD, flags=FLAG_RETRANSMIT, epoch=EPOCH).pack()
+        )
         for i in range(45, 120):
             r.arrive(2 * i, FAST)
             r.step()
@@ -512,8 +532,7 @@ class TestAPeerRestartIsHandledEndToEnd:
         # reset the stream at will. The hand-cranked clock advances 1 ms per
         # step, so the real 5 s default would need 5000 steps of silence to
         # express what 60 steps express here.
-        r = Receiver(reorder_deadline_ms=250, nack_delay_ms=60,
-                     epoch_takeover_idle_s=0.05)
+        r = Receiver(reorder_deadline_ms=250, nack_delay_ms=60, epoch_takeover_idle_s=0.05)
         for i in range(400):
             r.arrive(2 * i, FAST)
             r.arrive(2 * i + 1, SLOW)
@@ -529,11 +548,13 @@ class TestAPeerRestartIsHandledEndToEnd:
         r.first_nack.clear()
         for i in range(300):
             # New epoch, sequences from zero, SLOW now 80 ms behind.
-            r.link.deliver(Frame(seq=2 * i, path_id=FAST, payload=PAYLOAD,
-                                 epoch=EPOCH + 1).pack())
+            r.link.deliver(Frame(seq=2 * i, path_id=FAST, payload=PAYLOAD, epoch=EPOCH + 1).pack())
             if i >= 80:
-                r.link.deliver(Frame(seq=2 * (i - 80) + 1, path_id=SLOW,
-                                     payload=PAYLOAD, epoch=EPOCH + 1).pack())
+                r.link.deliver(
+                    Frame(
+                        seq=2 * (i - 80) + 1, path_id=SLOW, payload=PAYLOAD, epoch=EPOCH + 1
+                    ).pack()
+                )
             r.step()
 
         assert r.t.reassembler.stats.stream_restarts == 1
@@ -610,7 +631,7 @@ class TestGenuineLossIsUnaffected:
                 r.arrive(2 * (i - skew) + 1, SLOW)
             r.step()
             if i == 100:
-                r.first_nack.clear()      # past the startup window below
+                r.first_nack.clear()  # past the startup window below
         assert r.nacked() == [lost], f"expected only the dropped frame, got {r.nacked()}"
         # The gap opens at 121 ms, when seq 242 arrives on FAST. SLOW delivers
         # seq 243 at 201 ms, which is the first evidence the hole is real.

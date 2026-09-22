@@ -17,6 +17,7 @@ no wired uplink". The script that ran `ifdown` knows, so it writes a marker
 first. Text assertions over a shell script, which is unglamorous, but the
 failure mode was seven days of silence and silence has no other test.
 """
+
 from __future__ import annotations
 
 import re
@@ -64,7 +65,7 @@ def test_the_marker_is_cleared_only_after_a_proven_restore(body: str) -> None:
     reading the route back rather than trusting the command.
     """
     restored = body.index('log "wan RESTORED"')
-    window = body[restored:restored + 200]
+    window = body[restored : restored + 200]
     assert "clear_wan_mark" in window, (
         "the marker must be cleared where the route is PROVEN back, so a failed "
         "restore keeps its evidence"
@@ -83,8 +84,7 @@ def test_a_restore_that_keeps_failing_gives_up_and_says_so(body: str) -> None:
 def test_giving_up_leaves_the_marker_for_a_human(body: str) -> None:
     """Standing down must not erase the evidence that a test is unfinished."""
     give_up = body.index("GIVING UP")
-    window = body[give_up:give_up + 160]
+    window = body[give_up : give_up + 160]
     assert "clear_wan_mark" not in window, (
-        "clearing the marker on give-up would hide an unfinished test from the "
-        "next person to look"
+        "clearing the marker on give-up would hide an unfinished test from the next person to look"
     )

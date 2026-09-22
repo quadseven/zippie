@@ -45,8 +45,8 @@ def test_tier_and_priority_are_published():
 
 def test_a_reserve_leg_is_describable_from_the_console_alone():
     """Everything needed to explain a quiet leg must be in one payload."""
-    d = _path(name="att", tier=3, max_kbps=500,
-              cost_class=CostClass.METERED, monthly_cap_gb=5.0).to_dict()
-    for field in ("tier", "max_kbps", "cost_class", "monthly_cap_gb", "state",
-                  "effective_weight"):
+    d = _path(
+        name="att", tier=3, max_kbps=500, cost_class=CostClass.METERED, monthly_cap_gb=5.0
+    ).to_dict()
+    for field in ("tier", "max_kbps", "cost_class", "monthly_cap_gb", "state", "effective_weight"):
         assert field in d, f"{field} missing; the dashboard would have to guess"

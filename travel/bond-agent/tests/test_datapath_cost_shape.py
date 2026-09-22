@@ -76,8 +76,8 @@ def _buffered_reassembler(depth: int, stride: int = 1) -> Reassembler:
     # The deadline must never fire during the measurement, or the test would be
     # timing the release path instead of the scan.
     r = Reassembler(reorder_deadline_ms=10_000_000)
-    r.push(Frame(seq=0, path_id=0, payload=PAYLOAD, epoch=1))   # anchors
-    for i in range(depth):                                      # seq 1 missing
+    r.push(Frame(seq=0, path_id=0, payload=PAYLOAD, epoch=1))  # anchors
+    for i in range(depth):  # seq 1 missing
         seq = 2 + i * stride
         r.push(Frame(seq=seq, path_id=0, payload=PAYLOAD, epoch=1))
     assert len(r._buffer) == depth
@@ -108,8 +108,8 @@ class TestReassemblerTick:
         r = Reassembler(reorder_deadline_ms=100, _clock=lambda: clock[0])
         r.push(Frame(seq=0, path_id=0, payload=b"first", epoch=1))
         r.push(Frame(seq=2, path_id=0, payload=b"third", epoch=1))
-        assert r.tick() == []          # seq 1 is merely late, not lost
-        clock[0] += 0.2                # past the 100 ms deadline
+        assert r.tick() == []  # seq 1 is merely late, not lost
+        clock[0] += 0.2  # past the 100 ms deadline
         assert r.tick() == [b"third"]  # give up on 1, release what is behind it
 
     def test_the_arrival_index_cannot_grow_on_an_in_order_stream(self):
@@ -159,7 +159,7 @@ class TestForceSkip:
             r.push(Frame(seq=seq, path_id=0, payload=b"p%d" % seq, epoch=1))
         r._force_skip()
         assert r._next_seq == 5
-        assert r.stats.lost_estimate == 4   # 1..4 given up on
+        assert r.stats.lost_estimate == 4  # 1..4 given up on
 
 
 class TestNackTracker:
@@ -170,8 +170,8 @@ class TestNackTracker:
             clock = [1000.0]
             n = NackTracker(60, max_pending=depth, _clock=lambda: clock[0])
             n.note_gap(list(range(depth)))
-            clock[0] += 1.0        # everything is now due
-            n.due()                # ...and asked for, once
+            clock[0] += 1.0  # everything is now due
+            n.due()  # ...and asked for, once
             # Steady state: nothing new comes due, but the tracker is still
             # holding `depth` sequences. This is the call that used to re-walk
             # all of them on every single packet.
@@ -206,16 +206,16 @@ class TestNackTracker:
         file uses, because sorting 2048 ints is only about 9 us. A bound that
         cannot catch the scan it exists to catch is decoration."""
         flat = 3.0
+
         def measure(depth: int) -> float:
             clock = [1000.0]
-            n = NackTracker(60, max_delay_ms=150, max_pending=depth,
-                            _clock=lambda: clock[0])
+            n = NackTracker(60, max_delay_ms=150, max_pending=depth, _clock=lambda: clock[0])
             # Five legs in play, all of them behind every pending sequence, so
             # nothing can be asked for and `due` keeps being called anyway.
             for path_id in range(5):
                 n.resolve(0, path_id=path_id)
             n.note_gap(list(range(1, depth + 1)))
-            clock[0] += 0.061      # past the floor, nowhere near the ceiling
+            clock[0] += 0.061  # past the floor, nowhere near the ceiling
             assert n.due() == [], "the gate should be withholding all of these"
             return _timed(n.due, 2000)
 
@@ -230,10 +230,10 @@ class TestNackTracker:
         clock = [500.0]
         n = NackTracker(60, _clock=lambda: clock[0])
         n.note_gap([7, 8])
-        assert n.due() == []           # too soon: they may just be late
+        assert n.due() == []  # too soon: they may just be late
         clock[0] += 0.061
         assert n.due() == [7, 8]
-        assert n.due() == []           # asked once, not every tick
+        assert n.due() == []  # asked once, not every tick
         assert n.stats.nacks_sent == 2
 
     def test_a_resolved_sequence_is_never_asked_for(self):

@@ -35,8 +35,7 @@ def _agent(tmp_path: Path) -> BondAgent:
                 "address_cidr": "10.66.0.10/24",
                 "ports": [51900, 51901],
             },
-            "policy": {"datapath": "packet", "transport_port": 51830,
-                       "mode": "aggregate"},
+            "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
             "paths": [{"name": "eth0-leg", "interface": "eth0"}],
         }
     )

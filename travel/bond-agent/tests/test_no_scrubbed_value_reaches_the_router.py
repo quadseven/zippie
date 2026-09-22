@@ -20,6 +20,7 @@ It is not a placeholder at all. It is a scrub, and a scrub parses perfectly.
 These tests run the deploy script's OWN renderer - extracted from the script, not
 reimplemented - against fixtures, so what is asserted is what ships.
 """
+
 from __future__ import annotations
 
 import re
@@ -65,7 +66,9 @@ def render(renderer: Path, repo: str, live: str, tmp_path: Path):
     live_file.write_text(live)
     done = subprocess.run(
         [sys.executable, str(renderer), str(repo_file), str(live_file), str(out_file)],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     rendered = out_file.read_text() if out_file.exists() else None
     return done.returncode, done.stdout + done.stderr, rendered
@@ -80,8 +83,7 @@ server_public_key = "{REAL_KEY}"
 def test_a_scrubbed_endpoint_is_replaced_by_the_router_s_own(renderer, tmp_path):
     """THE ONE THAT WAS STILL ARMED. `.invalid` is reserved by RFC 2606 and can
     never resolve, so a bond pointed at it can never form."""
-    repo = '[home]\nendpoint = "dns-e.example-home.invalid"\n' \
-           f'server_public_key = "{REAL_KEY}"\n'
+    repo = f'[home]\nendpoint = "dns-e.example-home.invalid"\nserver_public_key = "{REAL_KEY}"\n'
     code, output, rendered = render(renderer, repo, LIVE, tmp_path)
     assert code == 0, output
     assert 'endpoint = "dns-e.realhome.net"' in rendered
@@ -90,8 +92,7 @@ def test_a_scrubbed_endpoint_is_replaced_by_the_router_s_own(renderer, tmp_path)
 
 def test_a_scrubbed_key_is_still_replaced(renderer, tmp_path):
     """The 2026-08-29 field itself, kept working by the generalised path."""
-    repo = '[home]\nendpoint = "dns-e.realhome.net"\n' \
-           'server_public_key = "<server-public-key>"\n'
+    repo = '[home]\nendpoint = "dns-e.realhome.net"\nserver_public_key = "<server-public-key>"\n'
     code, output, rendered = render(renderer, repo, LIVE, tmp_path)
     assert code == 0, output
     assert f'server_public_key = "{REAL_KEY}"' in rendered
@@ -110,9 +111,7 @@ def test_a_scrubbed_field_the_router_cannot_supply_stops_the_deploy(renderer, tm
     assert "NOTHING was sent" in output
 
 
-def test_a_router_holding_its_own_scrub_is_not_treated_as_a_real_value(
-    renderer, tmp_path
-):
+def test_a_router_holding_its_own_scrub_is_not_treated_as_a_real_value(renderer, tmp_path):
     """The router's copy is only useful if it is REAL.
 
     A router that was already deployed to with a scrubbed value would otherwise
@@ -126,9 +125,7 @@ def test_a_router_holding_its_own_scrub_is_not_treated_as_a_real_value(
     assert "no real value to preserve" in output
 
 
-def test_a_documentation_lan_endpoints_block_is_removed_not_shipped(
-    renderer, tmp_path
-):
+def test_a_documentation_lan_endpoints_block_is_removed_not_shipped(renderer, tmp_path):
     """OPTIONAL, so removal restores exactly today's behaviour.
 
     Shipping 192.0.2.0/24 would leave a matcher that matches nothing while
@@ -171,13 +168,13 @@ def test_a_real_lan_endpoints_block_on_the_router_is_preserved(renderer, tmp_pat
 @pytest.mark.parametrize(
     "value",
     [
-        "host.invalid",          # RFC 2606
-        "thing.example",         # RFC 6761
-        "box.test",              # RFC 6761
-        "example.com",           # RFC 2606
-        "198.51.100.7",          # RFC 5737
-        "203.0.113.33",          # RFC 5737
-        "2001:db8::1",           # RFC 3849
+        "host.invalid",  # RFC 2606
+        "thing.example",  # RFC 6761
+        "box.test",  # RFC 6761
+        "example.com",  # RFC 2606
+        "198.51.100.7",  # RFC 5737
+        "203.0.113.33",  # RFC 5737
+        "2001:db8::1",  # RFC 3849
     ],
 )
 def test_any_reserved_value_that_survives_stops_the_deploy(renderer, tmp_path, value):
@@ -217,25 +214,19 @@ def test_reserved_values_in_COMMENTS_are_not_findings(renderer, tmp_path):
     assert "203.0.113.33" in rendered, "the comment was stripped"
 
 
-def test_the_real_repo_config_renders_against_a_realistic_router(
-    renderer, tmp_path
-):
+def test_the_real_repo_config_renders_against_a_realistic_router(renderer, tmp_path):
     """Against the file that actually ships, not only fixtures.
 
     This is the test that would have gone red before the endpoint scrub was
     found: the repo's own config, rendered against a router holding real values,
     must come out with nothing reserved in it.
     """
-    live = (
-        '[home]\nendpoint = "dns-e.realhome.net"\n'
-        f'server_public_key = "{REAL_KEY}"\n'
-    )
-    code, output, rendered = render(
-        renderer, LIVE_CONFIG_IN_REPO.read_text(), live, tmp_path
-    )
+    live = f'[home]\nendpoint = "dns-e.realhome.net"\nserver_public_key = "{REAL_KEY}"\n'
+    code, output, rendered = render(renderer, LIVE_CONFIG_IN_REPO.read_text(), live, tmp_path)
     assert code == 0, output
     values = [
-        line for line in rendered.splitlines()
+        line
+        for line in rendered.splitlines()
         if not line.lstrip().startswith("#") and re.search(r"=\s*\S", line)
     ]
     for line in values:
@@ -252,9 +243,9 @@ def test_the_repo_config_is_still_valid_toml_after_rendering(renderer, tmp_path)
     except ModuleNotFoundError:
         import tomli as tomllib
     code, output, rendered = render(
-        renderer, LIVE_CONFIG_IN_REPO.read_text(),
-        '[home]\nendpoint = "dns-e.realhome.net"\n'
-        f'server_public_key = "{REAL_KEY}"\n',
+        renderer,
+        LIVE_CONFIG_IN_REPO.read_text(),
+        f'[home]\nendpoint = "dns-e.realhome.net"\nserver_public_key = "{REAL_KEY}"\n',
         tmp_path,
     )
     assert code == 0, output

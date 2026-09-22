@@ -24,6 +24,7 @@ string":
      3849 values scripts/deploy-openwrt.sh already refuses on the router side,
      so the two guards cannot silently drift into checking different lists.
 """
+
 from __future__ import annotations
 
 import threading
@@ -49,7 +50,8 @@ def test_a_url_with_no_placeholder_is_returned_unchanged():
 def test_a_set_variable_is_substituted(monkeypatch):
     monkeypatch.setenv("ZIPPIE_TEST_ROUTER_HOST", "10.99.0.5:8787")
     expanded, error = hub.expand_env_refs(
-        "http://${ZIPPIE_TEST_ROUTER_HOST}/api/status")
+        "http://${ZIPPIE_TEST_ROUTER_HOST}/api/status"
+    )
     assert expanded == "http://10.99.0.5:8787/api/status"
     assert error is None
 
@@ -73,7 +75,8 @@ def test_a_blank_variable_counts_as_unset(monkeypatch):
     a Secret key created empty must not read as configured."""
     monkeypatch.setenv("ZIPPIE_TEST_ROUTER_HOST", "   ")
     _expanded, error = hub.expand_env_refs(
-        "http://${ZIPPIE_TEST_ROUTER_HOST}/api/status")
+        "http://${ZIPPIE_TEST_ROUTER_HOST}/api/status"
+    )
     assert error is not None
 
 
@@ -94,28 +97,38 @@ def test_an_ordinary_tailnet_looking_address_passes():
     """The address this bug should have shipped: a tailnet host, learned at
     runtime rather than committed. Nothing about it is provably dead, so the
     guard has no basis to refuse it - only a poll can say whether it answers."""
-    assert hub.router_config_error(
-        "http://travel-router.tailnet-example.ts.net:8787/api/status") is None
+    assert (
+        hub.router_config_error(
+            "http://travel-router.tailnet-example.ts.net:8787/api/status"
+        )
+        is None
+    )
     assert hub.router_config_error("http://10.99.0.1:8787/api/status") is None
 
 
-@pytest.mark.parametrize("host", [
-    "192.0.2.30",     # RFC 5737 TEST-NET-1 - the exact value #17 shipped
-    "198.51.100.7",   # RFC 5737 TEST-NET-2
-    "203.0.113.9",    # RFC 5737 TEST-NET-3
-])
+@pytest.mark.parametrize(
+    "host",
+    [
+        "192.0.2.30",  # RFC 5737 TEST-NET-1 - the exact value #17 shipped
+        "198.51.100.7",  # RFC 5737 TEST-NET-2
+        "203.0.113.9",  # RFC 5737 TEST-NET-3
+    ],
+)
 def test_rfc5737_documentation_addresses_are_refused(host):
     error = hub.router_config_error(f"http://{host}:8787/api/status")
     assert error is not None
     assert host in error
 
 
-@pytest.mark.parametrize("host", [
-    "router.invalid",   # RFC 2606
-    "router.example",   # RFC 2606
-    "router.test",      # RFC 2606
-    "router.localhost", # RFC 6761
-])
+@pytest.mark.parametrize(
+    "host",
+    [
+        "router.invalid",  # RFC 2606
+        "router.example",  # RFC 2606
+        "router.test",  # RFC 2606
+        "router.localhost",  # RFC 6761
+    ],
+)
 def test_reserved_tlds_are_refused(host):
     assert hub.router_config_error(f"http://{host}:8787/api/status") is not None
 
@@ -124,13 +137,16 @@ def test_a_real_hostname_that_merely_contains_a_reserved_word_is_not_refused():
     """`\\.example\\b` must not fire on `host.example-home.net` - a hyphen is a
     word boundary, and a guard that refuses real hostnames is a guard somebody
     switches off. Mirrors the identical anchoring test for deploy-openwrt.sh."""
-    assert hub.router_config_error(
-        "http://host.example-home.net:8787/api/status") is None
+    assert (
+        hub.router_config_error("http://host.example-home.net:8787/api/status") is None
+    )
 
 
 def test_an_unresolved_placeholder_is_a_config_error_too():
-    assert hub.router_config_error(
-        "http://${TRAVEL_ROUTER_HOST}:8787/api/status") is not None
+    assert (
+        hub.router_config_error("http://${TRAVEL_ROUTER_HOST}:8787/api/status")
+        is not None
+    )
 
 
 def test_a_hostless_url_is_refused():
@@ -170,15 +186,22 @@ def test_poll_routers_never_dials_a_reserved_address(monkeypatch):
     monkeypatch.setattr(hub, "POLL_INTERVAL_S", 0.03)
 
     routers = [
-        {"name": "broken", "label": "broken",
-         "status_url": "http://192.0.2.30:8787/api/status"},
-        {"name": "fine", "label": "fine",
-         "status_url": "http://10.99.0.1:8787/api/status"},
+        {
+            "name": "broken",
+            "label": "broken",
+            "status_url": "http://192.0.2.30:8787/api/status",
+        },
+        {
+            "name": "fine",
+            "label": "fine",
+            "status_url": "http://10.99.0.1:8787/api/status",
+        },
     ]
     reg = hub.Registry(routers)
     stop = threading.Event()
-    t = threading.Thread(target=hub.poll_routers, args=(reg, routers, stop),
-                        daemon=True)
+    t = threading.Thread(
+        target=hub.poll_routers, args=(reg, routers, stop), daemon=True
+    )
     t.start()
     try:
         deadline = time.monotonic() + 5
@@ -192,7 +215,8 @@ def test_poll_routers_never_dials_a_reserved_address(monkeypatch):
 
     assert calls, "the fine router was never polled either - the test proves nothing"
     assert all("192.0.2.30" not in c for c in calls), (
-        f"the poller dialled the reserved-range address anyway: {calls}")
+        f"the poller dialled the reserved-range address anyway: {calls}"
+    )
 
     status, at, reachable, config_error = reg.router_sample("broken")
     assert status is None
@@ -201,19 +225,26 @@ def test_poll_routers_never_dials_a_reserved_address(monkeypatch):
     assert at is not None, (
         "a misconfigured router must still show WHEN it was last checked - "
         "that is what tells an operator the hub is alive and simply wrong, "
-        "rather than making the row look like it has never been touched")
+        "rather than making the row look like it has never been touched"
+    )
 
 
 def test_config_error_does_not_freeze_at_startup_forever():
     """staleMs for a broken router must move with the clock, not sit at
     whatever it was on the first cycle - the whole point is that "checked 3s
     ago and still broken" is a different, truer claim than "never"."""
-    routers = [{"name": "broken", "label": "broken",
-               "status_url": "http://192.0.2.30:8787/api/status"}]
+    routers = [
+        {
+            "name": "broken",
+            "label": "broken",
+            "status_url": "http://192.0.2.30:8787/api/status",
+        }
+    ]
     reg = hub.Registry(routers)
     stop = threading.Event()
-    t = threading.Thread(target=hub.poll_routers, args=(reg, routers, stop),
-                        daemon=True)
+    t = threading.Thread(
+        target=hub.poll_routers, args=(reg, routers, stop), daemon=True
+    )
     with unittest.mock.patch.object(hub, "POLL_INTERVAL_S", 0.03):
         t.start()
         try:
@@ -246,9 +277,13 @@ def test_note_router_infers_reachable_from_status_for_old_callers():
 
 def test_a_config_error_router_is_unreachable_with_a_reason_on_api_nodes():
     reg = hub.Registry([{"name": "travel-router", "label": "the travel router"}])
-    reg.note_router("travel-router", None, reachable=False,
-                    config_error="status_url is reserved for documentation "
-                                 "and can never resolve: 'http://192.0.2.30/'")
+    reg.note_router(
+        "travel-router",
+        None,
+        reachable=False,
+        config_error="status_url is reserved for documentation "
+        "and can never resolve: 'http://192.0.2.30/'",
+    )
 
     node = next(n for n in reg.snapshot() if n["name"] == "travel-router")
 
@@ -289,8 +324,12 @@ def test_a_router_that_has_never_been_polled_at_all_still_reads_never():
 
 
 def test_config_error_emits_its_own_explicit_gauge_and_zeroes_the_rest():
-    samples = {m: v for m, v, _tags in
-              hub.router_samples("travel-router", None, False, config_error=True)}
+    samples = {
+        m: v
+        for m, v, _tags in hub.router_samples(
+            "travel-router", None, False, config_error=True
+        )
+    }
     assert samples[hub.METRIC_CONFIG_ERROR] == 1.0
     assert samples[hub.METRIC_REACHABLE] == 0.0
     assert samples[hub.METRIC_ANSWERING] == 0.0
@@ -301,6 +340,7 @@ def test_a_healthy_cycle_still_emits_an_explicit_zero_for_config_error():
     """AN ABSENT SAMPLE AND A ZERO SAMPLE ARE NOT THE SAME THING. If this ever
     goes back to being omitted for the healthy case, the gauge stops being
     something a monitor can alert on - see the module note on #272."""
-    samples = {m: v for m, v, _tags in
-              hub.router_samples("travel-router", {"paths": []}, True)}
+    samples = {
+        m: v for m, v, _tags in hub.router_samples("travel-router", {"paths": []}, True)
+    }
     assert samples[hub.METRIC_CONFIG_ERROR] == 0.0

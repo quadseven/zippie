@@ -97,16 +97,29 @@ def _agent(tmp_path, **policy) -> BondAgent:
     """
     base = {"datapath": "packet", "join_streak_min": 8}
     base.update(policy)
-    a = BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path),
-                  "run_dir": str(tmp_path / "run")},
-        "home": {"endpoint": "h:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": base,
-        "paths": [{"name": "lossy", "interface": "eth0"},
-                  {"name": "steady", "interface": "eth1"},
-                  {"name": "ghost", "interface": "eth2"}],
-    }))
+    a = BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path),
+                    "run_dir": str(tmp_path / "run"),
+                },
+                "home": {
+                    "endpoint": "h:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": base,
+                "paths": [
+                    {"name": "lossy", "interface": "eth0"},
+                    {"name": "steady", "interface": "eth1"},
+                    {"name": "ghost", "interface": "eth2"},
+                ],
+            }
+        )
+    )
     # What match_interfaces would have bound on a real pass. The valve's
     # candidate list requires it, so without this every valve test silently
     # asserts against an empty bond.
@@ -320,8 +333,7 @@ def test_a_leg_that_has_never_been_answered_is_never_put_on_probation(tmp_path, 
         _lossy_pass(ghost, i, miss_every=3)
         a._gate_flapped_paths()
         assert ghost.effective_weight == 0, (
-            f"a leg nothing has ever answered was given weight "
-            f"{ghost.effective_weight} on pass {i}"
+            f"a leg nothing has ever answered was given weight {ghost.effective_weight} on pass {i}"
         )
         assert ghost.on_probation is False
         clock()
@@ -390,9 +402,7 @@ def test_a_genuinely_oscillating_leg_never_regains_its_full_weight(tmp_path, clo
     assert a._join_streak.get(leg.name, 0.0) < a.config.policy.join_streak_min
 
 
-def test_a_leg_that_proves_itself_then_starts_yo_yoing_is_damped_again(
-    tmp_path, clock
-):
+def test_a_leg_that_proves_itself_then_starts_yo_yoing_is_damped_again(tmp_path, clock):
     """THE 2026-07-30 INCIDENT, in the order it actually happens.
 
     That leg was not broken from the start - it worked, then began bouncing
@@ -437,6 +447,7 @@ def test_a_leg_that_proves_itself_then_starts_yo_yoing_is_damped_again(
         f"{LONG_RUN_PASSES} passes; the anti-flap gate is not damping a leg "
         f"that had already proven itself once"
     )
+
 
 # ================================================ the bond-wide safety valve
 def test_the_all_legs_held_out_valve_still_fires(tmp_path, clock):
@@ -487,9 +498,7 @@ def test_the_valve_prefers_a_leg_something_has_actually_answered(tmp_path, clock
     )
 
 
-def test_a_never_proven_leg_does_not_ride_along_with_a_probation_release(
-    tmp_path, clock
-):
+def test_a_never_proven_leg_does_not_ride_along_with_a_probation_release(tmp_path, clock):
     """#61 AC2, in the shape the live bond was actually in.
 
     Three legs behind the same obstructed uplink: one steady, one that has
@@ -525,9 +534,7 @@ def test_a_never_proven_leg_does_not_ride_along_with_a_probation_release(
     )
 
 
-def test_the_probation_release_is_logged_once_per_hold_not_once_per_pass(
-    tmp_path, clock, caplog
-):
+def test_the_probation_release_is_logged_once_per_hold_not_once_per_pass(tmp_path, clock, caplog):
     """A line on every re-entry would bury the transition it reports.
 
     `on_probation` is a per-pass fact and correctly goes False whenever the
@@ -548,8 +555,7 @@ def test_the_probation_release_is_logged_once_per_hold_not_once_per_pass(
 
     lines = [r for r in caplog.records if "put on probation" in r.getMessage()]
     assert len(lines) == 1, (
-        f"{len(lines)} probation lines over {LONG_RUN_PASSES} passes; one "
-        f"hold is one event"
+        f"{len(lines)} probation lines over {LONG_RUN_PASSES} passes; one hold is one event"
     )
     assert leg.on_probation is True or leg.state is PathState.DOWN
 
@@ -596,23 +602,29 @@ def test_a_re_admitted_leg_can_be_put_on_probation_again_later(tmp_path, clock):
         f"the anti-flap wait is not being served again"
     )
 
+
 # ============================================================== the knobs
 def test_the_knobs_are_readable_from_the_config_file(tmp_path):
     """UNIT-TESTED, NEVER WIRED is this repo's most repeated defect."""
-    cfg = parse_config({
-        "home": {"endpoint": "h:51900", "server_public_key": "c2VydmVy"},
-        "policy": {"probation_after_ms": 12_000, "join_streak_miss_penalty": 0.25},
-        "paths": [{"name": "ethernet", "interface": "eth0"}],
-    })
+    cfg = parse_config(
+        {
+            "home": {"endpoint": "h:51900", "server_public_key": "c2VydmVy"},
+            "policy": {"probation_after_ms": 12_000, "join_streak_miss_penalty": 0.25},
+            "paths": [{"name": "ethernet", "interface": "eth0"}],
+        }
+    )
     assert cfg.policy.probation_after_ms == 12_000
     assert cfg.policy.join_streak_miss_penalty == 0.25
 
 
-@pytest.mark.parametrize("knobs", [
-    {"probation_after_ms": 0},
-    {"probation_after_ms": -1},
-    {"join_streak_miss_penalty": -5.0},
-])
+@pytest.mark.parametrize(
+    "knobs",
+    [
+        {"probation_after_ms": 0},
+        {"probation_after_ms": -1},
+        {"join_streak_miss_penalty": -5.0},
+    ],
+)
 def test_nonsense_values_hold_a_leg_out_less_never_more(tmp_path, clock, knobs):
     """A knob edited on a router in a car, over a phone hotspot, must fail SAFE.
 
@@ -621,6 +633,7 @@ def test_nonsense_values_hold_a_leg_out_less_never_more(tmp_path, clock, knobs):
     already follow. The failure mode of too little holding is churn; the
     failure mode of too much is this whole issue.
     """
+
     def carried_passes(**cfg) -> int:
         # COUNTED OVER THE RUN, not read off the final pass: every third pass
         # is a miss, and a DOWN leg carries nothing under any setting of these
