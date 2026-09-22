@@ -33,6 +33,7 @@ The cost was not only noise. The router keeps a small ring buffer in RAM, so
 this evicted everything else: the tier resolution that #67 needed was
 unreadable in the visible window because this message had pushed it out.
 """
+
 from __future__ import annotations
 
 import logging
@@ -45,15 +46,25 @@ from zippie.config import parse_config
 def _agent(tmp_path):
     from zippie.agent import BondAgent
 
-    return BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path / "s"),
-                  "run_dir": str(tmp_path / "r")},
-        "home": {"endpoint": "home.example:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"datapath": "packet", "transport_port": 51830,
-                   "mode": "aggregate"},
-        "paths": [],
-    }))
+    return BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path / "s"),
+                    "run_dir": str(tmp_path / "r"),
+                },
+                "home": {
+                    "endpoint": "home.example:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
+                "paths": [],
+            }
+        )
+    )
 
 
 @pytest.fixture()
@@ -65,11 +76,12 @@ def announced(tmp_path):
     """
     agent = _agent(tmp_path)
     agent.dynamic.announce(
-        name="iphone-8fe5", host="10.99.0.151", port=51999, label="iPhone",
+        name="iphone-8fe5",
+        host="10.99.0.151",
+        port=51999,
+        label="iPhone",
     )
-    agent._leg_store.update(
-        "iphone-8fe5", {"label": "Operator - iPhone 17 Pro Max"}
-    )
+    agent._leg_store.update("iphone-8fe5", {"label": "Operator - iPhone 17 Pro Max"})
     return agent
 
 
@@ -96,9 +108,7 @@ def test_the_override_survives_the_next_announce(announced) -> None:
     )
 
 
-def test_a_stable_override_is_logged_once_not_once_per_pass(
-    announced, caplog
-) -> None:
+def test_a_stable_override_is_logged_once_not_once_per_pass(announced, caplog) -> None:
     """The symptom, pinned directly: 25 identical lines in the last 25 log
     entries is what made the router's ring buffer useless."""
     with caplog.at_level(logging.INFO, logger="zippie.agent"):
@@ -107,8 +117,7 @@ def test_a_stable_override_is_logged_once_not_once_per_pass(
     lines = [r for r in caplog.records if "overridden" in r.getMessage()]
     assert len(lines) <= 1, (
         f"{len(lines)} override log lines from 12 passes - one per pass is the "
-        f"spam this issue is about:\n  "
-        + "\n  ".join(r.getMessage() for r in lines[:4])
+        f"spam this issue is about:\n  " + "\n  ".join(r.getMessage() for r in lines[:4])
     )
 
 
@@ -131,31 +140,35 @@ def test_the_config_value_does_not_churn(announced) -> None:
 
 
 # ------------------------------------------------- without losing the announce
-def test_an_announced_label_still_applies_when_there_is_no_override(
-    tmp_path
-) -> None:
+def test_an_announced_label_still_applies_when_there_is_no_override(tmp_path) -> None:
     """The fix must not simply stop honouring the announce. A leg nobody has
     named should still show what the phone calls itself."""
     agent = _agent(tmp_path)
     agent.dynamic.announce(
-        name="pixel-1234", host="10.99.0.152", port=51999, label="Pixel 6a",
+        name="pixel-1234",
+        host="10.99.0.152",
+        port=51999,
+        label="Pixel 6a",
     )
     _pass(agent)
     leg = next(p for p in agent.paths if p.name == "pixel-1234")
     assert leg.config.label == "Pixel 6a"
 
 
-def test_a_changed_announce_still_applies_when_there_is_no_override(
-    tmp_path
-) -> None:
+def test_a_changed_announce_still_applies_when_there_is_no_override(tmp_path) -> None:
     """And it must keep tracking changes, not latch the first value seen."""
     agent = _agent(tmp_path)
     agent.dynamic.announce(
-        name="pixel-1234", host="10.99.0.152", port=51999, label="Pixel 6a",
+        name="pixel-1234",
+        host="10.99.0.152",
+        port=51999,
+        label="Pixel 6a",
     )
     _pass(agent)
     agent.dynamic.announce(
-        name="pixel-1234", host="10.99.0.152", port=51999,
+        name="pixel-1234",
+        host="10.99.0.152",
+        port=51999,
         label="Pixel 6a (T-Mobile)",
     )
     _pass(agent)
@@ -163,9 +176,7 @@ def test_a_changed_announce_still_applies_when_there_is_no_override(
     assert leg.config.label == "Pixel 6a (T-Mobile)"
 
 
-def test_removing_the_override_hands_the_announced_label_back(
-    announced
-) -> None:
+def test_removing_the_override_hands_the_announced_label_back(announced) -> None:
     """Removal must not be a no-op-until-restart. `apply_leg_overrides` already
     restores the CONFIGURED baseline when an override disappears; for an
     announced leg the right value to fall back to is what the phone says."""
@@ -185,9 +196,7 @@ def test_removing_the_override_hands_the_announced_label_back(
 # ------------------------------------------- the log must still SAY things
 # Quieting a message is easy to overdo. These pin the three moments that are
 # genuinely worth a line, so "logged once" cannot become "never logged".
-def test_changing_an_override_logs_the_old_and_new_value(
-    announced, caplog
-) -> None:
+def test_changing_an_override_logs_the_old_and_new_value(announced, caplog) -> None:
     """A real change is news and must carry both values - a line saying only
     the new one leaves the reader unable to tell what moved."""
     _pass(announced)

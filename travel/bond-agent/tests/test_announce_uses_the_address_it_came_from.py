@@ -37,15 +37,27 @@ from zippie.dynamic import announce_host
 
 
 def _agent(tmp_path):
-    return BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path),
-                  "run_dir": str(tmp_path / "run"), "dashboard_host": "127.0.0.1",
-                  "dashboard_port": 0},
-        "home": {"endpoint": "home.example:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
-        "paths": [{"name": "att", "interface": "eth0", "tier": 1}],
-    }))
+    return BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path),
+                    "run_dir": str(tmp_path / "run"),
+                    "dashboard_host": "127.0.0.1",
+                    "dashboard_port": 0,
+                },
+                "home": {
+                    "endpoint": "home.example:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
+                "paths": [{"name": "att", "interface": "eth0", "tier": 1}],
+            }
+        )
+    )
 
 
 @pytest.fixture
@@ -59,10 +71,12 @@ def served(tmp_path):
 
 
 def _announce(base, token, **body):
-    req = urllib.request.Request(
-        base + "/api/legs/announce", data=json.dumps(body).encode(),
-        method="POST", headers={"Content-Type": "application/json",
-                                "Authorization": f"Bearer {token}"})
+    req = urllib.request.Request(  # noqa: S310
+        base + "/api/legs/announce",
+        data=json.dumps(body).encode(),
+        method="POST",
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+    )
     # S310 wants the scheme audited, and it is: `base` is built by this file as
     # http://127.0.0.1:<port> from the server fixture above. No caller supplies
     # it, so there is no file: or custom scheme that can reach here.
@@ -76,8 +90,8 @@ def _announce(base, token, **body):
 # and the live server below can only ever be reached from loopback. Testing the
 # preference through HTTP alone would test one row of this and call it done.
 
-CLAIMED_WIFI = "10.0.0.22"        # the house LAN, behind a different router
-OBSERVED_LAN = "10.99.0.241"      # this router's LAN, where the packet came from
+CLAIMED_WIFI = "10.0.0.22"  # the house LAN, behind a different router
+OBSERVED_LAN = "10.99.0.241"  # this router's LAN, where the packet came from
 
 
 def test_the_source_wins_when_it_is_diallable():
@@ -123,8 +137,9 @@ def test_a_loopback_announce_still_uses_the_claim(served):
     """The live half. Reached over loopback - which the router cannot dial - so
     the claim survives, and the leg is created exactly as it was before #252."""
     agent, base = served
-    status, body = _announce(base, agent.console_token(),
-                             name="iphone", host="10.99.0.241", port=51999)
+    status, body = _announce(
+        base, agent.console_token(), name="iphone", host="10.99.0.241", port=51999
+    )
     assert status == 200
     assert body["endpoint"] == "10.99.0.241:51999"
 
@@ -133,6 +148,7 @@ def test_the_port_always_comes_from_the_claim(served):
     """The phone is the only side that knows what it bound, and the source port
     of an HTTP request is an ephemeral one that nothing is listening on."""
     agent, base = served
-    _status, body = _announce(base, agent.console_token(),
-                              name="iphone", host="10.99.0.241", port=51999)
+    _status, body = _announce(
+        base, agent.console_token(), name="iphone", host="10.99.0.241", port=51999
+    )
     assert body["endpoint"].endswith(":51999")

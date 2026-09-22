@@ -9,6 +9,7 @@ which is why it can persist for weeks.
 These tests pin the ALARM, not the fix. Which candidate wins is #154 and needs
 the config split.
 """
+
 import logging
 
 from zippie.models import PathConfig, PathMatch, PathRuntime, PathState
@@ -29,14 +30,14 @@ class _Link:
 
 def _agent(paths):
     from zippie import agent as agent_mod
+
     a = object.__new__(agent_mod.BondAgent)
     a.paths = paths
     return a
 
 
 def _leg(name, pattern, *, iface=None):
-    cfg = PathConfig(name=name,
-                     match=PathMatch(type="interface", interface=pattern))
+    cfg = PathConfig(name=name, match=PathMatch(type="interface", interface=pattern))
     p = PathRuntime(name=name, config=cfg)
     p.interface = iface
     p.state = PathState.UP
@@ -60,7 +61,8 @@ def test_an_interface_another_leg_claimed_is_not_reported():
     a = _leg("a", "apcli*", iface="apclix0")
     b = _leg("b", "apcli*", iface="apcli0")
     _agent([a, b])._flag_shadowed_uplinks(
-        [_Link("apclix0"), _Link("apcli0")], {"apclix0", "apcli0"})
+        [_Link("apclix0"), _Link("apcli0")], {"apclix0", "apcli0"}
+    )
     assert a.shadowed_interfaces == []
     assert b.shadowed_interfaces == []
 
@@ -79,7 +81,8 @@ def test_a_link_without_an_address_is_not_a_hidden_uplink():
     in use, which is the normal state."""
     p = _leg("hotspot", "apcli*", iface="apclix0")
     _agent([p])._flag_shadowed_uplinks(
-        [_Link("apclix0"), _Link("apcli0", has_v4=False)], {"apclix0"})
+        [_Link("apclix0"), _Link("apcli0", has_v4=False)], {"apclix0"}
+    )
     assert p.shadowed_interfaces == []
 
 

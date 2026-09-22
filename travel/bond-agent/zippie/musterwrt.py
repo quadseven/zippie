@@ -333,9 +333,7 @@ def _digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()[:12]
 
 
-def merge_into_keys(
-    existing: dict, keys: dict[str, str], revision: str, key_path: str
-) -> dict:
+def merge_into_keys(existing: dict, keys: dict[str, str], revision: str, key_path: str) -> dict:
     """What keys.json becomes: a RECORD of the delivery, not the secret.
 
     A WHOLESALE REWRITE WOULD BE A DISASTER and it is the obvious implementation.
@@ -460,7 +458,10 @@ def _openssl(args, stdin: bytes | None = None) -> bytes:
     """
     try:
         done = subprocess.run(
-            ["openssl", *args], input=stdin, capture_output=True, check=False,
+            ["openssl", *args],
+            input=stdin,
+            capture_output=True,
+            check=False,
         )
     except OSError as missing:
         raise Unreachable(f"openssl is not usable on this device: {missing}") from missing
@@ -789,9 +790,7 @@ def renew(base_url: str, key_path: Path, certificate_path: Path) -> str:
     # key and generates nothing; `-newkey` would silently overwrite the identity
     # this router proves itself with, and the failure would land on a box in
     # another state with no way back.
-    csr = _openssl(
-        ["req", "-new", "-key", str(key_path), "-subj", "/CN=travel-router"]
-    ).decode()
+    csr = _openssl(["req", "-new", "-key", str(key_path), "-subj", "/CN=travel-router"]).decode()
 
     challenge = _post(f"{base}/v1/auth/challenge", {})
     nonce = challenge.get("nonce", "")

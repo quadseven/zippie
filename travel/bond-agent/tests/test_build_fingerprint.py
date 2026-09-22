@@ -5,6 +5,7 @@ That drift: six of nineteen modules on the router differed from the repo, the
 deployed telemetry.py was three days stale, and `/api/status` said `"version":
 "0.1.0"` the whole time because that string is a hand-edited constant.
 """
+
 from __future__ import annotations
 
 import json
@@ -127,11 +128,15 @@ def test_no_stamp_reports_unknown_not_mismatch(pkg, tmp_path):
 
 def test_matching_stamp_reports_true(pkg, tmp_path):
     stamp = tmp_path / "build.json"
-    stamp.write_text(json.dumps({
-        "commit": "abc1234",
-        "deployed_at": "2026-08-06T14:00:00Z",
-        "fingerprint": build.fingerprint(pkg),
-    }))
+    stamp.write_text(
+        json.dumps(
+            {
+                "commit": "abc1234",
+                "deployed_at": "2026-08-06T14:00:00Z",
+                "fingerprint": build.fingerprint(pkg),
+            }
+        )
+    )
     info = build.build_info(pkg, stamp)
     assert info["matches_deploy"] is True
     assert info["commit"] == "abc1234"
@@ -144,11 +149,15 @@ def test_hand_edit_after_deploy_reports_false(pkg, tmp_path):
     stamp alone cannot see it - only recomputing from the files can.
     """
     stamp = tmp_path / "build.json"
-    stamp.write_text(json.dumps({
-        "commit": "abc1234",
-        "deployed_at": "2026-08-06T14:00:00Z",
-        "fingerprint": build.fingerprint(pkg),
-    }))
+    stamp.write_text(
+        json.dumps(
+            {
+                "commit": "abc1234",
+                "deployed_at": "2026-08-06T14:00:00Z",
+                "fingerprint": build.fingerprint(pkg),
+            }
+        )
+    )
     assert build.build_info(pkg, stamp)["matches_deploy"] is True
 
     (pkg / "telemetry.py").write_text("B = 999  # hand-patched on the router\n")
@@ -179,9 +188,7 @@ def test_default_package_dir_is_the_loaded_tree():
     """
     from pathlib import Path
 
-    assert build.fingerprint() == build.fingerprint(
-        Path(build.__file__).resolve().parent
-    )
+    assert build.fingerprint() == build.fingerprint(Path(build.__file__).resolve().parent)
 
 
 # ----------------------------------------------- normalized config fingerprint
@@ -237,9 +244,7 @@ def test_a_router_specific_endpoint_does_not_count_as_drift():
         p2 = Path(d) / "real.toml"
         p1.write_text(placeholder)
         p2.write_text(real)
-        assert build.normalized_config_fingerprint(
-            p1
-        ) == build.normalized_config_fingerprint(p2)
+        assert build.normalized_config_fingerprint(p1) == build.normalized_config_fingerprint(p2)
 
 
 def test_a_router_specific_server_public_key_does_not_count_as_drift(tmp_path):
@@ -252,9 +257,9 @@ def test_a_router_specific_server_public_key_does_not_count_as_drift(tmp_path):
         ),
         name="real.toml",
     )
-    assert build.normalized_config_fingerprint(
-        placeholder
-    ) == build.normalized_config_fingerprint(real)
+    assert build.normalized_config_fingerprint(placeholder) == build.normalized_config_fingerprint(
+        real
+    )
 
 
 def test_lan_endpoints_present_vs_absent_does_not_count_as_drift(tmp_path):
@@ -268,14 +273,14 @@ def test_lan_endpoints_present_vs_absent_does_not_count_as_drift(tmp_path):
         tmp_path,
         text=_BASE_TOML.replace(
             "persistent_keepalive = 3",
-            'persistent_keepalive = 3\n'
+            "persistent_keepalive = 3\n"
             'lan_endpoints = [{ network = "10.0.0.0/24", address = "10.0.0.5", port = 51931 }]',
         ),
         name="present.toml",
     )
-    assert build.normalized_config_fingerprint(
-        absent
-    ) == build.normalized_config_fingerprint(present)
+    assert build.normalized_config_fingerprint(absent) == build.normalized_config_fingerprint(
+        present
+    )
 
 
 def test_a_real_config_difference_still_counts_as_drift(tmp_path):
@@ -284,12 +289,10 @@ def test_a_real_config_difference_still_counts_as_drift(tmp_path):
     before = _toml(tmp_path, name="before.toml")
     after = _toml(
         tmp_path,
-        text=_BASE_TOML.replace('weight = 100', 'weight = 40'),
+        text=_BASE_TOML.replace("weight = 100", "weight = 40"),
         name="after.toml",
     )
-    assert build.normalized_config_fingerprint(
-        before
-    ) != build.normalized_config_fingerprint(after)
+    assert build.normalized_config_fingerprint(before) != build.normalized_config_fingerprint(after)
 
 
 def test_key_order_and_whitespace_do_not_count_as_drift(tmp_path):

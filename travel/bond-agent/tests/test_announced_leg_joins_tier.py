@@ -23,16 +23,16 @@ honoured, because that is the operator or the app saying something deliberate -
 the bug was never that tiers exist, it was that silence meant "highest
 priority" instead of "whatever everyone else is on".
 """
+
 from __future__ import annotations
 
 from zippie import agent as agent_mod
-from zippie.dynamic import DynamicLeg, DynamicLegs
+from zippie.dynamic import DynamicLegs
 from zippie.models import PathConfig, PathMatch, PathRuntime, PathState
 
 
 def _leg(name, tier, *, interface="eth0", state=PathState.UP):
-    cfg = PathConfig(name=name, match=PathMatch(type="interface", interface=interface),
-                     tier=tier)
+    cfg = PathConfig(name=name, match=PathMatch(type="interface", interface=interface), tier=tier)
     p = PathRuntime(name=name, config=cfg)
     p.interface = interface
     p.state = state
@@ -64,8 +64,7 @@ def _agent(paths):
 
 
 def _announce(agent, name="iphone-abcd", tier=None):
-    agent.dynamic.announce(name=name, host="10.99.0.151", port=51999,
-                           label="iPhone", tier=tier)
+    agent.dynamic.announce(name=name, host="10.99.0.151", port=51999, label="iPhone", tier=tier)
     agent_mod.BondAgent.reconcile_dynamic_legs(agent)
     return next(p for p in agent.paths if p.name == name)
 
@@ -83,6 +82,7 @@ def test_the_existing_legs_are_not_evicted():
     """The observable consequence, asserted through the real gate rather than
     by reading the tier back."""
     from zippie import policy
+
     agent = _agent([_leg("ethernet", 2), _leg("hotspot", 3, interface="apclix0")])
     phone = _announce(agent)
     # A freshly announced leg is DOWN until it has been probed. Put it in the
@@ -124,20 +124,24 @@ def test_the_first_leg_of_all_defaults_to_tier_1():
 def test_legs_that_are_down_do_not_set_the_tier_to_join():
     """A dead tier-1 leg must not drag a phone up to a tier nothing carries -
     that would strand the phone alongside a corpse while tier 2 works."""
-    agent = _agent([
-        _leg("dead", 1, interface=None, state=PathState.DOWN),
-        _leg("hotspot", 2, interface="apclix0"),
-    ])
+    agent = _agent(
+        [
+            _leg("dead", 1, interface=None, state=PathState.DOWN),
+            _leg("hotspot", 2, interface="apclix0"),
+        ]
+    )
     assert _announce(agent).config.tier == 2
 
 
 def test_legs_with_no_interface_are_ignored_when_choosing():
     """A configured leg whose hardware is absent is not carrying anything, so
     it cannot define the tier to join."""
-    agent = _agent([
-        _leg("ghost", 1, interface=None),
-        _leg("ethernet", 3, interface="eth0"),
-    ])
+    agent = _agent(
+        [
+            _leg("ghost", 1, interface=None),
+            _leg("ethernet", 3, interface="eth0"),
+        ]
+    )
     assert _announce(agent).config.tier == 3
 
 

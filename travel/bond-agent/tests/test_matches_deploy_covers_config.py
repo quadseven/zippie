@@ -11,6 +11,7 @@ Nothing reported it, because the stamp only ever described the Python modules -
 and those were genuinely current. A deploy record that can be true while the
 running bond is shaped by a different file is not a record, it is a decoration.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -167,9 +168,7 @@ STAMP_GUARD = 'if [[ "${DISARMED}" -eq 1 ]]; then'
 def _code(text: str) -> str:
     """The script with comment-only lines removed - the comments quote the very
     strings asserted here, because that is where the incidents are recorded."""
-    return "\n".join(
-        line for line in text.splitlines() if not line.lstrip().startswith("#")
-    )
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
 
 
 def _sha256(data: bytes) -> str:
@@ -200,14 +199,17 @@ def rendered_config(renderer, tmp_path_factory) -> bytes:
     live_file.write_text(LIVE_CONFIG_BEFORE)
     done = subprocess.run(
         [sys.executable, str(renderer), str(repo_file), str(live_file), str(out_file)],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert done.returncode == 0, done.stdout + done.stderr
     rendered = out_file.read_bytes()
     assert b'endpoint = "dns-e.realhome.net"' in rendered, "the endpoint was not spliced in"
     assert b'name = "after"' in rendered, "the repo's change was lost"
     assert _sha256(rendered) not in (
-        _sha256(REPO_CONFIG.encode()), _sha256(LIVE_CONFIG_BEFORE.encode())
+        _sha256(REPO_CONFIG.encode()),
+        _sha256(LIVE_CONFIG_BEFORE.encode()),
     ), "the rendered path is not being exercised: the render equals an input"
     return rendered
 
@@ -255,13 +257,17 @@ class _Router:
         self.snapshot_config = self.config.read_bytes()
 
     def write_stamp(self) -> None:
-        self.stamp.write_text(json.dumps({
-            "commit": "abc1234",
-            "deployed_at": "2026-08-29T00:00:00Z",
-            "fingerprint": build.fingerprint(self.pkg),
-            "modules": 1,
-            "config_sha256": _sha256(self.config.read_bytes()),
-        }))
+        self.stamp.write_text(
+            json.dumps(
+                {
+                    "commit": "abc1234",
+                    "deployed_at": "2026-08-29T00:00:00Z",
+                    "fingerprint": build.fingerprint(self.pkg),
+                    "modules": 1,
+                    "config_sha256": _sha256(self.config.read_bytes()),
+                }
+            )
+        )
 
     def apply(self, step: str, disarm_takes: bool = True) -> None:
         if step == "package":

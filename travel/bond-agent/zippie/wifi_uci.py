@@ -72,7 +72,9 @@ def assign_radios(ssids: list[str], radios: list[str] | None = None) -> dict[str
     return {ssid: radio for ssid, radio in zip(ssids, radios)}
 
 
-def ensure_station(ssid: str, psk: str | None, radio: str, *, network: str = DEFAULT_NETWORK) -> str:
+def ensure_station(
+    ssid: str, psk: str | None, radio: str, *, network: str = DEFAULT_NETWORK
+) -> str:
     """Create/update a disabled station section for ssid. Returns section name."""
     name = slug(ssid)
     sets = [
@@ -100,7 +102,10 @@ def _stations_on_radio(radio: str) -> list[str]:
     proc = net.run(["uci", "show", "wireless"], check=False)
     out: list[str] = []
     for line in (proc.stdout or "").splitlines():
-        m = re.match(rf"wireless\.({SECTION_PREFIX}[A-Za-z0-9_]+)\.device='?{re.escape(radio)}'?$", line.strip())
+        m = re.match(
+            rf"wireless\.({SECTION_PREFIX}[A-Za-z0-9_]+)\.device='?{re.escape(radio)}'?$",
+            line.strip(),
+        )
         if m:
             out.append(m.group(1))
     return out

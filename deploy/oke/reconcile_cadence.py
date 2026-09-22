@@ -26,6 +26,7 @@ So the question is asked of the RECONCILE JOB, not the run. The job either
 applied the manifests or it did not, and that fact is independent of whatever
 this check concluded in the same run.
 """
+
 from __future__ import annotations
 
 import json
@@ -87,9 +88,9 @@ def age_hours(run: dict[str, Any], now: datetime) -> float:
     strptime, not fromisoformat: the runner's python may be 3.9, which does not
     parse the trailing Z.
     """
-    seen = datetime.strptime(
-        run["created_at"], "%Y-%m-%dT%H:%M:%SZ"
-    ).replace(tzinfo=timezone.utc)
+    seen = datetime.strptime(run["created_at"], "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=timezone.utc
+    )
     return (now - seen).total_seconds() / 3600.0
 
 

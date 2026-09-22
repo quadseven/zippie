@@ -125,12 +125,12 @@ def wan_gateways() -> dict[str, str]:
 _PRIVATE_V4_BLOCKS = tuple(
     (base, (0xFFFFFFFF << (32 - bits)) & 0xFFFFFFFF)
     for base, bits in (
-        (0x0A000000, 8),    # 10/8       RFC1918
-        (0xAC100000, 12),   # 172.16/12  RFC1918
-        (0xC0A80000, 16),   # 192.168/16 RFC1918
-        (0x64400000, 10),   # 100.64/10  CGNAT
-        (0xA9FE0000, 16),   # 169.254/16 link-local
-        (0x7F000000, 8),    # 127/8      loopback
+        (0x0A000000, 8),  # 10/8       RFC1918
+        (0xAC100000, 12),  # 172.16/12  RFC1918
+        (0xC0A80000, 16),  # 192.168/16 RFC1918
+        (0x64400000, 10),  # 100.64/10  CGNAT
+        (0xA9FE0000, 16),  # 169.254/16 link-local
+        (0x7F000000, 8),  # 127/8      loopback
     )
 )
 
@@ -159,7 +159,8 @@ def is_private_v4(addr: str | None) -> bool:
 
 
 def lan_home_endpoint(
-    local_ip: str | None, pairings: Sequence[LanEndpoint] = (),
+    local_ip: str | None,
+    pairings: Sequence[LanEndpoint] = (),
 ) -> LanEndpoint | None:
     """The LAN-side home pairing for a leg at `local_ip`, or None.
 
@@ -379,12 +380,12 @@ def write_wg_config(
 PrivateKey = {private_key}
 Address = {address}
 MTU = {mtu}
-{f'DNS = {dns_line}' if dns_line else ''}
+{f"DNS = {dns_line}" if dns_line else ""}
 {fwmark_line}{table_line}
 [Peer]
 PublicKey = {peer_public_key}
 Endpoint = {endpoint}
-AllowedIPs = {', '.join(allowed_ips)}
+AllowedIPs = {", ".join(allowed_ips)}
 PersistentKeepalive = {keepalive}
 """
     if dry_run():
@@ -396,15 +397,17 @@ PersistentKeepalive = {keepalive}
     os.chmod(path, 0o600)
 
 
-def set_wg_persistent_keepalive(
-    iface: str, peer_public_key: str, seconds: int
-) -> None:
+def set_wg_persistent_keepalive(iface: str, peer_public_key: str, seconds: int) -> None:
     """Change one live peer's keepalive without rebuilding its interface."""
     run_or_dry(
         [
-            "wg", "set", iface,
-            "peer", peer_public_key,
-            "persistent-keepalive", str(max(0, seconds)),
+            "wg",
+            "set",
+            iface,
+            "peer",
+            peer_public_key,
+            "persistent-keepalive",
+            str(max(0, seconds)),
         ],
         check=True,
     )
@@ -441,8 +444,15 @@ def _wg_up_native(conf_path: str, iface: str, address: str | None, mtu: int) -> 
         stripped = f"{conf_path}.setconf"
         if not dry_run():
             allowed_prefixes = (
-                "[interface]", "[peer]", "privatekey", "listenport", "fwmark",
-                "publickey", "presharedkey", "endpoint", "allowedips",
+                "[interface]",
+                "[peer]",
+                "privatekey",
+                "listenport",
+                "fwmark",
+                "publickey",
+                "presharedkey",
+                "endpoint",
+                "allowedips",
                 "persistentkeepalive",
             )
             kept = []
@@ -684,8 +694,17 @@ def ip_rule_ensure(fwmark: int, table: int, priority: int = ZIPPIE_RULE_PRIORITY
     """
     run_or_dry(["ip", "rule", "del", "fwmark", hex(fwmark)], check=False)
     run_or_dry(
-        ["ip", "rule", "add", "fwmark", hex(fwmark), "table", str(table),
-         "priority", str(priority)],
+        [
+            "ip",
+            "rule",
+            "add",
+            "fwmark",
+            hex(fwmark),
+            "table",
+            str(table),
+            "priority",
+            str(priority),
+        ],
         check=False,
     )
 
@@ -776,8 +795,12 @@ def pin_link_table(table: int, dev: str, gw: str | None) -> bool:
         args = ["ip", "route", "replace", "default", "dev", dev, "table", str(table)]
         proc = run_or_dry(args, check=False)
         if proc.returncode != 0:
-            log.error("could not pin p2p %s into table %s: %s", dev, table,
-                      (proc.stderr or "").strip() or "unknown error")
+            log.error(
+                "could not pin p2p %s into table %s: %s",
+                dev,
+                table,
+                (proc.stderr or "").strip() or "unknown error",
+            )
             return False
         return True
     if not gw:
@@ -793,7 +816,8 @@ def pin_link_table(table: int, dev: str, gw: str | None) -> bool:
         log.error(
             "refusing gateway-less pin of %s into table %s -- multi-access link "
             "with no usable gateway; the tunnel cannot route until one exists",
-            dev, table,
+            dev,
+            table,
         )
         return False
     args = ["ip", "route", "replace", "default", "via", gw, "dev", dev, "table", str(table)]
@@ -804,7 +828,10 @@ def pin_link_table(table: int, dev: str, gw: str | None) -> bool:
         # go, so it goes dead -- and every other surface still looked healthy.
         log.error(
             "could not pin %s into table %s (gw=%s): %s -- this tunnel cannot route",
-            dev, table, gw or "none", (proc.stderr or "").strip() or "unknown error",
+            dev,
+            table,
+            gw or "none",
+            (proc.stderr or "").strip() or "unknown error",
         )
         return False
     return True
@@ -878,15 +905,34 @@ def ensure_firewall(ifaces: list[str], *, force: bool = False) -> None:
         # Permit LAN -> tunnel, and the replies back.
         _iptables("filter", "-A", _FW_CHAIN, "-o", iface, "-j", "ACCEPT")
         _iptables(
-            "filter", "-A", _FW_CHAIN, "-i", iface,
-            "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT",
+            "filter",
+            "-A",
+            _FW_CHAIN,
+            "-i",
+            iface,
+            "-m",
+            "conntrack",
+            "--ctstate",
+            "RELATED,ESTABLISHED",
+            "-j",
+            "ACCEPT",
         )
         # Clamp MSS both ways so large TCP does not silently blackhole.
         for direction in ("-o", "-i"):
             _iptables(
-                "mangle", "-A", _FW_CHAIN, direction, iface,
-                "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN",
-                "-j", "TCPMSS", "--clamp-mss-to-pmtu",
+                "mangle",
+                "-A",
+                _FW_CHAIN,
+                direction,
+                iface,
+                "-p",
+                "tcp",
+                "--tcp-flags",
+                "SYN,RST",
+                "SYN",
+                "-j",
+                "TCPMSS",
+                "--clamp-mss-to-pmtu",
             )
     # LOG THE CHANGE, NOT THE REBUILD (#87). The agent calls this with
     # force=True periodically as self-heal, so the rebuild happens whether or
@@ -924,7 +970,17 @@ def clear_firewall() -> None:
 
 def ip_rule_add(fwmark: int, table: int, priority: int) -> None:
     run_or_dry(
-        ["ip", "rule", "add", "fwmark", hex(fwmark), "table", str(table), "priority", str(priority)],
+        [
+            "ip",
+            "rule",
+            "add",
+            "fwmark",
+            hex(fwmark),
+            "table",
+            str(table),
+            "priority",
+            str(priority),
+        ],
         check=False,
     )
 
@@ -938,7 +994,18 @@ def ip_rule_del(fwmark: int, table: int) -> None:
 
 def ip_route_replace_default(table: int, dev: str, metric: int = 10) -> None:
     run_or_dry(
-        ["ip", "route", "replace", "default", "dev", dev, "table", str(table), "metric", str(metric)],
+        [
+            "ip",
+            "route",
+            "replace",
+            "default",
+            "dev",
+            dev,
+            "table",
+            str(table),
+            "metric",
+            str(metric),
+        ],
         check=True,
     )
 
@@ -1032,8 +1099,6 @@ def foreign_default_route_exists(
     return False
 
 
-
-
 def ip_route_replace_multipath(nexthops: list[tuple[str, int]]) -> None:
     """Install (or withdraw) ONLY zippie's own default route.
 
@@ -1047,8 +1112,7 @@ def ip_route_replace_multipath(nexthops: list[tuple[str, int]]) -> None:
             check=False,
         )
         return
-    args: list[str] = ["ip", "route", "replace", "default", "metric",
-                       str(ZIPPIE_ROUTE_METRIC)]
+    args: list[str] = ["ip", "route", "replace", "default", "metric", str(ZIPPIE_ROUTE_METRIC)]
     if len(nexthops) == 1:
         dev, _w = nexthops[0]
         args.extend(["dev", dev])
@@ -1145,29 +1209,35 @@ class ResolverKicker:
         now = self._clock()
         if self._last_kick is not None and now - self._last_kick < self.min_interval_s:
             self.suppressed += 1
-            log.debug("resolver kick suppressed (%.1fs cooldown): %s",
-                      self.min_interval_s, reason)
+            log.debug("resolver kick suppressed (%.1fs cooldown): %s", self.min_interval_s, reason)
             return False
         # Armed BEFORE the attempt, deliberately: a resolver that refuses to
         # restart must not be asked again on the next pass, twice a second.
         self._last_kick = now
         log.warning("restarting %s: %s", self.service, reason)
         try:
-            proc = run_or_dry([self.service, "restart"], check=False,
-                              timeout=RESOLVER_KICK_TIMEOUT_S)
+            proc = run_or_dry(
+                [self.service, "restart"], check=False, timeout=RESOLVER_KICK_TIMEOUT_S
+            )
         except NetError as exc:
             # A route flip must never fail because DNS would not restart.
             log.error("resolver kick failed: %s", exc)
             return False
         if proc.returncode != 0:
-            log.error("resolver kick: %s restart exited %s: %s", self.service,
-                      proc.returncode, (proc.stderr or "").strip() or "no output")
+            log.error(
+                "resolver kick: %s restart exited %s: %s",
+                self.service,
+                proc.returncode,
+                (proc.stderr or "").strip() or "no output",
+            )
             return False
         self.kicks += 1
         return True
 
 
-def bind_udp_probe(endpoint_host: str, endpoint_port: int, source_dev: str | None, timeout_s: float = 1.0) -> float | None:
+def bind_udp_probe(
+    endpoint_host: str, endpoint_port: int, source_dev: str | None, timeout_s: float = 1.0
+) -> float | None:
     """ICMP-less RTT probe: TCP connect to a known port via SO_BINDTODEVICE when possible.
 
     Returns RTT ms or None on failure. Uses TCP to home WireGuard port is wrong;
@@ -1184,7 +1254,9 @@ def bind_udp_probe(endpoint_host: str, endpoint_port: int, source_dev: str | Non
     try:
         if source_dev and hasattr(socket, "SO_BINDTODEVICE"):
             try:
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, source_dev.encode() + b"\0")
+                sock.setsockopt(
+                    socket.SOL_SOCKET, socket.SO_BINDTODEVICE, source_dev.encode() + b"\0"
+                )
             except OSError as exc:
                 log.debug("SO_BINDTODEVICE %s failed: %s", source_dev, exc)
         sock.connect((host, port))
@@ -1199,8 +1271,14 @@ def bind_udp_probe(endpoint_host: str, endpoint_port: int, source_dev: str | Non
         sock.close()
 
 
-def ping_rtt_ms(host: str, *, interface: str | None = None, count: int = 3,
-                timeout_s: int = 2, size: int | None = None) -> tuple[float | None, float]:
+def ping_rtt_ms(
+    host: str,
+    *,
+    interface: str | None = None,
+    count: int = 3,
+    timeout_s: int = 2,
+    size: int | None = None,
+) -> tuple[float | None, float]:
     """Return (avg_rtt_ms, loss_pct) using system ping if available.
 
     `size` is the ICMP payload in bytes (ping -s). The packet-mode route gate
@@ -1353,9 +1431,7 @@ class AddressLossMonitor:
         if dry_run():
             log.info("[dry-run] address monitor not started")
             return
-        self._thread = threading.Thread(
-            target=self._run, name="zippie-addr-monitor", daemon=True
-        )
+        self._thread = threading.Thread(target=self._run, name="zippie-addr-monitor", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:

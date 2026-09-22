@@ -30,6 +30,7 @@ def _path(name="ghost") -> PathRuntime:
 
 # ============================================================ pure function
 
+
 def test_ever_answered_reports_healthy_and_clears_the_no_reply_counters():
     p = _path()
     p.no_reply_probes = 5
@@ -59,8 +60,7 @@ def test_the_bound_trips_after_n_probes_and_reports_elapsed_time():
     for _ in range(NO_REPLY_PLAIN_AFTER_PROBES - 1):
         msg = BondAgent._held_out_message(p, streak=2.0, threshold=8.0, ever_answered=False)
         assert "no reply yet" in msg, (
-            f"tripped early, at probe {p.no_reply_probes} of "
-            f"{NO_REPLY_PLAIN_AFTER_PROBES}"
+            f"tripped early, at probe {p.no_reply_probes} of {NO_REPLY_PLAIN_AFTER_PROBES}"
         )
 
     msg = BondAgent._held_out_message(p, streak=2.0, threshold=8.0, ever_answered=False)
@@ -89,17 +89,32 @@ def test_the_message_never_reverts_to_yet_once_past_the_bound():
 
 # ============================================== integration, through the gate
 
+
 def _gate_agent(tmp_path):
     from zippie.config import parse_config
-    return BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path),
-                  "run_dir": str(tmp_path / "run")},
-        "home": {"endpoint": "h:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"datapath": "packet", "join_streak_min": 8},
-        "paths": [{"name": "pixel", "interface": "eth0"},
-                  {"name": "always-carrying", "interface": "eth1"}],
-    }))
+
+    return BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path),
+                    "run_dir": str(tmp_path / "run"),
+                },
+                "home": {
+                    "endpoint": "h:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"datapath": "packet", "join_streak_min": 8},
+                "paths": [
+                    {"name": "pixel", "interface": "eth0"},
+                    {"name": "always-carrying", "interface": "eth1"},
+                ],
+            }
+        )
+    )
 
 
 def test_no_reply_probes_survives_the_streak_resetting_on_every_down_pass(tmp_path):

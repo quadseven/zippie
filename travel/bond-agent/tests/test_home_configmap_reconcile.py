@@ -29,6 +29,7 @@ default and drop every tunnel. Absence and emptiness must therefore mean "leave
 the stored value alone", never "use the default". Most of the tests below exist
 for that one rule.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -66,8 +67,10 @@ def home(tmp_path, monkeypatch):
         "endpoint": "dns-e.example-home.invalid",
         "ports": [51900, 51901, 51902, 51903],
         "wan_iface": "eth0",
-        "public_key": "PUB", "private_key": "PRIV",
-        "network": "10.66.0.0/24", "server_address": "10.66.0.1",
+        "public_key": "PUB",
+        "private_key": "PRIV",
+        "network": "10.66.0.0/24",
+        "server_address": "10.66.0.1",
     }
     meta_path.write_text(json.dumps(meta), encoding="utf-8")
     return mod, meta_path

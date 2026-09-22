@@ -1,0 +1,5 @@
+# These modules are byte-for-byte copies of travel/bond-agent/zippie/
+# (test_manifest_copy_in_sync.py). Lint and format them under the SAME
+# config as the canonical source, or ruff formats the two differently and
+# the copy drifts. Not shipped: kustomization lists the modules by name.
+extend = "../../../../travel/bond-agent/pyproject.toml"

@@ -34,26 +34,40 @@ def _free_port() -> int:
 
 
 def test_payload_survives_the_full_loopback():
-    travel_local = _free_port()   # where the fake wg client points
-    home_listen = _free_port()    # where travel's link sprays to
-    home_local = _free_port()     # the home transport's server-facing socket
-    wg_server_port = _free_port() # the fake wg server (echo)
+    travel_local = _free_port()  # where the fake wg client points
+    home_listen = _free_port()  # where travel's link sprays to
+    home_local = _free_port()  # the home transport's server-facing socket
+    wg_server_port = _free_port()  # the fake wg server (echo)
 
     travel = Transport(("127.0.0.1", travel_local), reorder_deadline_ms=50)
-    home = Transport(("127.0.0.1", home_local), reorder_deadline_ms=50, roam=True,
-                     wg_peer=("127.0.0.1", wg_server_port))
+    home = Transport(
+        ("127.0.0.1", home_local),
+        reorder_deadline_ms=50,
+        roam=True,
+        wg_peer=("127.0.0.1", wg_server_port),
+    )
 
     # Travel dials the home link (fixed remote, ephemeral source).
-    travel.add_link(LinkEndpoint(
-        path_id=0, name="loop", device=None,
-        remote=("127.0.0.1", home_listen), weight=100,
-    ))
+    travel.add_link(
+        LinkEndpoint(
+            path_id=0,
+            name="loop",
+            device=None,
+            remote=("127.0.0.1", home_listen),
+            weight=100,
+        )
+    )
     # Home listens on the known port; its remote roams to travel's source.
-    home.add_link(LinkEndpoint(
-        path_id=0, name="wan", device=None,
-        remote=("127.0.0.1", 1),  # placeholder; roam corrects it
-        weight=100, listen=("127.0.0.1", home_listen),
-    ))
+    home.add_link(
+        LinkEndpoint(
+            path_id=0,
+            name="wan",
+            device=None,
+            remote=("127.0.0.1", 1),  # placeholder; roam corrects it
+            weight=100,
+            listen=("127.0.0.1", home_listen),
+        )
+    )
 
     t1 = threading.Thread(target=travel.run, daemon=True)
     t2 = threading.Thread(target=home.run, daemon=True)
@@ -103,11 +117,21 @@ def test_home_link_roams_to_the_real_source():
 
     travel = Transport(("127.0.0.1", travel_local), reorder_deadline_ms=50)
     home = Transport(("127.0.0.1", home_local), reorder_deadline_ms=50, roam=True)
-    travel.add_link(LinkEndpoint(path_id=0, name="loop", device=None,
-                                 remote=("127.0.0.1", home_listen), weight=100))
-    home.add_link(LinkEndpoint(path_id=0, name="wan", device=None,
-                               remote=("127.0.0.1", 1), weight=100,
-                               listen=("127.0.0.1", home_listen)))
+    travel.add_link(
+        LinkEndpoint(
+            path_id=0, name="loop", device=None, remote=("127.0.0.1", home_listen), weight=100
+        )
+    )
+    home.add_link(
+        LinkEndpoint(
+            path_id=0,
+            name="wan",
+            device=None,
+            remote=("127.0.0.1", 1),
+            weight=100,
+            listen=("127.0.0.1", home_listen),
+        )
+    )
 
     threading.Thread(target=travel.run, daemon=True).start()
     threading.Thread(target=home.run, daemon=True).start()
@@ -148,11 +172,25 @@ def test_two_legs_sharing_one_home_port_each_get_their_own_answer():
 
     # Two legs, distinct sockets, both dialling the ONE home transport port.
     for pid in (0, 1):
-        travel.add_link(LinkEndpoint(path_id=pid, name=f"leg{pid}", device=None,
-                                     remote=("127.0.0.1", home_listen), weight=100))
-    home.add_link(LinkEndpoint(path_id=0, name="wan", device=None,
-                               remote=("127.0.0.1", 1), weight=100,
-                               listen=("127.0.0.1", home_listen)))
+        travel.add_link(
+            LinkEndpoint(
+                path_id=pid,
+                name=f"leg{pid}",
+                device=None,
+                remote=("127.0.0.1", home_listen),
+                weight=100,
+            )
+        )
+    home.add_link(
+        LinkEndpoint(
+            path_id=0,
+            name="wan",
+            device=None,
+            remote=("127.0.0.1", 1),
+            weight=100,
+            listen=("127.0.0.1", home_listen),
+        )
+    )
 
     threading.Thread(target=travel.run, daemon=True).start()
     threading.Thread(target=home.run, daemon=True).start()
@@ -180,8 +218,11 @@ def test_a_leg_pointed_at_nothing_goes_silent():
     alive by the fact that its socket sends happily. Sending is not evidence."""
     travel = Transport(("127.0.0.1", _free_port()), reorder_deadline_ms=50)
     # Nothing is listening on this port.
-    travel.add_link(LinkEndpoint(path_id=0, name="dead", device=None,
-                                 remote=("127.0.0.1", _free_port()), weight=100))
+    travel.add_link(
+        LinkEndpoint(
+            path_id=0, name="dead", device=None, remote=("127.0.0.1", _free_port()), weight=100
+        )
+    )
     threading.Thread(target=travel.run, daemon=True).start()
     try:
         start = time.monotonic()
@@ -224,12 +265,23 @@ def test_a_restarted_travel_agent_still_gets_through():
     # claim a restart and reset a live stream. The gap between the two sessions
     # below is that silence; at the default this test would take five seconds
     # longer and assert exactly the same thing.
-    home = Transport(("127.0.0.1", home_local), reorder_deadline_ms=50, roam=True,
-                     wg_peer=("127.0.0.1", wg_server_port),
-                     epoch_takeover_idle_s=0.2)
-    home.add_link(LinkEndpoint(path_id=0, name="wan", device=None,
-                               remote=("127.0.0.1", 1), weight=100,
-                               listen=("127.0.0.1", home_listen)))
+    home = Transport(
+        ("127.0.0.1", home_local),
+        reorder_deadline_ms=50,
+        roam=True,
+        wg_peer=("127.0.0.1", wg_server_port),
+        epoch_takeover_idle_s=0.2,
+    )
+    home.add_link(
+        LinkEndpoint(
+            path_id=0,
+            name="wan",
+            device=None,
+            remote=("127.0.0.1", 1),
+            weight=100,
+            listen=("127.0.0.1", home_listen),
+        )
+    )
     threading.Thread(target=home.run, daemon=True).start()
 
     server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -239,8 +291,11 @@ def test_a_restarted_travel_agent_still_gets_through():
         """One travel agent lifetime: fresh transport, fresh sequence counter."""
         local = _free_port()
         travel = Transport(("127.0.0.1", local), reorder_deadline_ms=50)
-        travel.add_link(LinkEndpoint(path_id=0, name="leg", device=None,
-                                     remote=("127.0.0.1", home_listen), weight=100))
+        travel.add_link(
+            LinkEndpoint(
+                path_id=0, name="leg", device=None, remote=("127.0.0.1", home_listen), weight=100
+            )
+        )
         threading.Thread(target=travel.run, daemon=True).start()
         client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         client.bind(("127.0.0.1", 0))

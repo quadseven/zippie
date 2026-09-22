@@ -92,11 +92,7 @@ class Classifier:
         with extra bookkeeping, and reporting it as DUPLICATE would make the
         stats claim a redundancy that does not exist.
         """
-        mode = (
-            SendMode.SINGLE
-            if overhead
-            else self._choose(payload_len, paths_available)
-        )
+        mode = SendMode.SINGLE if overhead else self._choose(payload_len, paths_available)
         if overhead:
             self.overhead += 1
         self.counts[mode.value] += 1

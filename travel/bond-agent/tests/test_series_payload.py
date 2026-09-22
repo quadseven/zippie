@@ -23,6 +23,7 @@ shrink the payload and silently shorten the history to a fraction of its
 window, which is a different feature wearing the same number. The wall-clock
 span the operator sees must not move.
 """
+
 from __future__ import annotations
 
 import gzip
@@ -53,9 +54,7 @@ def _fill(store, n, legs=("ethernet", "hotspot", "iphone"), start=1_000_000.0):
     # give: these tests reason about the wall-clock span of a full store, and
     # the store does not fill on a timer.
     for i in range(n):
-        store.append(
-            [_P(leg) for leg in legs], wall=start + i * SERIES_APPEND_INTERVAL_S
-        )
+        store.append([_P(leg) for leg in legs], wall=start + i * SERIES_APPEND_INTERVAL_S)
     return store
 
 

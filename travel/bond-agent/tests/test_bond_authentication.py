@@ -101,11 +101,20 @@ class FakeSocket:
     def deliver(self, data, addr):
         self._inbox.append((data, addr))
 
-    def setblocking(self, _): pass
-    def setsockopt(self, *_a): pass
-    def close(self): pass
-    def fileno(self): return -1
-    def getsockname(self): return self.bind or ("127.0.0.1", 0)
+    def setblocking(self, _):
+        pass
+
+    def setsockopt(self, *_a):
+        pass
+
+    def close(self):
+        pass
+
+    def fileno(self):
+        return -1
+
+    def getsockname(self):
+        return self.bind or ("127.0.0.1", 0)
 
 
 class _Key:
@@ -115,21 +124,33 @@ class _Key:
 
 
 class _FakeSelector:
-    def __init__(self): self.registered = {}
-    def register(self, fileobj, _e, data): self.registered[id(fileobj)] = (fileobj, data)
-    def unregister(self, fileobj): self.registered.pop(id(fileobj), None)
+    def __init__(self):
+        self.registered = {}
+
+    def register(self, fileobj, _e, data):
+        self.registered[id(fileobj)] = (fileobj, data)
+
+    def unregister(self, fileobj):
+        self.registered.pop(id(fileobj), None)
 
     def select(self, _timeout=0):
-        return [(_Key(f, d), 1) for f, d in list(self.registered.values())
-                if getattr(f, "_inbox", None)]
+        return [
+            (_Key(f, d), 1) for f, d in list(self.registered.values()) if getattr(f, "_inbox", None)
+        ]
 
-    def close(self): self.registered.clear()
+    def close(self):
+        self.registered.clear()
 
 
 class _Clock:
-    def __init__(self): self.t = 1000.0
-    def __call__(self): return self.t
-    def advance(self, s): self.t += s
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, s):
+        self.t += s
 
 
 class Home:
@@ -154,9 +175,16 @@ class Home:
             epoch=0xFEEDFACE,
             **kw,
         )
-        self.t.add_link(LinkEndpoint(path_id=0, name="wan", device=None,
-                                     remote=PEER, weight=100,
-                                     listen=(_WILDCARD_BIND, 51931)))
+        self.t.add_link(
+            LinkEndpoint(
+                path_id=0,
+                name="wan",
+                device=None,
+                remote=PEER,
+                weight=100,
+                listen=(_WILDCARD_BIND, 51931),
+            )
+        )
         self.link = self.created[-1]
 
     def _factory(self, device=None, bind=None):
@@ -178,8 +206,7 @@ class Home:
 
 
 def data_frame(seq=1, epoch=PEER_EPOCH, payload=b"x" * 64, flags=0, path_id=0):
-    return Frame(seq=seq, path_id=path_id, payload=payload, flags=flags,
-                 epoch=epoch)
+    return Frame(seq=seq, path_id=path_id, payload=payload, flags=flags, epoch=epoch)
 
 
 def establish(home: Home, epoch=PEER_EPOCH):
@@ -222,8 +249,7 @@ class TestAStrangerCannotSteerTheTunnel:
         mark = len(home.link.sent)
 
         home.arrive(
-            Frame(seq=9, path_id=0, payload=b"", flags=FLAG_KEEPALIVE,
-                  epoch=OTHER_EPOCH).pack(),
+            Frame(seq=9, path_id=0, payload=b"", flags=FLAG_KEEPALIVE, epoch=OTHER_EPOCH).pack(),
             ATTACKER,
         )
 
@@ -244,13 +270,11 @@ class TestAStrangerCannotSteerTheTunnel:
         mark = len(home.link.sent)
 
         home.arrive(
-            Frame(seq=0, path_id=0, payload=b"", flags=FLAG_NACK,
-                  epoch=OTHER_EPOCH).pack(),
+            Frame(seq=0, path_id=0, payload=b"", flags=FLAG_NACK, epoch=OTHER_EPOCH).pack(),
             ATTACKER,
         )
 
-        resends = [w for w, _a in home.sent_since(mark)
-                   if Frame.unpack(w).flags & FLAG_RETRANSMIT]
+        resends = [w for w, _a in home.sent_since(mark) if Frame.unpack(w).flags & FLAG_RETRANSMIT]
         assert resends == [], (
             "a 17-byte NACK from an unverified source produced a full-size "
             "retransmit: the home exit is an amplifier"
@@ -265,8 +289,7 @@ class TestAStrangerCannotSteerTheTunnel:
         before = home.t.reassembler.stats.stream_restarts
 
         for seq in range(5):
-            home.arrive(data_frame(seq=seq, epoch=OTHER_EPOCH + seq).pack(),
-                        ATTACKER)
+            home.arrive(data_frame(seq=seq, epoch=OTHER_EPOCH + seq).pack(), ATTACKER)
 
         assert home.t.reassembler.stats.stream_restarts == before, (
             "a stranger reset the stream by naming a new epoch"
@@ -281,8 +304,7 @@ class TestAStrangerCannotSteerTheTunnel:
         establish(home)
         delivered_before = home.t.reassembler.stats.delivered
 
-        home.arrive(data_frame(seq=99, epoch=OTHER_EPOCH,
-                               payload=b"z" * 64).pack(), ATTACKER)
+        home.arrive(data_frame(seq=99, epoch=OTHER_EPOCH, payload=b"z" * 64).pack(), ATTACKER)
 
         assert home.t.reassembler.stats.delivered == delivered_before
 
@@ -313,8 +335,7 @@ class TestARealPeerIsStillBelieved:
         home.arrive(data_frame(seq=0, epoch=OTHER_EPOCH).pack(), PEER)
 
         assert home.t._peer_epoch == OTHER_EPOCH, (
-            "a restarted travel agent was locked out: the bond cannot recover "
-            "without a human"
+            "a restarted travel agent was locked out: the bond cannot recover without a human"
         )
         assert home.t.reassembler.stats.stream_restarts == 1
 
@@ -343,8 +364,9 @@ class TestARealPeerIsStillBelieved:
         home.clock.advance(EPOCH_TAKEOVER_IDLE_S + 0.1)
 
         home.arrive(
-            Frame(seq=1, path_id=0, payload=b"", flags=FLAG_KEEPALIVE,
-                  epoch=OTHER_EPOCH).pack(), PEER)
+            Frame(seq=1, path_id=0, payload=b"", flags=FLAG_KEEPALIVE, epoch=OTHER_EPOCH).pack(),
+            PEER,
+        )
         assert home.t._peer_epoch == PEER_EPOCH, "a keepalive claimed a restart"
 
         home.arrive(data_frame(seq=0, epoch=OTHER_EPOCH).pack(), PEER)
@@ -422,12 +444,17 @@ class TestTheWireFormat:
         got, authed = unpack_auth(pack_as(f, bond()), bond(), AuthLevel.REQUIRE)
         assert authed
         assert (got.seq, got.epoch, got.payload, got.client_id) == (
-            42, PEER_EPOCH, b"hello", PEER_ID)
+            42,
+            PEER_EPOCH,
+            b"hello",
+            PEER_ID,
+        )
 
     def test_the_sequence_sits_at_the_same_offset_in_both_versions(self):
         """frame_seq reads eight bytes in place on the send path and must not
         care which version it just packed."""
         from zippie.datapath import frame_seq
+
         f = data_frame(seq=123456)
         assert frame_seq(f.pack()) == 123456
         assert frame_seq(pack_as(f, bond())) == 123456
@@ -499,9 +526,9 @@ class TestForgeryIsRefused:
         """Counted apart, so a truncated datagram cannot hide inside the
         security counter and a real forgery attempt cannot hide inside noise."""
         from zippie.datapath import DatapathError
+
         with pytest.raises(DatapathError) as exc:
-            unpack_auth(pack_as(data_frame(), bond())[:20], bond(),
-                        AuthLevel.REQUIRE)
+            unpack_auth(pack_as(data_frame(), bond())[:20], bond(), AuthLevel.REQUIRE)
         assert not isinstance(exc.value, UnauthenticatedError)
 
 
@@ -510,18 +537,21 @@ class TestTheRolloutLadder:
     adjacent pair here is a step of the live rollout, and this is the table the
     operator is trusting when they move one end and drive away."""
 
-    @pytest.mark.parametrize("home_rung,travel_rung", [
-        (AuthLevel.OFF, AuthLevel.OFF),
-        (AuthLevel.OBSERVE, AuthLevel.OFF),
-        (AuthLevel.OFF, AuthLevel.OBSERVE),
-        (AuthLevel.OBSERVE, AuthLevel.OBSERVE),
-        (AuthLevel.SIGN, AuthLevel.OBSERVE),
-        (AuthLevel.OBSERVE, AuthLevel.SIGN),
-        (AuthLevel.SIGN, AuthLevel.SIGN),
-        (AuthLevel.REQUIRE, AuthLevel.SIGN),
-        (AuthLevel.SIGN, AuthLevel.REQUIRE),
-        (AuthLevel.REQUIRE, AuthLevel.REQUIRE),
-    ])
+    @pytest.mark.parametrize(
+        "home_rung,travel_rung",
+        [
+            (AuthLevel.OFF, AuthLevel.OFF),
+            (AuthLevel.OBSERVE, AuthLevel.OFF),
+            (AuthLevel.OFF, AuthLevel.OBSERVE),
+            (AuthLevel.OBSERVE, AuthLevel.OBSERVE),
+            (AuthLevel.SIGN, AuthLevel.OBSERVE),
+            (AuthLevel.OBSERVE, AuthLevel.SIGN),
+            (AuthLevel.SIGN, AuthLevel.SIGN),
+            (AuthLevel.REQUIRE, AuthLevel.SIGN),
+            (AuthLevel.SIGN, AuthLevel.REQUIRE),
+            (AuthLevel.REQUIRE, AuthLevel.REQUIRE),
+        ],
+    )
     def test_adjacent_rungs_interoperate(self, home_rung, travel_rung):
         sender = bond() if travel_rung is not AuthLevel.OFF else None
         receiver = bond() if home_rung is not AuthLevel.OFF else None
@@ -529,18 +559,20 @@ class TestTheRolloutLadder:
         frame, _authed = unpack_auth(wire, receiver, home_rung)
         assert frame.seq == 1
 
-    @pytest.mark.parametrize("home_rung,travel_rung", [
-        (AuthLevel.REQUIRE, AuthLevel.OBSERVE),
-        (AuthLevel.REQUIRE, AuthLevel.OFF),
-    ])
+    @pytest.mark.parametrize(
+        "home_rung,travel_rung",
+        [
+            (AuthLevel.REQUIRE, AuthLevel.OBSERVE),
+            (AuthLevel.REQUIRE, AuthLevel.OFF),
+        ],
+    )
     def test_skipping_a_rung_breaks_the_bond(self, home_rung, travel_rung):
         """Named so the failure mode is documented rather than discovered on a
         motorway: a requiring receiver against an end that does not yet sign
         drops every frame."""
         sender = bond() if travel_rung is not AuthLevel.OFF else None
         with pytest.raises(UnauthenticatedError):
-            unpack_auth(pack_auth(data_frame(), sender, travel_rung),
-                        bond(), home_rung)
+            unpack_auth(pack_auth(data_frame(), sender, travel_rung), bond(), home_rung)
 
     def test_observe_changes_nothing_on_the_wire(self):
         """The whole point of the observe rung: the key is loaded and provable,
@@ -565,8 +597,10 @@ class TestTheKeyItself:
         assert bond().key_id() == new_bond_identity(PEER_ID, SECRET).key_id()
 
     def test_a_different_secret_gives_a_different_key_id(self):
-        assert bond().key_id() != new_bond_identity(
-            PEER_ID, b"another-secret-entirely-long-enough").key_id()
+        assert (
+            bond().key_id()
+            != new_bond_identity(PEER_ID, b"another-secret-entirely-long-enough").key_id()
+        )
 
     def test_the_key_id_is_not_the_key(self):
         assert bond().key_id() not in repr(SECRET)
@@ -623,14 +657,21 @@ class TestMisconfigurationIsRefusedLoudly:
 
     def test_a_rung_above_off_without_a_key_is_refused(self):
         with pytest.raises(ValueError):
-            Transport(("127.0.0.1", 51820), socket_factory=FakeSocket,
-                      selector_factory=_FakeSelector,
-                      auth_level=AuthLevel.SIGN)
+            Transport(
+                ("127.0.0.1", 51820),
+                socket_factory=FakeSocket,
+                selector_factory=_FakeSelector,
+                auth_level=AuthLevel.SIGN,
+            )
 
     def test_a_key_with_the_rung_left_off_is_refused(self):
         with pytest.raises(ValueError):
-            Transport(("127.0.0.1", 51820), socket_factory=FakeSocket,
-                      selector_factory=_FakeSelector, identity=bond())
+            Transport(
+                ("127.0.0.1", 51820),
+                socket_factory=FakeSocket,
+                selector_factory=_FakeSelector,
+                identity=bond(),
+            )
 
     def test_build_identity_refuses_a_rung_with_no_key_file(self):
         with pytest.raises(ValueError):
@@ -670,8 +711,11 @@ class TestTheGateHoldsAtTheTopRung:
         home.arrive(pack_as(data_frame(seq=1, epoch=PEER_EPOCH), bond()), PEER)
         mark = len(home.link.sent)
         home.arrive(
-            pack_as(Frame(seq=5, path_id=0, payload=b"", flags=FLAG_KEEPALIVE,
-                          epoch=PEER_EPOCH), bond()), PEER)
+            pack_as(
+                Frame(seq=5, path_id=0, payload=b"", flags=FLAG_KEEPALIVE, epoch=PEER_EPOCH), bond()
+            ),
+            PEER,
+        )
         replies = home.sent_since(mark)
         assert replies, "no keepalive reply at all"
         wire = replies[0][0]
@@ -723,14 +767,14 @@ class TestARetiredKeyStillVerifiesWhileItsFileIsPresent:
         assert identity is not None
         return identity
 
-    def test_a_frame_signed_with_the_retired_key_verifies_while_its_file_is_present(
-            self, tmp_path):
+    def test_a_frame_signed_with_the_retired_key_verifies_while_its_file_is_present(self, tmp_path):
         """Step 1 of a rotation: home holds NEW in `.previous` and the router,
         which knows only OLD, must notice nothing."""
         home = self._end(tmp_path, current=self.OLD, previous=self.NEW)
         router_after_step_2 = new_bond_identity(PEER_ID, self.NEW)
         frame, authed = unpack_auth(
-            pack_as(data_frame(seq=3), router_after_step_2), home, AuthLevel.REQUIRE)
+            pack_as(data_frame(seq=3), router_after_step_2), home, AuthLevel.REQUIRE
+        )
         assert authed and frame.seq == 3
 
         # And the other direction of the same overlap: the router at step 2
@@ -738,7 +782,8 @@ class TestARetiredKeyStillVerifiesWhileItsFileIsPresent:
         router = self._end(tmp_path, current=self.NEW, previous=self.OLD)
         home_still_on_old = new_bond_identity(PEER_ID, self.OLD)
         frame, authed = unpack_auth(
-            pack_as(data_frame(seq=4), home_still_on_old), router, AuthLevel.REQUIRE)
+            pack_as(data_frame(seq=4), home_still_on_old), router, AuthLevel.REQUIRE
+        )
         assert authed and frame.seq == 4
 
     def test_the_retired_key_is_refused_once_its_file_is_gone(self, tmp_path):
@@ -815,15 +860,13 @@ class TestARetiredKeyStillVerifiesWhileItsFileIsPresent:
         same object as far as the wire is concerned."""
         f = data_frame(seq=77, payload=b"same-bytes")
         plain = Identity(client_id=PEER_ID, key=derive_bond_key(SECRET))
-        spelled = Identity(client_id=PEER_ID, key=derive_bond_key(SECRET),
-                           previous_key=None)
+        spelled = Identity(client_id=PEER_ID, key=derive_bond_key(SECRET), previous_key=None)
         assert plain == spelled
         assert new_bond_identity(PEER_ID, SECRET) == spelled
         assert pack_as(f, plain) == pack_as(f, spelled) == pack_as(f, bond())
         assert len(pack_as(f, plain)) == len(f.pack()) + 12
 
-    def test_the_current_key_is_tried_first_and_the_retired_one_in_constant_time(
-            self, monkeypatch):
+    def test_the_current_key_is_tried_first_and_the_retired_one_in_constant_time(self, monkeypatch):
         """A byte-at-a-time comparison leaks the MAC one byte per forgery
         attempt, and a retired key that is still accepted is still a key a
         forged MAC under it would steer the tunnel with. So the SECOND
@@ -841,8 +884,11 @@ class TestARetiredKeyStillVerifiesWhileItsFileIsPresent:
         monkeypatch.setattr(auth_module.hmac, "compare_digest", spy)
         both = new_bond_identity(PEER_ID, self.NEW, previous_secret=self.OLD)
         wire = pack_as(data_frame(), new_bond_identity(PEER_ID, self.OLD))
-        mac = wire[auth_module._HEADER_V3_SIGNED.size:auth_module.HEADER_LEN_V3]
-        signed, payload = wire[:auth_module._HEADER_V3_SIGNED.size], wire[auth_module.HEADER_LEN_V3:]
+        mac = wire[auth_module._HEADER_V3_SIGNED.size : auth_module.HEADER_LEN_V3]
+        signed, payload = (
+            wire[: auth_module._HEADER_V3_SIGNED.size],
+            wire[auth_module.HEADER_LEN_V3 :],
+        )
 
         _frame, authed = unpack_auth(wire, both, AuthLevel.REQUIRE)
         assert authed
@@ -853,8 +899,9 @@ class TestARetiredKeyStillVerifiesWhileItsFileIsPresent:
 
         # A frame under the current key never reaches the second compare.
         seen.clear()
-        unpack_auth(pack_as(data_frame(), new_bond_identity(PEER_ID, self.NEW)),
-                    both, AuthLevel.REQUIRE)
+        unpack_auth(
+            pack_as(data_frame(), new_bond_identity(PEER_ID, self.NEW)), both, AuthLevel.REQUIRE
+        )
         assert len(seen) == 1
 
     def test_a_forgery_is_refused_under_both_keys(self):
@@ -870,8 +917,7 @@ class TestARetiredKeyStillVerifiesWhileItsFileIsPresent:
         with pytest.raises(UnauthenticatedError):
             unpack_auth(pack_as(data_frame(), third), both, AuthLevel.REQUIRE)
 
-    def test_a_previous_key_file_gets_the_same_refusals_as_the_current_one(
-            self, tmp_path):
+    def test_a_previous_key_file_gets_the_same_refusals_as_the_current_one(self, tmp_path):
         """Present-but-unreadable must never be confused with absent. A retired
         key still verifies frames, so a world-readable one is refused (not
         warned about) and a truncated one is refused, exactly as the current
@@ -894,21 +940,21 @@ class TestARetiredKeyStillVerifiesWhileItsFileIsPresent:
         self._write(prev, self.OLD + b"\n")
         assert load_previous_bond_secret(str(key)) == self.OLD
 
-    def test_the_home_transport_accepts_the_retired_key_and_counts_it_verified(
-            self, tmp_path):
+    def test_the_home_transport_accepts_the_retired_key_and_counts_it_verified(self, tmp_path):
         """Through the transport's receive loop, not the function: transport.py
         calls unpack_auth with the identity it was given and nothing else, so
         this is what proves the overlap is wired to the socket rather than
         merely available to it."""
-        home = Home(auth_level=AuthLevel.REQUIRE,
-                    identity=self._end(tmp_path, current=self.OLD, previous=self.NEW))
+        home = Home(
+            auth_level=AuthLevel.REQUIRE,
+            identity=self._end(tmp_path, current=self.OLD, previous=self.NEW),
+        )
         router_on_new = new_bond_identity(PEER_ID, self.NEW)
         home.arrive(pack_as(data_frame(seq=1, epoch=PEER_EPOCH), router_on_new), PEER)
         assert home.t._peer_epoch == PEER_EPOCH
         assert home.t.stats.mac_verified == 1 and home.t.stats.mac_rejected == 0
         # The stats line reports the CURRENT key's id, as it always has.
-        assert home.t.stats_dict()["auth"]["key"] == new_bond_identity(
-            PEER_ID, self.OLD).key_id()
+        assert home.t.stats_dict()["auth"]["key"] == new_bond_identity(PEER_ID, self.OLD).key_id()
 
 
 class TestItInteroperatesWithTheGoDatapath:
@@ -931,15 +977,13 @@ class TestItInteroperatesWithTheGoDatapath:
     """
 
     SECRET = b"a-shared-bond-secret-of-ample-length"
-    FRAME = Frame(seq=42, epoch=0xAABBCCDD, path_id=3, flags=0x01,
-                  payload=b"interop-payload")
+    FRAME = Frame(seq=42, epoch=0xAABBCCDD, path_id=3, flags=0x01, payload=b"interop-payload")
 
     GO_KEY_ID = "b328a715"
-    GO_V2 = bytes.fromhex(
-        "5042020103000000000000002aaabbccdd696e7465726f702d7061796c6f6164")
+    GO_V2 = bytes.fromhex("5042020103000000000000002aaabbccdd696e7465726f702d7061796c6f6164")
     GO_V3 = bytes.fromhex(
-        "5042030103000000000000002aaabbccdd00000007c4b97b7fa58d4a70"
-        "696e7465726f702d7061796c6f6164")
+        "5042030103000000000000002aaabbccdd00000007c4b97b7fa58d4a70696e7465726f702d7061796c6f6164"
+    )
 
     def _id(self):
         return new_bond_identity(7, self.SECRET)
@@ -962,4 +1006,8 @@ class TestItInteroperatesWithTheGoDatapath:
         frame, authed = unpack_auth(self.GO_V3, self._id(), AuthLevel.REQUIRE)
         assert authed
         assert (frame.seq, frame.epoch, frame.path_id, frame.payload) == (
-            42, 0xAABBCCDD, 3, b"interop-payload")
+            42,
+            0xAABBCCDD,
+            3,
+            b"interop-payload",
+        )

@@ -56,6 +56,7 @@ def _store(tmp_path, day: date) -> UsageStore:
 
 # ------------------------------------------------------- the period model --
 
+
 def test_the_default_period_is_the_calendar_month():
     """A leg nobody has typed a billing date for gets the simple thing."""
     assert period_start(date(2026, 8, 7)) == date(2026, 8, 1)
@@ -83,7 +84,7 @@ def test_a_cycle_day_past_the_end_of_the_month_is_clamped_not_skipped():
     accruing into January's total."""
     assert period_start(date(2026, 2, 27), 31) == date(2026, 1, 31)
     assert period_start(date(2026, 2, 28), 31) == date(2026, 2, 28)
-    assert period_start(date(2028, 2, 29), 31) == date(2028, 2, 29)   # leap year
+    assert period_start(date(2028, 2, 29), 31) == date(2028, 2, 29)  # leap year
 
 
 def test_an_unreadable_cycle_day_falls_back_to_the_calendar_month():
@@ -106,6 +107,7 @@ def test_a_cycle_day_typed_as_a_string_still_works():
 
 
 # ------------------------------------------------------------- the boundary --
+
 
 def test_the_counter_rolls_at_the_boundary_with_the_clock_frozen(tmp_path):
     """THE BOUNDARY ITSELF. Frozen, never wall-clock: this is the one edge a
@@ -207,6 +209,7 @@ def test_the_cycle_day_decides_when_the_roll_happens(tmp_path):
 
 # ----------------------------------------------------- clocks that are wrong --
 
+
 def test_an_existing_counter_with_no_period_is_adopted_not_zeroed(tmp_path):
     """THE LIVE MIGRATION. usage.json on the router holds real measured bytes
     (4.355 GB on the hotspot leg, 2026-08-07) written before periods existed.
@@ -216,9 +219,7 @@ def test_an_existing_counter_with_no_period_is_adopted_not_zeroed(tmp_path):
     accounting on the deploy that fixes this, which is a worse lie than the
     over-counting it replaces.
     """
-    (tmp_path / "usage.json").write_text(
-        '{"version": 1, "legs": {"hotspot": {"usage_gb": 4.355}}}'
-    )
+    (tmp_path / "usage.json").write_text('{"version": 1, "legs": {"hotspot": {"usage_gb": 4.355}}}')
     s = _store(tmp_path, date(2026, 8, 7))
     assert s.load() == {"hotspot": 4.355}, "a pre-period counter was thrown away"
     assert s.periods["hotspot"].period_start == "2026-08-01"
@@ -293,18 +294,31 @@ def test_a_hand_edited_period_start_is_adopted_rather_than_obeyed(tmp_path):
 
 # ------------------------------------------------------- wired into the agent --
 
+
 def _agent(tmp_path, paths=None):
     from zippie.agent import BondAgent
     from zippie.config import parse_config
-    return BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path),
-                  "run_dir": str(tmp_path / "run")},
-        "home": {"endpoint": "home.example:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"datapath": "packet", "transport_port": 51830, "mode": "prefer"},
-        "paths": paths or [{"name": "hotspot", "interface": "eth0",
-                            "monthly_cap_gb": 50.0, "tier": 1}],
-    }))
+
+    return BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path),
+                    "run_dir": str(tmp_path / "run"),
+                },
+                "home": {
+                    "endpoint": "home.example:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"datapath": "packet", "transport_port": 51830, "mode": "prefer"},
+                "paths": paths
+                or [{"name": "hotspot", "interface": "eth0", "monthly_cap_gb": 50.0, "tier": 1}],
+            }
+        )
+    )
 
 
 def _freeze(agent, day: date) -> FrozenToday:
@@ -363,11 +377,13 @@ def test_the_control_loop_rolls_a_boundary_crossed_while_running(tmp_path):
     a.paths[0].usage_gb = 9.5
     pathlib.Path(a.config.run_dir).mkdir(parents=True, exist_ok=True)
 
-    with mock.patch.object(type(a), "match_interfaces", lambda self: None), \
-         mock.patch.object(type(a), "ensure_tunnels", lambda self: None), \
-         mock.patch.object(type(a), "probe_paths", lambda self: None), \
-         mock.patch.object(type(a), "sample_counters", lambda self: None), \
-         mock.patch.object(type(a), "apply_policy", lambda self: None):
+    with (
+        mock.patch.object(type(a), "match_interfaces", lambda self: None),
+        mock.patch.object(type(a), "ensure_tunnels", lambda self: None),
+        mock.patch.object(type(a), "probe_paths", lambda self: None),
+        mock.patch.object(type(a), "sample_counters", lambda self: None),
+        mock.patch.object(type(a), "apply_policy", lambda self: None),
+    ):
         a.loop_once()
         assert a.paths[0].usage_gb == pytest.approx(9.5), "a tick inside the period reset usage"
 
@@ -387,21 +403,35 @@ def test_a_billing_day_typed_into_legs_json_reaches_the_usage_store(tmp_path):
     a.load_usage_state()
     a.paths[0].usage_gb = 3.0
     a.roll_usage_period()
-    assert a.paths[0].usage_period_start == "2026-07-14", (
-        "the leg's carrier cycle day was ignored"
-    )
+    assert a.paths[0].usage_period_start == "2026-07-14", "the leg's carrier cycle day was ignored"
 
 
 # ------------------------------------------- the demotion this issue is about --
 
+
 def _two_legs(tmp_path):
     """A cheap leg with a cap, and a workhorse to fall back to."""
-    a = _agent(tmp_path, paths=[
-        {"name": "hotspot", "interface": "eth0", "monthly_cap_gb": 5.0,
-         "tier": 1, "priority": 10, "cost_class": "metered"},
-        {"name": "backup", "interface": "eth1", "monthly_cap_gb": 0.0,
-         "tier": 1, "priority": 10, "cost_class": "metered"},
-    ])
+    a = _agent(
+        tmp_path,
+        paths=[
+            {
+                "name": "hotspot",
+                "interface": "eth0",
+                "monthly_cap_gb": 5.0,
+                "tier": 1,
+                "priority": 10,
+                "cost_class": "metered",
+            },
+            {
+                "name": "backup",
+                "interface": "eth1",
+                "monthly_cap_gb": 0.0,
+                "tier": 1,
+                "priority": 10,
+                "cost_class": "metered",
+            },
+        ],
+    )
     for p, rtt in zip(a.paths, (20.0, 90.0)):
         p.state = PathState.UP
         p.rtt_ms = rtt
@@ -415,7 +445,7 @@ def test_over_soft_limit_clears_when_a_new_period_starts(tmp_path):
     a = _two_legs(tmp_path)
     today = _freeze(a, date(2026, 7, 28))
     a.load_usage_state()
-    a.paths[0].usage_gb = 4.9          # 5 GB cap, 0.85 soft limit -> 4.25 GB
+    a.paths[0].usage_gb = 4.9  # 5 GB cap, 0.85 soft limit -> 4.25 GB
     a.roll_usage_period()
 
     policy.recompute(a.paths, a.config.policy)
@@ -453,9 +483,7 @@ def test_a_demoted_leg_is_restored_by_the_roll(tmp_path):
     today.day = date(2026, 8, 1)
     a.roll_usage_period()
     restored = policy.recompute(a.paths, a.config.policy, current_primary="backup")
-    assert restored == "hotspot", (
-        "the leg stayed demoted after its billing period ended"
-    )
+    assert restored == "hotspot", "the leg stayed demoted after its billing period ended"
     assert policy.cost_rank(a.paths[0]) == policy.cost_rank(a.paths[1])
 
 
@@ -475,6 +503,7 @@ def test_the_leg_is_not_restored_before_the_boundary(tmp_path):
 
 
 # ------------------------------------------------- visible off the device --
+
 
 def test_the_period_and_last_total_reach_the_status_payload(tmp_path):
     """A previous-period total that only exists in a JSON file on a router in a
@@ -499,9 +528,9 @@ def test_last_periods_total_is_emitted_as_a_metric():
     import zippie.telemetry as tel
 
     samples = tel._path_samples(
-        {"name": "hotspot", "state": "up", "usage_gb": 0.0,
-         "previous_period_usage_gb": 47.5},
-        "prefer", "hotspot",
+        {"name": "hotspot", "state": "up", "usage_gb": 0.0, "previous_period_usage_gb": 47.5},
+        "prefer",
+        "hotspot",
     )
     by_name = {name: value for name, value, _tags in samples}
     assert by_name["path.usage_prev_period_gb"] == pytest.approx(47.5)

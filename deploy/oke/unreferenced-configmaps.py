@@ -33,6 +33,7 @@ migration and its seven orphans went with that namespace.
 Usage:
     ./deploy/oke/unreferenced-configmaps.py [--namespace zippie] [--context k8s-oke]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -87,8 +88,7 @@ def _configmap_names(pod_spec: dict) -> set:
     containers = (pod_spec.get("containers") or []) + (
         pod_spec.get("initContainers") or []
     )
-    return (_volume_configmaps(pod_spec.get("volumes"))
-            | _env_configmaps(containers))
+    return _volume_configmaps(pod_spec.get("volumes")) | _env_configmaps(containers)
 
 
 def _pod_spec(obj: dict) -> dict:
@@ -104,8 +104,17 @@ def _fetch(namespace: str, context: str) -> list:
     that reads as "safe to delete everything", which is the worst failure this
     particular tool could have. So this raises and the caller exits non-zero.
     """
-    cmd = ["kubectl", "--context", context, "-n", namespace,
-           "get", "cm,pod,rs", "-o", "json"]
+    cmd = [
+        "kubectl",
+        "--context",
+        context,
+        "-n",
+        namespace,
+        "get",
+        "cm,pod,rs",
+        "-o",
+        "json",
+    ]
     raw = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
     return json.loads(raw).get("items") or []
 
@@ -137,8 +146,10 @@ def _print_delete_lines(unreferenced: list, namespace: str, context: str) -> Non
     for name in unreferenced:
         print(f"  kubectl --context {context} -n {namespace} delete cm {name}")
     print()
-    print("This script will not run those for you, deliberately - see the "
-          "module docstring.")
+    print(
+        "This script will not run those for you, deliberately - see the "
+        "module docstring."
+    )
 
 
 def main() -> int:
@@ -158,8 +169,11 @@ def main() -> int:
     replicasets = [i for i in items if i["kind"] == "ReplicaSet"]
 
     if not pods and not replicasets:
-        print("no pods and no replicasets found - refusing to call anything "
-              "unreferenced from that", file=sys.stderr)
+        print(
+            "no pods and no replicasets found - refusing to call anything "
+            "unreferenced from that",
+            file=sys.stderr,
+        )
         return 2
 
     live = set()

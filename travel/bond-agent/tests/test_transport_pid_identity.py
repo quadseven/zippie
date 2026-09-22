@@ -35,6 +35,7 @@ These tests drive the REAL `sync_transport` and the REAL announce/expire path,
 per the issue's acceptance criteria - a standalone model of the allocator would
 have agreed with the buggy code.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -63,29 +64,49 @@ class _FakeTransport:
     def forget_link(self, pid) -> None:
         self.forgotten.append(pid)
 
-    def set_link_weight(self, pid, w) -> None: pass
-    def set_link_health(self, pid, ok) -> None: pass
-    def send_keepalives(self) -> None: pass
-    def link_rx_age_s(self, pid): return 0.0
-    def link_rtt_ms(self, pid): return 12.0
-    def link_loss_pct(self, pid): return None
-    def link_bytes(self): return {}
+    def set_link_weight(self, pid, w) -> None:
+        pass
+
+    def set_link_health(self, pid, ok) -> None:
+        pass
+
+    def send_keepalives(self) -> None:
+        pass
+
+    def link_rx_age_s(self, pid):
+        return 0.0
+
+    def link_rtt_ms(self, pid):
+        return 12.0
+
+    def link_loss_pct(self, pid):
+        return None
+
+    def link_bytes(self):
+        return {}
 
 
 def _agent(tmp_path: Path) -> BondAgent:
-    cfg = parse_config({
-        "agent": {"private_key": "cGtleQ==",
-                  "state_dir": str(tmp_path / "state"),
-                  "run_dir": str(tmp_path / "run")},
-        "home": {"endpoint": "home.example:51900",
-                 "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24",
-                 "ports": [51900, 51901]},
-        "policy": {"datapath": "packet", "transport_port": 51830,
-                   "mode": "aggregate"},
-        "paths": [{"name": "ethernet", "interface": "eth0"},
-                  {"name": "hotspot", "interface": "apclix0"}],
-    })
+    cfg = parse_config(
+        {
+            "agent": {
+                "private_key": "cGtleQ==",
+                "state_dir": str(tmp_path / "state"),
+                "run_dir": str(tmp_path / "run"),
+            },
+            "home": {
+                "endpoint": "home.example:51900",
+                "server_public_key": "c2VydmVy",
+                "address_cidr": "10.66.0.10/24",
+                "ports": [51900, 51901],
+            },
+            "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
+            "paths": [
+                {"name": "ethernet", "interface": "eth0"},
+                {"name": "hotspot", "interface": "apclix0"},
+            ],
+        }
+    )
     a = BondAgent(cfg)
     a.prepare_dirs()
     for p in a.paths:
@@ -98,8 +119,7 @@ def _agent(tmp_path: Path) -> BondAgent:
 
 def _join(agent: BondAgent, name: str) -> None:
     """A phone announces itself, exactly as the companion app does."""
-    agent.dynamic.announce(name=name, host="10.99.0.151", port=51999,
-                           label=name, tier=None)
+    agent.dynamic.announce(name=name, host="10.99.0.151", port=51999, label=name, tier=None)
     agent.reconcile_dynamic_legs()
     for p in agent.paths:
         if p.name == name:
@@ -164,8 +184,7 @@ def test_a_departed_legs_pid_is_reusable_but_only_after_it_is_gone(tmp_path):
 
     _join(a, "phone-d")
     assert _pids(a)["phone-d"] == freed, (
-        "a freed pid should be reclaimed, so the space stays dense and inside "
-        "the 1-byte wire field"
+        "a freed pid should be reclaimed, so the space stays dense and inside the 1-byte wire field"
     )
 
 
@@ -203,9 +222,9 @@ def test_the_tier_gate_cycle_keeps_a_legs_pid(tmp_path):
     original = _pids(a)["phone-a"]
 
     phone = next(p for p in a.paths if p.name == "phone-a")
-    phone.config.tier = 9          # excluded by the tier gate
+    phone.config.tier = 9  # excluded by the tier gate
     a.sync_transport()
-    phone.config.tier = 1          # re-adopted
+    phone.config.tier = 1  # re-adopted
     a.sync_transport()
 
     assert _pids(a)["phone-a"] == original, (

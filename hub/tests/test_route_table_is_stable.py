@@ -22,6 +22,7 @@ trusted to survive a move:
     caller got a connection reset instead of a 404 - one long GET against the
     process whose whole job is to keep answering
 """
+
 from __future__ import annotations
 
 import http.client
@@ -114,11 +115,14 @@ def test_root_serves_index_html(hub_at):
     assert headers["Content-Type"] == "text/html; charset=utf-8"
 
 
-@pytest.mark.parametrize("name,ctype", [
-    ("/hub.js", "text/javascript"),
-    ("/hub.css", "text/css"),
-    ("/index.html", "text/html; charset=utf-8"),
-])
+@pytest.mark.parametrize(
+    "name,ctype",
+    [
+        ("/hub.js", "text/javascript"),
+        ("/hub.css", "text/css"),
+        ("/index.html", "text/html; charset=utf-8"),
+    ],
+)
 def test_static_files_get_their_content_type(hub_at, name, ctype):
     at = hub_at()
     code, headers, _ = _req(at, "GET", name)
@@ -134,12 +138,15 @@ def test_an_unknown_file_is_404_not_an_error(hub_at):
 
 
 # ------------------------------------------------- the defences, explicitly
-@pytest.mark.parametrize("attack", [
-    "/../etc/passwd",
-    "/%2e%2e%2f%2e%2e%2fetc%2fpasswd",
-    "/..%2f..%2fetc%2fpasswd",
-    "/subdir/../../etc/passwd",
-])
+@pytest.mark.parametrize(
+    "attack",
+    [
+        "/../etc/passwd",
+        "/%2e%2e%2f%2e%2e%2fetc%2fpasswd",
+        "/..%2f..%2fetc%2fpasswd",
+        "/subdir/../../etc/passwd",
+    ],
+)
 def test_traversal_is_refused(hub_at, attack):
     """unquote BEFORE the check, or the encoded form walks straight past one
     that only sees the string it was asked for."""
@@ -180,6 +187,11 @@ def test_post_report_without_auth_is_refused(hub_at):
     """The auth rejection path is named in this issue's acceptance criteria, so
     it is asserted rather than assumed to survive the move."""
     at = hub_at()
-    code, _, _ = _req(at, "POST", "/api/report", body=b"{}",
-                      headers={"Content-Type": "application/json"})
+    code, _, _ = _req(
+        at,
+        "POST",
+        "/api/report",
+        body=b"{}",
+        headers={"Content-Type": "application/json"},
+    )
     assert code in (401, 403), f"unauthenticated report got {code}"

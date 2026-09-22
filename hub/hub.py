@@ -33,6 +33,7 @@ at home on mains power and wired internet, outside the thing that fails, and
 already knew - it just never said anything a monitor could read. It does now:
 see THE OUTSIDE OBSERVER below.
 """
+
 from __future__ import annotations
 
 import errno
@@ -61,8 +62,7 @@ log = logging.getLogger("zippie.hub")
 # subPath per file - so the location is configurable rather than assumed.
 # Hardcoding the subdirectory would have 404'd every asset in the cluster while
 # working perfectly on a laptop.
-STATIC = Path(os.environ.get("ZIPPIE_HUB_STATIC")
-              or Path(__file__).parent / "static")
+STATIC = Path(os.environ.get("ZIPPIE_HUB_STATIC") or Path(__file__).parent / "static")
 POLL_INTERVAL_S = 5.0
 # How long poll_routers gives one router before abandoning that cycle's fetch.
 # A named constant because the staleness cap below is DERIVED from it: the two
@@ -169,10 +169,16 @@ TRACE_TIMEOUT_S = 2.0
 # using the raw path as the resource would let any caller mint unlimited
 # resources in APM - and pin a traversal attempt at the top of a service page.
 # Anything not in this set collapses into one bucket.
-_KNOWN_ROUTES = frozenset({
-    "/api/nodes", "/api/status", "/api/series", "/api/report",
-    "/livez", "/readyz",
-})
+_KNOWN_ROUTES = frozenset(
+    {
+        "/api/nodes",
+        "/api/status",
+        "/api/series",
+        "/api/report",
+        "/livez",
+        "/readyz",
+    }
+)
 _STATIC_ROUTE = "/static/*"
 # http.url carries the real path for debugging, but as a tag value rather than
 # an identity, so it is truncated instead of unbounded.
@@ -278,9 +284,15 @@ class Tracer:
     every test that has not asked for it. A disabled tracer starts no thread.
     """
 
-    def __init__(self, sender=None, *, service: str = "zippie-hub",
-                 env: str = "", version: str = "",
-                 queue_max: int = TRACE_QUEUE_MAX) -> None:
+    def __init__(
+        self,
+        sender=None,
+        *,
+        service: str = "zippie-hub",
+        env: str = "",
+        version: str = "",
+        queue_max: int = TRACE_QUEUE_MAX,
+    ) -> None:
         self.service = service
         self.env = env
         self.version = version
@@ -299,17 +311,25 @@ class Tracer:
         if sender is None:
             log.info("apm disabled (no DD_TRACE_AGENT_URL)")
         else:
-            self._worker = threading.Thread(target=self._drain,
-                                            name="zippie-hub-apm", daemon=True)
+            self._worker = threading.Thread(
+                target=self._drain, name="zippie-hub-apm", daemon=True
+            )
             self._worker.start()
 
     @property
     def enabled(self) -> bool:
         return self._sender is not None
 
-    def submit(self, *, method: str, path: str, status: int,
-               start_ns: int, duration_ns: int,
-               error: BaseException | None = None) -> None:
+    def submit(
+        self,
+        *,
+        method: str,
+        path: str,
+        status: int,
+        start_ns: int,
+        duration_ns: int,
+        error: BaseException | None = None,
+    ) -> None:
         """Record one finished request. RUNS ON THE REQUEST THREAD.
 
         Does no I/O and cannot raise: the caller is a live HTTP handler, and
@@ -319,9 +339,14 @@ class Tracer:
         if self._sender is None:
             return
         try:
-            span = self._span(method=method, path=path, status=status,
-                              start_ns=start_ns, duration_ns=duration_ns,
-                              error=error)
+            span = self._span(
+                method=method,
+                path=path,
+                status=status,
+                start_ns=start_ns,
+                duration_ns=duration_ns,
+                error=error,
+            )
             self._q.put_nowait(span)
             with self._lock:
                 self.submitted += 1
@@ -334,9 +359,16 @@ class Tracer:
         except Exception:  # noqa: BLE001 - a bug here must not fail a request
             log.debug("apm span build failed", exc_info=True)
 
-    def _span(self, *, method: str, path: str, status: int,
-              start_ns: int, duration_ns: int,
-              error: BaseException | None) -> dict:
+    def _span(
+        self,
+        *,
+        method: str,
+        path: str,
+        status: int,
+        start_ns: int,
+        duration_ns: int,
+        error: BaseException | None,
+    ) -> dict:
         route = trace_route(path)
         meta = {
             "span.kind": "server",
@@ -446,7 +478,11 @@ def tracer_from_env() -> Tracer:
     in-cluster socket path would make every laptop run and every test spawn a
     thread dialling a socket that is not there.
     """
-    if os.environ.get("DD_TRACE_ENABLED", "true").strip().lower() in ("0", "false", "no"):
+    if os.environ.get("DD_TRACE_ENABLED", "true").strip().lower() in (
+        "0",
+        "false",
+        "no",
+    ):
         log.info("apm disabled (DD_TRACE_ENABLED)")
         return Tracer(None)
     url = os.environ.get("DD_TRACE_AGENT_URL", "").strip()
@@ -575,8 +611,7 @@ _TAG_UNSAFE = re.compile(r"[^A-Za-z0-9_\-./:]")
 #   name that does not resolve         -> URLError(gaierror(-2))
 # ECONNRESET and EPIPE join ECONNREFUSED because a connection torn down
 # mid-response is still evidence the peer existed.
-_HOST_ANSWERED_ERRNOS = frozenset({errno.ECONNREFUSED, errno.ECONNRESET,
-                                   errno.EPIPE})
+_HOST_ANSWERED_ERRNOS = frozenset({errno.ECONNREFUSED, errno.ECONNRESET, errno.EPIPE})
 
 
 def host_answered(exc: BaseException) -> bool:
@@ -622,9 +657,11 @@ def bond_legs(status: dict) -> list[dict]:
     paths = status.get("paths")
     if not isinstance(paths, list):
         return []
-    return [p for p in paths
-            if isinstance(p, dict)
-            and (p.get("interface") or p.get("relay_endpoint"))]
+    return [
+        p
+        for p in paths
+        if isinstance(p, dict) and (p.get("interface") or p.get("relay_endpoint"))
+    ]
 
 
 def carrying_legs(legs: list[dict]) -> int:
@@ -676,8 +713,9 @@ def statsd_line(metric: str, value: float, tags: list[str]) -> str:
     return f"{line}|#{','.join(tags)}" if tags else line
 
 
-def router_samples(name: str, status: dict | None, reachable: bool,
-                   config_error: bool = False) -> list[tuple[str, float, list[str]]]:
+def router_samples(
+    name: str, status: dict | None, reachable: bool, config_error: bool = False
+) -> list[tuple[str, float, list[str]]]:
     """One poll cycle's readings for one router: (metric, value, tags).
 
     ALL FOUR ARE ALWAYS RETURNED. There is no branch here that returns fewer
@@ -777,8 +815,9 @@ class DogStatsDSender:
         sock = socket.socket(family, socket.SOCK_DGRAM)
         sock.settimeout(self.timeout)
         try:
-            sock.connect(self.socket_path if self.scheme == "unix"
-                         else (self.host, self.port))
+            sock.connect(
+                self.socket_path if self.scheme == "unix" else (self.host, self.port)
+            )
         except OSError:
             sock.close()
             raise
@@ -810,9 +849,15 @@ class Metrics:
     socket. See travel/bond-agent/zippie/telemetry.py for the original.
     """
 
-    def __init__(self, sender=None, *, service: str = "zippie-hub",
-                 env: str = "", version: str = "",
-                 queue_max: int = DOGSTATSD_QUEUE_MAX) -> None:
+    def __init__(
+        self,
+        sender=None,
+        *,
+        service: str = "zippie-hub",
+        env: str = "",
+        version: str = "",
+        queue_max: int = DOGSTATSD_QUEUE_MAX,
+    ) -> None:
         self.service = service
         self.env = env
         self.version = version
@@ -842,17 +887,22 @@ class Metrics:
         if sender is None:
             log.info("dogstatsd disabled (no sender)")
         else:
-            self._worker = threading.Thread(target=self._drain,
-                                            name="zippie-hub-dogstatsd",
-                                            daemon=True)
+            self._worker = threading.Thread(
+                target=self._drain, name="zippie-hub-dogstatsd", daemon=True
+            )
             self._worker.start()
 
     @property
     def enabled(self) -> bool:
         return self._sender is not None
 
-    def observe_router(self, name: str, status: dict | None,
-                       reachable: bool, config_error: bool = False) -> None:
+    def observe_router(
+        self,
+        name: str,
+        status: dict | None,
+        reachable: bool,
+        config_error: bool = False,
+    ) -> None:
         """Record one poll cycle's reading for one router. ON THE POLL LOOP.
 
         Does no I/O and cannot raise: the caller is the loop that keeps every
@@ -867,9 +917,12 @@ class Metrics:
         if self._sender is None:
             return
         try:
-            lines = [statsd_line(metric, value, tags + self._extra_tags)
-                     for metric, value, tags in router_samples(
-                         name, status, reachable, config_error)]
+            lines = [
+                statsd_line(metric, value, tags + self._extra_tags)
+                for metric, value, tags in router_samples(
+                    name, status, reachable, config_error
+                )
+            ]
             self._q.put_nowait(lines)
             with self._lock:
                 self.submitted += len(lines)
@@ -950,7 +1003,11 @@ def metrics_from_env() -> Metrics:
     every laptop run and every test spawn a thread writing to a socket that is
     not there.
     """
-    if os.environ.get("DD_DOGSTATSD_ENABLED", "true").strip().lower() in ("0", "false", "no"):
+    if os.environ.get("DD_DOGSTATSD_ENABLED", "true").strip().lower() in (
+        "0",
+        "false",
+        "no",
+    ):
         log.info("dogstatsd disabled (DD_DOGSTATSD_ENABLED)")
         return Metrics(None)
     url = os.environ.get("DD_DOGSTATSD_URL", "").strip()
@@ -989,9 +1046,14 @@ class Registry:
         self._router_state: dict[str, dict] = {}
         self._clients: dict[str, dict] = {}
 
-    def note_router(self, name: str, status: dict | None, *,
-                    reachable: bool | None = None,
-                    config_error: str | None = None) -> None:
+    def note_router(
+        self,
+        name: str,
+        status: dict | None,
+        *,
+        reachable: bool | None = None,
+        config_error: str | None = None,
+    ) -> None:
         """Record one poll cycle's outcome for one router.
 
         `reachable` DEFAULTS FROM `status`, not from a bare False, so every
@@ -1005,12 +1067,15 @@ class Registry:
             reachable = status is not None
         with self._lock:
             self._router_state[name] = {
-                "status": status, "at": time.time(),
-                "reachable": reachable, "config_error": config_error,
+                "status": status,
+                "at": time.time(),
+                "reachable": reachable,
+                "config_error": config_error,
             }
 
-    def router_sample(self, name: str) -> tuple[dict | None, float | None,
-                                                 bool | None, str | None]:
+    def router_sample(
+        self, name: str
+    ) -> tuple[dict | None, float | None, bool | None, str | None]:
         """The poller's last word on one router:
         (status, when it was checked, reachable, config_error).
 
@@ -1033,8 +1098,12 @@ class Registry:
             seen = self._router_state.get(name)
         if seen is None:
             return None, None, None, None
-        return (seen["status"], seen["at"],
-                seen.get("reachable"), seen.get("config_error"))
+        return (
+            seen["status"],
+            seen["at"],
+            seen.get("reachable"),
+            seen.get("config_error"),
+        )
 
     def note_client(self, name: str, payload: dict) -> None:
         with self._lock:
@@ -1051,11 +1120,17 @@ class Registry:
         Routers are untouched: they come from config, and omitting a dead one
         would make it look like a router nobody added.
         """
-        gone = [name for name, seen in self._clients.items()
-                if now - seen["at"] > CLIENT_RETAIN_S]
+        gone = [
+            name
+            for name, seen in self._clients.items()
+            if now - seen["at"] > CLIENT_RETAIN_S
+        ]
         for name in gone:
-            log.info("forgetting client %s, silent for over %.0f h",
-                     name, CLIENT_RETAIN_S / 3600)
+            log.info(
+                "forgetting client %s, silent for over %.0f h",
+                name,
+                CLIENT_RETAIN_S / 3600,
+            )
             del self._clients[name]
 
     def snapshot(self) -> list[dict]:
@@ -1065,8 +1140,9 @@ class Registry:
             self._evict_forgotten_clients(now)
             for name, cfg in self._routers.items():
                 seen = self._router_state.get(name)
-                out.append(self._node(name, cfg.get("label") or name,
-                                      "router", seen, now))
+                out.append(
+                    self._node(name, cfg.get("label") or name, "router", seen, now)
+                )
             for name, seen in self._clients.items():
                 label = (seen.get("status") or {}).get("label") or name
                 out.append(self._node(name, label, "client", seen, now))
@@ -1085,18 +1161,24 @@ class Registry:
             # actually run, `seen` carries WHEN, and that is what a reader
             # should see; "never" is now reserved for the case that is
             # literally true - nothing has been asked yet.
-            return {"name": name, "label": label, "kind": kind,
-                    "unreachable": True, "legs": [], "carrying": 0,
-                    "degraded": False,
-                    "staleMs": None if not seen else int((now - seen["at"]) * 1000),
-                    # EXPLICIT, NEVER INFERRED - the same rule #272 applies to
-                    # the Datadog gauges beside these, applied to the page a
-                    # human actually reads. `reachable` says whether anything
-                    # ever answered, even a refusal; `configError` says the hub
-                    # never had an address worth trying. Both default honestly
-                    # when `seen` is entirely absent: nothing is known yet.
-                    "reachable": bool(seen.get("reachable")) if seen else False,
-                    "configError": (seen or {}).get("config_error")}
+            return {
+                "name": name,
+                "label": label,
+                "kind": kind,
+                "unreachable": True,
+                "legs": [],
+                "carrying": 0,
+                "degraded": False,
+                "staleMs": None if not seen else int((now - seen["at"]) * 1000),
+                # EXPLICIT, NEVER INFERRED - the same rule #272 applies to
+                # the Datadog gauges beside these, applied to the page a
+                # human actually reads. `reachable` says whether anything
+                # ever answered, even a refusal; `configError` says the hub
+                # never had an address worth trying. Both default honestly
+                # when `seen` is entirely absent: nothing is known yet.
+                "reachable": bool(seen.get("reachable")) if seen else False,
+                "configError": (seen or {}).get("config_error"),
+            }
         status = seen["status"]
         # SHARED WITH THE METRIC, not restated here. What the page calls
         # carrying and what the alarm calls carrying_legs have to be the same
@@ -1105,8 +1187,12 @@ class Registry:
         legs = bond_legs(status)
         carrying = carrying_legs(legs)
         return {
-            "name": name, "label": label, "kind": kind, "unreachable": False,
-            "legs": legs, "carrying": carrying,
+            "name": name,
+            "label": label,
+            "kind": kind,
+            "unreachable": False,
+            "legs": legs,
+            "carrying": carrying,
             "degraded": any(p.get("state") == "degraded" for p in legs),
             "staleMs": int((now - seen["at"]) * 1000),
             "reachable": bool(seen.get("reachable", True)),
@@ -1183,7 +1269,9 @@ _RESERVED_HOST = re.compile(
     \.(?:invalid|example|test|localhost)(?![A-Za-z0-9-])   # RFC 2606 / 6761
   | \b192\.0\.2\.|\b198\.51\.100\.|\b203\.0\.113\.          # RFC 5737 TEST-NET
   | \b2001:0?db8                                            # RFC 3849
-    """, re.VERBOSE | re.IGNORECASE)
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
 
 
 def router_config_error(status_url: str) -> str | None:
@@ -1206,6 +1294,8 @@ def router_config_error(status_url: str) -> str | None:
     if _RESERVED_HOST.search(expanded):
         return f"status_url is reserved for documentation and can never resolve: {expanded!r}"
     return None
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -1243,8 +1333,12 @@ def fetch_router_status(name: str, url: str) -> tuple[dict | None, bool]:
         return None, host_answered(exc)
 
 
-def poll_routers(reg: Registry, routers: list[dict], stop: threading.Event,
-                 metrics: Metrics | None = None) -> None:
+def poll_routers(
+    reg: Registry,
+    routers: list[dict],
+    stop: threading.Event,
+    metrics: Metrics | None = None,
+) -> None:
     """Keep the Registry's copy of every router's status current, and say so.
 
     THIS IS THE ONLY THING THAT FETCHES /api/status. Request handling reads
@@ -1282,8 +1376,11 @@ def poll_routers(reg: Registry, routers: list[dict], stop: threading.Event,
             # a config that never works must say so where somebody looks
             # first, not only inside a metric nobody is paged on until #272's
             # gauges are wired into a monitor for it too.
-            log.error("router %s: status_url is unusable, will not be "
-                     "polled: %s", r["name"], error)
+            log.error(
+                "router %s: status_url is unusable, will not be polled: %s",
+                r["name"],
+                error,
+            )
     while not stop.is_set():
         for r in routers:
             error = config_errors[r["name"]]
@@ -1328,8 +1425,10 @@ def wants_live_read(request_path: str) -> bool:
     silently put a client back on the slow path.
     """
     query = request_path.split("?", 1)[1] if "?" in request_path else ""
-    return any(v.strip().lower() in ("1", "true", "yes")
-               for v in parse_qs(query).get("live", []))
+    return any(
+        v.strip().lower() in ("1", "true", "yes")
+        for v in parse_qs(query).get("live", [])
+    )
 
 
 def _iso(ts: float) -> str:
@@ -1385,17 +1484,18 @@ def cached_status(reg: Registry, name: str, max_age_s: float) -> tuple[int, byte
         # having had one to try. 500, not 502 - the fault is the hub's own
         # configuration, not anything upstream of it.
         meta["config_error"] = config_error
-        return 500, json.dumps({"error": "hub is not configured to reach this router",
-                                "hub": meta}).encode()
+        return 500, json.dumps(
+            {"error": "hub is not configured to reach this router", "hub": meta}
+        ).encode()
     if status is None:
         # poll_routers stores a failed fetch as None precisely so this stays
         # honest: a router that has gone away is reported unreachable, not
         # served from its last good sample until somebody notices.
-        return 502, json.dumps({"error": "router not answering",
-                                "hub": meta}).encode()
+        return 502, json.dumps({"error": "router not answering", "hub": meta}).encode()
     if stale:
-        return 504, json.dumps({"error": "router status is stale",
-                                "hub": meta}).encode()
+        return 504, json.dumps(
+            {"error": "router status is stale", "hub": meta}
+        ).encode()
     body = dict(status)
     # Overwrites a router-side "hub" key on purpose. The freshness of the hub's
     # own answer is the one thing a client must be able to trust here, so it
@@ -1404,8 +1504,9 @@ def cached_status(reg: Registry, name: str, max_age_s: float) -> tuple[int, byte
     return 200, json.dumps(body).encode()
 
 
-def traced_request(tracer: Tracer, handler: BaseHTTPRequestHandler,
-                   method: str, handle) -> None:
+def traced_request(
+    tracer: Tracer, handler: BaseHTTPRequestHandler, method: str, handle
+) -> None:
     """Run one request and emit its span.
 
     MODULE LEVEL, not a method on the handler, so the request-timing rule and
@@ -1438,11 +1539,14 @@ def traced_request(tracer: Tracer, handler: BaseHTTPRequestHandler,
         raise
     finally:
         try:
-            tracer.submit(method=method, path=handler.path,
-                          status=handler._status,
-                          start_ns=start_ns,
-                          duration_ns=time.monotonic_ns() - t0,
-                          error=err)
+            tracer.submit(
+                method=method,
+                path=handler.path,
+                status=handler._status,
+                start_ns=start_ns,
+                duration_ns=time.monotonic_ns() - t0,
+                error=err,
+            )
         except Exception:  # noqa: BLE001 - never fail a request over a span
             log.debug("apm submit failed", exc_info=True)
 
@@ -1516,8 +1620,9 @@ def proxy_to_router(handler: BaseHTTPRequestHandler, primary: dict, path: str) -
             return handler._send(200, body, "application/json", extra)
     except (urllib.error.URLError, OSError) as exc:
         log.debug("proxy %s: %s", target, exc)
-        return handler._send(502, b'{"error":"router not answering"}',
-                             "application/json")
+        return handler._send(
+            502, b'{"error":"router not answering"}', "application/json"
+        )
 
 
 # ---------------------------------------------------------------- route bodies
@@ -1542,7 +1647,9 @@ def proxy_to_router(handler: BaseHTTPRequestHandler, primary: dict, path: str) -
 # state that its name does not admit to.
 
 
-def serve_primary(handler: BaseHTTPRequestHandler, reg: Registry, routers: list[dict], path: str) -> None:
+def serve_primary(
+    handler: BaseHTTPRequestHandler, reg: Registry, routers: list[dict], path: str
+) -> None:
     """/api/status and /api/series, for the PRIMARY router.
 
     COMPATIBILITY, AND IT IS NOT OPTIONAL. The iOS and Android apps fetch
@@ -1560,8 +1667,9 @@ def serve_primary(handler: BaseHTTPRequestHandler, reg: Registry, routers: list[
     # with an AttributeError the client saw as a hang.
     primary = next(iter(routers), None)
     if primary is None:
-        return handler._send(503, b'{"error":"no router configured"}',
-                             "application/json")
+        return handler._send(
+            503, b'{"error":"no router configured"}', "application/json"
+        )
     # /api/status IS ANSWERED FROM THE POLLER'S SNAPSHOT (#70). poll_routers
     # already fetches this exact document from this exact router every
     # POLL_INTERVAL_S, so re-fetching it per request bought nothing and cost a
@@ -1571,8 +1679,7 @@ def serve_primary(handler: BaseHTTPRequestHandler, reg: Registry, routers: list[
     # answering" while the router was answering the same request in 0.87 s - the
     # component named in the error was not the component that failed.
     if path == "/api/status" and not wants_live_read(handler.path):
-        code, body = cached_status(reg, primary["name"],
-                                   status_max_age_s(len(routers)))
+        code, body = cached_status(reg, primary["name"], status_max_age_s(len(routers)))
         return handler._send(code, body, "application/json")
     # /api/series IS STILL PROXIED, and that is not an oversight: the poller does
     # not collect series, so there is no snapshot to answer from. `?live=1` on
@@ -1610,8 +1717,11 @@ def serve_static(handler: BaseHTTPRequestHandler, path: str) -> None:
         return handler._send(404, b"not found", "text/plain")
     if not usable:
         return handler._send(404, b"not found", "text/plain")
-    ctype = {"html": "text/html; charset=utf-8", "css": "text/css",
-             "js": "text/javascript"}.get(target.suffix.lstrip("."), "text/plain")
+    ctype = {
+        "html": "text/html; charset=utf-8",
+        "css": "text/css",
+        "js": "text/javascript",
+    }.get(target.suffix.lstrip("."), "text/plain")
     return handler._send(200, target.read_bytes(), ctype)
 
 
@@ -1645,14 +1755,16 @@ def handle_report(handler: BaseHTTPRequestHandler, reg: Registry) -> None:
     except ValueError:
         return handler._send(400, b'{"error":"bad length"}', "application/json")
     if length <= 0 or length > REPORT_MAX_BYTES:
-        return handler._send(400, b'{"error":"body 1..262144 bytes"}',
-                             "application/json")
+        return handler._send(
+            400, b'{"error":"body 1..262144 bytes"}', "application/json"
+        )
     try:
         payload = json.loads(handler.rfile.read(length))
         name = str(payload["name"])
     except (ValueError, KeyError, OSError):
-        return handler._send(400, b'{"error":"body must be JSON with a name"}',
-                             "application/json")
+        return handler._send(
+            400, b'{"error":"body must be JSON with a name"}', "application/json"
+        )
     reg.note_client(name, payload)
     return handler._send(200, b'{"ok":true}', "application/json")
 
@@ -1664,8 +1776,13 @@ def make_handler(reg: Registry, routers: list[dict], tracer: Tracer | None = Non
         def log_message(self, fmt, *args):  # noqa: A003
             log.debug("http: " + fmt, *args)
 
-        def _send(self, code: int, body: bytes, ctype: str,
-                  extra: dict[str, str] | None = None) -> None:
+        def _send(
+            self,
+            code: int,
+            body: bytes,
+            ctype: str,
+            extra: dict[str, str] | None = None,
+        ) -> None:
             # Checked BEFORE any byte of the response goes out, so a bad call
             # fails cleanly instead of half way through a response.
             extra = check_extra_headers(extra)
@@ -1724,8 +1841,9 @@ def main() -> None:
     # Built BEFORE the poller starts, so the very first cycle is observed. The
     # first cycle after a hub restart is exactly when somebody is watching.
     metrics = metrics_from_env()
-    threading.Thread(target=poll_routers, args=(reg, routers, stop, metrics),
-                     daemon=True).start()
+    threading.Thread(
+        target=poll_routers, args=(reg, routers, stop, metrics), daemon=True
+    ).start()
 
     tracer = tracer_from_env()
     port = int(os.environ.get("ZIPPIE_HUB_PORT", "8080"))

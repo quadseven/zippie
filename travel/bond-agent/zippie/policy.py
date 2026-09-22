@@ -230,8 +230,7 @@ def _clear_and_collect(
         for p in legs:
             p.shed_for_latency = False
         return []
-    measured = [(p, p.rtt_tail_ms) for p in legs
-                if p.rtt_tail_ms is not None]
+    measured = [(p, p.rtt_tail_ms) for p in legs if p.rtt_tail_ms is not None]
     for p in legs:
         if p.rtt_tail_ms is None:
             p.shed_for_latency = False
@@ -316,9 +315,7 @@ def update_shed_state(paths: list[PathRuntime], policy: PolicyConfig) -> None:
         path.shed_for_latency = cross_leg_says_bad and self_says_bad
 
 
-def shed_bufferbloated(
-    legs: list[PathRuntime], policy: PolicyConfig
-) -> list[PathRuntime]:
+def shed_bufferbloated(legs: list[PathRuntime], policy: PolicyConfig) -> list[PathRuntime]:
     """Decide, then filter. Kept for callers that want both in one step.
 
     NEVER EMPTIES THE BOND: if every leg looks sheddable the comparison has
@@ -668,10 +665,7 @@ def paths_in_active_tier(paths: list[PathRuntime]) -> list[PathRuntime]:
     tier = active_tier(paths)
     if tier is None:
         return []
-    return [
-        p for p in paths
-        if p.effective_weight > 0 and p.wg_iface and p.config.tier == tier
-    ]
+    return [p for p in paths if p.effective_weight > 0 and p.wg_iface and p.config.tier == tier]
 
 
 def multipath_nexthops(paths: list[PathRuntime], mode: BondMode) -> list[tuple[str, int]]:
@@ -695,11 +689,7 @@ def multipath_nexthops(paths: list[PathRuntime], mode: BondMode) -> list[tuple[s
     # above enforces it, but this branch iterates the TIER, not `usable`. A
     # tier path whose tunnel has not come up yet has wg_iface=None, and that
     # None would be interpolated straight into an `ip route` nexthop.
-    return [
-        (p.wg_iface, p.effective_weight)
-        for p in paths_in_active_tier(paths)
-        if p.wg_iface
-    ]
+    return [(p.wg_iface, p.effective_weight) for p in paths_in_active_tier(paths) if p.wg_iface]
 
 
 def direct_fallback_candidates(paths: list[PathRuntime]) -> list[str]:

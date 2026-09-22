@@ -18,43 +18,67 @@ class _IdleTransport:
         self.payload_bytes = 0
         self.totals = {}
 
-    def client_idle_for_s(self): return self.idle_s
-    def send_keepalives(self): self.probes += 1
-    def add_link(self, endpoint): self.links.add(endpoint.path_id)
-    def remove_link(self, path_id): self.links.discard(path_id)
-    def forget_link(self, path_id): pass
-    def set_link_weight(self, path_id, weight): pass
-    def set_link_health(self, path_id, healthy): pass
-    def link_rx_age_s(self, path_id): return self.link_age_s
-    def link_rtt_ms(self, path_id): return None
-    def link_loss_pct(self, path_id): return None
-    def link_bytes(self): return self.totals
+    def client_idle_for_s(self):
+        return self.idle_s
+
+    def send_keepalives(self):
+        self.probes += 1
+
+    def add_link(self, endpoint):
+        self.links.add(endpoint.path_id)
+
+    def remove_link(self, path_id):
+        self.links.discard(path_id)
+
+    def forget_link(self, path_id):
+        pass
+
+    def set_link_weight(self, path_id, weight):
+        pass
+
+    def set_link_health(self, path_id, healthy):
+        pass
+
+    def link_rx_age_s(self, path_id):
+        return self.link_age_s
+
+    def link_rtt_ms(self, path_id):
+        return None
+
+    def link_loss_pct(self, path_id):
+        return None
+
+    def link_bytes(self):
+        return self.totals
+
     def stats_dict(self):
         return {"client_payload_bytes": self.payload_bytes, "client_idle_s": self.idle_s}
 
 
 def _agent(tmp_path):
-    cfg = parse_config({
-        "agent": {"state_dir": str(tmp_path), "run_dir": str(tmp_path / "run")},
-        "home": {
-            "endpoint": "home.example",
-            "server_public_key": "server-key",
-            "persistent_keepalive": 3,
-        },
-        "policy": {
-            "datapath": "packet",
-            "mode": "aggregate",
-            "probe_interval_ms": 1000,
-            "idle_after_s": 60,
-            # An unsafe operator value must still not lengthen failover.
-            "idle_probe_interval_ms": 60000,
-            "idle_persistent_keepalive": 25,
-        },
-        "paths": [
-            {"name": "cell", "interface": "eth0", "cost_class": "metered"},
-            {"name": "wan", "interface": "eth1", "cost_class": "free"},
-        ],
-    })
+    cfg = parse_config(
+        {
+            "agent": {"state_dir": str(tmp_path), "run_dir": str(tmp_path / "run")},
+            "home": {
+                "endpoint": "home.example",
+                "server_public_key": "server-key",
+                "persistent_keepalive": 3,
+            },
+            "policy": {
+                "datapath": "packet",
+                "mode": "aggregate",
+                "probe_interval_ms": 1000,
+                "idle_after_s": 60,
+                # An unsafe operator value must still not lengthen failover.
+                "idle_probe_interval_ms": 60000,
+                "idle_persistent_keepalive": 25,
+            },
+            "paths": [
+                {"name": "cell", "interface": "eth0", "cost_class": "metered"},
+                {"name": "wan", "interface": "eth1", "cost_class": "free"},
+            ],
+        }
+    )
     bond = BondAgent(cfg)
     bond.prepare_dirs()
     bond._resolve_home_ip = lambda: "203.0.113.9"
@@ -65,9 +89,7 @@ def _agent(tmp_path):
     return bond
 
 
-def test_idle_cadence_backs_off_wakes_and_cannot_extend_failover(
-    tmp_path, monkeypatch
-):
+def test_idle_cadence_backs_off_wakes_and_cannot_extend_failover(tmp_path, monkeypatch):
     now = {"value": 100.0}
     monkeypatch.setattr(agent_mod.time, "monotonic", lambda: now["value"])
     keepalives = []
@@ -143,9 +165,7 @@ def test_console_reports_client_payload_to_metered_spend_ratio(tmp_path):
 
 
 def test_three_metered_idle_legs_project_below_100_mb_per_day():
-    achieved = projected_idle_mb_per_day(
-        metered_legs=3, probe_interval_s=2.0, keepalive_s=25
-    )
+    achieved = projected_idle_mb_per_day(metered_legs=3, probe_interval_s=2.0, keepalive_s=25)
     assert round(achieved, 2) == 11.93
     assert achieved < 100
 
@@ -156,10 +176,17 @@ def test_live_wireguard_keepalive_is_changed_without_rebuilding(monkeypatch):
 
     net.set_wg_persistent_keepalive("pbz0", "server-key", 25)
 
-    assert commands == [[
-        "wg", "set", "pbz0", "peer", "server-key",
-        "persistent-keepalive", "25",
-    ]]
+    assert commands == [
+        [
+            "wg",
+            "set",
+            "pbz0",
+            "peer",
+            "server-key",
+            "persistent-keepalive",
+            "25",
+        ]
+    ]
 
 
 def test_idle_settings_can_never_increase_probe_or_keepalive_traffic(tmp_path):

@@ -133,8 +133,17 @@ class ImpairedSocket:
 
 
 class _LegState:
-    __slots__ = ("delayed", "dropped", "imp", "inner", "offered", "overflowed",
-                 "passed", "queue", "rng")
+    __slots__ = (
+        "delayed",
+        "dropped",
+        "imp",
+        "inner",
+        "offered",
+        "overflowed",
+        "passed",
+        "queue",
+        "rng",
+    )
 
     def __init__(self, imp: Impairment, seed: int, path_id: int, inner) -> None:
         self.imp = imp
@@ -255,8 +264,10 @@ class Impairer:
     def counters(self) -> dict:
         return {
             pid: {
-                "offered": leg.offered, "dropped": leg.dropped,
-                "delayed": leg.delayed, "overflowed": leg.overflowed,
+                "offered": leg.offered,
+                "dropped": leg.dropped,
+                "delayed": leg.delayed,
+                "overflowed": leg.overflowed,
                 "passed": leg.passed,
             }
             for pid, leg in self._legs.items()
@@ -284,8 +295,7 @@ class ShedController:
     off.
     """
 
-    def __init__(self, transport, names, policy: PolicyConfig,
-                 base_weight: int = 100) -> None:
+    def __init__(self, transport, names, policy: PolicyConfig, base_weight: int = 100) -> None:
         self._transport = transport
         self._policy = policy
         self._base_weight = base_weight
@@ -296,13 +306,15 @@ class ShedController:
         self.paths = [
             PathRuntime(
                 name=name,
-                config=PathConfig(name=name,
-                                  match=PathMatch(type="interface", interface=name),
-                                  weight=base_weight),
+                config=PathConfig(
+                    name=name, match=PathMatch(type="interface", interface=name), weight=base_weight
+                ),
                 # loss_pct MUST be set: PathRuntime defaults to 100.0 and DOWN,
                 # and update_rtt_tail clears the tail on a DOWN leg - a leg built
                 # without this would never accumulate a tail to be shed on.
-                interface=name, state=PathState.UP, loss_pct=0.0,
+                interface=name,
+                state=PathState.UP,
+                loss_pct=0.0,
             )
             for name in names
         ]
@@ -335,8 +347,10 @@ class ShedController:
         return [p.name for p in self.paths if p.shed_for_latency]
 
     def tails_ms(self) -> dict:
-        return {p.name: (round(p.rtt_tail_ms, 1) if p.rtt_tail_ms is not None else None)
-                for p in self.paths}
+        return {
+            p.name: (round(p.rtt_tail_ms, 1) if p.rtt_tail_ms is not None else None)
+            for p in self.paths
+        }
 
 
 # Datadog is configured from the environment, and a BondAgent that finds a key
@@ -399,8 +413,16 @@ class PolicyController:
     the harness exposes, because that is the one #81 already varies.
     """
 
-    def __init__(self, transport, names, remotes, *, shed_ratio: float = 0.0,
-                 state_dir: str | None = None, weight: int = 100) -> None:
+    def __init__(
+        self,
+        transport,
+        names,
+        remotes,
+        *,
+        shed_ratio: float = 0.0,
+        state_dir: str | None = None,
+        weight: int = 100,
+    ) -> None:
         from zippie.agent import BondAgent
         from zippie.config import parse_config
 
@@ -418,20 +440,31 @@ class PolicyController:
         self._owns_state_dir = state_dir is None
         root = state_dir or tempfile.mkdtemp(prefix="zippie-impair-")
         self.state_dir = root
-        cfg = parse_config({
-            "agent": {"private_key": "cGtleQ==",
-                      "state_dir": root, "run_dir": root},
-            "home": {"endpoint": "127.0.0.1:51900",
-                     "server_public_key": "c2VydmVy",
-                     "address_cidr": "10.66.0.10/24", "ports": [51900]},
-            "policy": {"datapath": "packet", "mode": "aggregate",
-                       "bufferbloat_shed_ratio": shed_ratio},
-            "paths": [
-                {"name": name, "interface": name, "weight": weight,
-                 "relay_endpoint": f"{host}:{port}"}
-                for name, (host, port) in zip(names, remotes)
-            ],
-        })
+        cfg = parse_config(
+            {
+                "agent": {"private_key": "cGtleQ==", "state_dir": root, "run_dir": root},
+                "home": {
+                    "endpoint": "127.0.0.1:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {
+                    "datapath": "packet",
+                    "mode": "aggregate",
+                    "bufferbloat_shed_ratio": shed_ratio,
+                },
+                "paths": [
+                    {
+                        "name": name,
+                        "interface": name,
+                        "weight": weight,
+                        "relay_endpoint": f"{host}:{port}",
+                    }
+                    for name, (host, port) in zip(names, remotes)
+                ],
+            }
+        )
         saved = {k: os.environ.pop(k) for k in _TELEMETRY_ENV if k in os.environ}
         try:
             agent = BondAgent(cfg)
@@ -532,8 +565,11 @@ class PolicyController:
         while any other leg is alive - so this is the strongest form of
         "withdrawn" there is, and it is not the same question as weight."""
         agent = self.agent
-        return [p.name for p in agent.paths
-                if agent._transport_ids.get(p.name) in agent._transport_links]
+        return [
+            p.name
+            for p in agent.paths
+            if agent._transport_ids.get(p.name) in agent._transport_links
+        ]
 
     def carrying(self) -> list:
         """THE SET #6 IS ABOUT: legs that real payload can actually go down.
@@ -548,9 +584,11 @@ class PolicyController:
         console came to show four carrying legs while the transport held one.
         """
         bond = set(self.in_bond())
-        return [p.name for p in self.agent.paths
-                if p.name in bond and p.effective_weight > 0
-                and not p.shed_for_latency]
+        return [
+            p.name
+            for p in self.agent.paths
+            if p.name in bond and p.effective_weight > 0 and not p.shed_for_latency
+        ]
 
     def states(self) -> dict:
         return {p.name: p.state.value for p in self.agent.paths}
@@ -569,16 +607,18 @@ class PolicyController:
         return {p.name: p.loss_pct for p in self.agent.paths}
 
     def rtt_ms(self) -> dict:
-        return {p.name: (round(p.rtt_ms, 2) if p.rtt_ms is not None else None)
-                for p in self.agent.paths}
+        return {
+            p.name: (round(p.rtt_ms, 2) if p.rtt_ms is not None else None) for p in self.agent.paths
+        }
 
     def shed_names(self) -> list:
         return [p.name for p in self.agent.paths if p.shed_for_latency]
 
     def tails_ms(self) -> dict:
-        return {p.name: (round(p.rtt_tail_ms, 1) if p.rtt_tail_ms is not None
-                         else None)
-                for p in self.agent.paths}
+        return {
+            p.name: (round(p.rtt_tail_ms, 1) if p.rtt_tail_ms is not None else None)
+            for p in self.agent.paths
+        }
 
     def errors(self) -> dict:
         """Whatever the agent last said about each leg. This is the console's

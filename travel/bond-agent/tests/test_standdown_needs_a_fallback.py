@@ -20,7 +20,6 @@ The watchdog carried the identical false assumption until #188.
 
 from __future__ import annotations
 
-import pytest
 
 from zippie import net
 
@@ -65,8 +64,11 @@ def test_an_unreadable_table_claims_a_fallback(monkeypatch):
 
 
 def test_both_routes_present_still_counts(monkeypatch):
-    _routes(monkeypatch, '[{"dst":"default","dev":"pbz0","metric":1},'
-                         ' {"dst":"default","dev":"eth0","gateway":"192.0.2.1","metric":10}]')
+    _routes(
+        monkeypatch,
+        '[{"dst":"default","dev":"pbz0","metric":1},'
+        ' {"dst":"default","dev":"eth0","gateway":"192.0.2.1","metric":10}]',
+    )
     assert net.foreign_default_route_exists("pb") is True
 
 
@@ -79,6 +81,7 @@ def test_the_prefix_is_what_identifies_ours(monkeypatch):
 
 class _Failed:
     """`ip` missing, which is returncode 127 and empty stdout."""
+
     def __init__(self) -> None:
         self.stdout = ""
         self.returncode = 127
@@ -92,28 +95,26 @@ def test_a_route_on_a_bond_legs_own_interface_is_not_a_fallback(monkeypatch):
     OTHER leg and keeps this one, unbonded, which is worse than the bond it
     replaced."""
     _routes(monkeypatch, '[{"dst":"default","dev":"apclix0","gateway":"192.0.2.1","metric":20}]')
-    assert net.foreign_default_route_exists(
-        "pb", exclude_interfaces=frozenset({"apclix0"})
-    ) is False
+    assert (
+        net.foreign_default_route_exists("pb", exclude_interfaces=frozenset({"apclix0"})) is False
+    )
 
 
 def test_a_route_on_a_different_interface_still_counts(monkeypatch):
     """The exclusion is scoped to the bond's OWN legs, not every route."""
     _routes(monkeypatch, '[{"dst":"default","dev":"eth0","gateway":"192.0.2.1","metric":20}]')
-    assert net.foreign_default_route_exists(
-        "pb", exclude_interfaces=frozenset({"apclix0"})
-    ) is True
+    assert net.foreign_default_route_exists("pb", exclude_interfaces=frozenset({"apclix0"})) is True
 
 
 def test_one_bond_leg_route_excluded_another_still_counts(monkeypatch):
     """A genuinely independent WAN sitting beside an excluded leg must still
     be seen - the exclusion must not swallow every route once one matches."""
-    _routes(monkeypatch,
-            '[{"dst":"default","dev":"apclix0","metric":20},'
-            ' {"dst":"default","dev":"eth0","metric":10}]')
-    assert net.foreign_default_route_exists(
-        "pb", exclude_interfaces=frozenset({"apclix0"})
-    ) is True
+    _routes(
+        monkeypatch,
+        '[{"dst":"default","dev":"apclix0","metric":20},'
+        ' {"dst":"default","dev":"eth0","metric":10}]',
+    )
+    assert net.foreign_default_route_exists("pb", exclude_interfaces=frozenset({"apclix0"})) is True
 
 
 def test_no_excluded_interfaces_behaves_exactly_as_before(monkeypatch):

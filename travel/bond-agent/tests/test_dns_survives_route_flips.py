@@ -41,15 +41,24 @@ def _service(tmp_path):
 
 def _agent(tmp_path, **policy):
     cfg = {
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path),
-                  "run_dir": str(tmp_path / "run")},
-        "home": {"endpoint": "h:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
+        "agent": {
+            "private_key": "cGtleQ==",
+            "state_dir": str(tmp_path),
+            "run_dir": str(tmp_path / "run"),
+        },
+        "home": {
+            "endpoint": "h:51900",
+            "server_public_key": "c2VydmVy",
+            "address_cidr": "10.66.0.10/24",
+            "ports": [51900],
+        },
         # join_streak_min=0 so the anti-flap gate never holds a leg out here -
         # these tests are about the route seam, not about membership.
         "policy": dict({"mode": "aggregate", "join_streak_min": 0}, **policy),
-        "paths": [{"name": "ethernet", "interface": "eth0"},
-                  {"name": "hotspot", "interface": "apclix0"}],
+        "paths": [
+            {"name": "ethernet", "interface": "eth0"},
+            {"name": "hotspot", "interface": "apclix0"},
+        ],
     }
     agent = BondAgent(parse_config(cfg))
     for path, wg in zip(agent.paths, ("pb0", "pb1")):
@@ -76,7 +85,8 @@ def spy(monkeypatch):
     """Record route installs and every command the agent would run."""
     recorder = _Spy()
     monkeypatch.setattr(
-        net, "ip_route_replace_multipath",
+        net,
+        "ip_route_replace_multipath",
         lambda hops: recorder.routes.append(list(hops)),
     )
     # The firewall rebuild forks ~20 iptables execs and would drown the
@@ -123,12 +133,11 @@ def test_an_unchanged_bond_never_kicks_the_resolver(tmp_path, spy):
     this green is the seam noticing that the route did not actually change.
     """
     svc = _service(tmp_path)
-    agent = _agent(tmp_path, resolver_kick_service=str(svc),
-                   resolver_kick_min_interval_s=0)
-    agent.apply_policy()                     # the one real flip
+    agent = _agent(tmp_path, resolver_kick_service=str(svc), resolver_kick_min_interval_s=0)
+    agent.apply_policy()  # the one real flip
     after_flip = len(spy.kicks(svc))
 
-    for _ in range(200):                     # ~100 s of a settled bond
+    for _ in range(200):  # ~100 s of a settled bond
         agent.apply_policy()
 
     assert len(spy.kicks(svc)) == after_flip, (
@@ -142,8 +151,7 @@ def test_the_periodic_forced_reassert_is_not_a_flip(tmp_path, spy):
     multi-WAN daemon clobbers ours). Re-asserting an IDENTICAL route changes no
     egress address, so it must not cost the LAN its resolver."""
     svc = _service(tmp_path)
-    agent = _agent(tmp_path, resolver_kick_service=str(svc),
-                   resolver_kick_min_interval_s=0)
+    agent = _agent(tmp_path, resolver_kick_service=str(svc), resolver_kick_min_interval_s=0)
     agent.apply_policy()
     before_routes, before_kicks = len(spy.routes), len(spy.kicks(svc))
 
@@ -164,8 +172,7 @@ def test_withdrawing_the_bonded_route_kicks_too(tmp_path, spy):
     sockets black-hole exactly as they did on the way in.
     """
     svc = _service(tmp_path)
-    agent = _agent(tmp_path, resolver_kick_service=str(svc),
-                   resolver_kick_min_interval_s=0)
+    agent = _agent(tmp_path, resolver_kick_service=str(svc), resolver_kick_min_interval_s=0)
     agent.apply_policy()
     after_flip = len(spy.kicks(svc))
 
@@ -179,8 +186,7 @@ def test_withdrawing_the_bonded_route_kicks_too(tmp_path, spy):
 
     assert spy.routes[-1] == [], "the bonded route was not withdrawn"
     assert len(spy.kicks(svc)) == after_flip + 1, (
-        "falling back to the physical WAN left the resolver bound to the old "
-        "tunnel egress"
+        "falling back to the physical WAN left the resolver bound to the old tunnel egress"
     )
 
 
@@ -192,8 +198,7 @@ def test_a_bond_that_was_never_up_does_not_kick_on_every_pass(tmp_path, spy):
     restarted twice a second before the bond ever carried a byte.
     """
     svc = _service(tmp_path)
-    agent = _agent(tmp_path, resolver_kick_service=str(svc),
-                   resolver_kick_min_interval_s=0)
+    agent = _agent(tmp_path, resolver_kick_service=str(svc), resolver_kick_min_interval_s=0)
     for path in agent.paths:
         path.state = PathState.DOWN
         path.interface = None
@@ -213,8 +218,7 @@ def test_an_address_loss_withdrawal_kicks_too(tmp_path, spy):
     the fastest way the egress address changes on this device.
     """
     svc = _service(tmp_path)
-    agent = _agent(tmp_path, resolver_kick_service=str(svc),
-                   resolver_kick_min_interval_s=0)
+    agent = _agent(tmp_path, resolver_kick_service=str(svc), resolver_kick_min_interval_s=0)
     agent.apply_policy()
     after_flip = len(spy.kicks(svc))
 
@@ -227,20 +231,25 @@ def test_an_address_loss_withdrawal_kicks_too(tmp_path, spy):
 
 def test_the_agent_wires_the_configured_service_not_a_hardcoded_one(tmp_path):
     """Unit-tested-but-never-wired is the failure mode this guards."""
-    agent = _agent(tmp_path, resolver_kick_service="/etc/init.d/unbound",
-                   resolver_kick_min_interval_s=3)
+    agent = _agent(
+        tmp_path, resolver_kick_service="/etc/init.d/unbound", resolver_kick_min_interval_s=3
+    )
     assert agent._resolver.service == "/etc/init.d/unbound"
     assert agent._resolver.min_interval_s == 3
 
 
 def test_the_default_targets_openwrt_and_is_overridable():
     assert PolicyConfig().resolver_kick_service == "/etc/init.d/nextdns"
-    cfg = parse_config({
-        "home": {"endpoint": "h:51900"},
-        "policy": {"resolver_kick_service": "/etc/init.d/dnsmasq",
-                   "resolver_kick_min_interval_s": 2.5},
-        "paths": [{"name": "a", "interface": "eth0"}],
-    })
+    cfg = parse_config(
+        {
+            "home": {"endpoint": "h:51900"},
+            "policy": {
+                "resolver_kick_service": "/etc/init.d/dnsmasq",
+                "resolver_kick_min_interval_s": 2.5,
+            },
+            "paths": [{"name": "a", "interface": "eth0"}],
+        }
+    )
     assert cfg.policy.resolver_kick_service == "/etc/init.d/dnsmasq"
     assert cfg.policy.resolver_kick_min_interval_s == 2.5
 
@@ -251,8 +260,7 @@ class TestResolverKicker:
     def test_repeat_kicks_inside_the_window_are_suppressed(self, tmp_path, spy):
         svc = _service(tmp_path)
         now = [0.0]
-        kicker = net.ResolverKicker(str(svc), min_interval_s=10.0,
-                                    clock=lambda: now[0])
+        kicker = net.ResolverKicker(str(svc), min_interval_s=10.0, clock=lambda: now[0])
 
         assert kicker.kick("flip 1") is True
         assert kicker.kick("flip 2") is False, "a second restart 0s later"
@@ -265,9 +273,7 @@ class TestResolverKicker:
         assert kicker.suppressed == 2
         assert spy.kicks(svc) == [[str(svc), "restart"]] * 2
 
-    def test_an_absent_service_is_quiet_and_never_shells_out(
-        self, tmp_path, spy, caplog
-    ):
+    def test_an_absent_service_is_quiet_and_never_shells_out(self, tmp_path, spy, caplog):
         """A dev box, or a router that does not run nextdns. Absence must
         degrade quietly - and say so ONCE, not on every flip."""
         missing = tmp_path / "no-such-init-script"
@@ -293,8 +299,7 @@ class TestResolverKicker:
         suite runs against a real /etc on somebody's laptop."""
         monkeypatch.setenv("ZIPPIE_DRY_RUN", "1")
         ran = []
-        monkeypatch.setattr(net.subprocess, "run",
-                            lambda *a, **kw: ran.append(a))
+        monkeypatch.setattr(net.subprocess, "run", lambda *a, **kw: ran.append(a))
 
         kicker = net.ResolverKicker("/etc/init.d/nextdns", min_interval_s=0.0)
         assert kicker.kick("flip") is True
@@ -314,11 +319,11 @@ class TestResolverKicker:
         assert kicker.kick("flip") is False
         assert kicker.kicks == 0
 
-    def test_a_nonzero_exit_is_reported_not_swallowed(self, tmp_path,
-                                                      monkeypatch, caplog):
+    def test_a_nonzero_exit_is_reported_not_swallowed(self, tmp_path, monkeypatch, caplog):
         svc = _service(tmp_path)
         monkeypatch.setattr(
-            net, "run_or_dry",
+            net,
+            "run_or_dry",
             lambda args, **kw: subprocess.CompletedProcess(args, 1, "", "nope"),
         )
         kicker = net.ResolverKicker(str(svc), min_interval_s=0.0)
@@ -332,13 +337,14 @@ class TestResolverKicker:
         svc = _service(tmp_path)
         attempts = []
         monkeypatch.setattr(
-            net, "run_or_dry",
-            lambda args, **kw: attempts.append(args)
-            or subprocess.CompletedProcess(args, 1, "", ""),
+            net,
+            "run_or_dry",
+            lambda args, **kw: (
+                attempts.append(args) or subprocess.CompletedProcess(args, 1, "", "")
+            ),
         )
         now = [0.0]
-        kicker = net.ResolverKicker(str(svc), min_interval_s=10.0,
-                                    clock=lambda: now[0])
+        kicker = net.ResolverKicker(str(svc), min_interval_s=10.0, clock=lambda: now[0])
 
         for _ in range(10):
             kicker.kick("flip")

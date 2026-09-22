@@ -18,6 +18,7 @@ def _path(name="hotspot", **kw):
 
 def _status(agent, path, monkeypatch):
     import zippie.agent as agent_mod
+
     monkeypatch.setattr(agent_mod.net, "wg_peer_endpoint", lambda _i: None)
     monkeypatch.setattr(agent_mod.net, "wan_gateways", lambda: {})
     return agent._path_status(path)
@@ -26,14 +27,26 @@ def _status(agent, path, monkeypatch):
 def _agent(tmp_path):
     from zippie.agent import BondAgent
     from zippie.config import parse_config
-    return BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path / "s"),
-                  "run_dir": str(tmp_path / "r")},
-        "home": {"endpoint": "home.example:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
-        "paths": [{"name": "hotspot", "interface": "eth0"}],
-    }))
+
+    return BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path / "s"),
+                    "run_dir": str(tmp_path / "r"),
+                },
+                "home": {
+                    "endpoint": "home.example:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
+                "paths": [{"name": "hotspot", "interface": "eth0"}],
+            }
+        )
+    )
 
 
 def test_a_leg_in_the_transport_reports_in_bond(tmp_path, monkeypatch):
@@ -51,7 +64,7 @@ def test_a_leg_with_weight_but_no_link_is_not_in_bond(tmp_path, monkeypatch):
     carrying legs while the transport held one."""
     a = _agent(tmp_path)
     p = _path("ethernet", tier=2)
-    p.effective_weight = 40          # real, and completely unused
+    p.effective_weight = 40  # real, and completely unused
     a._transport_ids["ethernet"] = 1
     # deliberately NOT added to _transport_links
 
@@ -75,6 +88,7 @@ def test_overridden_fields_are_named_in_the_status(tmp_path, monkeypatch):
     console said otherwise. Naming the overridden fields costs nothing.
     """
     from zippie.store import LegStore
+
     # The agent's state_dir, not tmp_path - see _agent() above.
     LegStore(tmp_path / "s").update("hotspot", {"tier": 2, "carrier": "Verizon"})
     a = _agent(tmp_path)
@@ -199,6 +213,7 @@ def test_status_dict_legs_carrying_reflects_the_discrepancy(tmp_path, monkeypatc
     the same number, and not silently agreeing with each other.
     """
     import zippie.agent as agent_mod
+
     monkeypatch.setattr(agent_mod.net, "wg_peer_endpoint", lambda _i: None)
     monkeypatch.setattr(agent_mod.net, "wan_gateways", lambda: {})
 
@@ -206,7 +221,7 @@ def test_status_dict_legs_carrying_reflects_the_discrepancy(tmp_path, monkeypatc
     names = ["ethernet", "hotspot", "pixel-6a", "iphone"]
     a.paths = [_path(n) for n in names]
     for i, p in enumerate(a.paths):
-        p.effective_weight = 40 if i < 2 else 0   # first two carry, last two idle
+        p.effective_weight = 40 if i < 2 else 0  # first two carry, last two idle
         a._transport_ids[p.name] = i
         a._transport_links.add(i)
 
@@ -336,6 +351,7 @@ def test_activity_agrees_with_the_counts_the_summary_publishes(tmp_path, monkeyp
     facts, and this is the assertion that keeps them tied together.
     """
     import zippie.agent as agent_mod
+
     monkeypatch.setattr(agent_mod.net, "wg_peer_endpoint", lambda _i: None)
     monkeypatch.setattr(agent_mod.net, "wan_gateways", lambda: {})
 
@@ -366,24 +382,46 @@ def test_an_idle_member_is_its_own_telemetry_series():
     import zippie.telemetry as tel
 
     def series(p):
-        return {n: v for n, v, _t in tel._path_samples(
-            p, "aggregate", "hotspot", membership_known=True)}
+        return {
+            n: v for n, v, _t in tel._path_samples(p, "aggregate", "hotspot", membership_known=True)
+        }
 
-    idle = series({"name": "pixel-6a", "state": "degraded", "in_bond": True,
-                   "contributing": False, "activity": "idle",
-                   "effective_weight": 0})
+    idle = series(
+        {
+            "name": "pixel-6a",
+            "state": "degraded",
+            "in_bond": True,
+            "contributing": False,
+            "activity": "idle",
+            "effective_weight": 0,
+        }
+    )
     assert idle["path.idle_in_bond"] == 1
     assert idle["path.weight"] == 0
 
-    carrying = series({"name": "hotspot", "state": "degraded", "in_bond": True,
-                       "contributing": True, "activity": "carrying",
-                       "effective_weight": 40})
+    carrying = series(
+        {
+            "name": "hotspot",
+            "state": "degraded",
+            "in_bond": True,
+            "contributing": True,
+            "activity": "carrying",
+            "effective_weight": 40,
+        }
+    )
     assert carrying["path.idle_in_bond"] == 0
 
     # NOT A MEMBER AT ALL reads 0 too, and shares path.weight == 0 with the
     # idle leg - which is the whole reason this series has to exist separately.
-    reserve = series({"name": "ethernet", "state": "up", "in_bond": False,
-                      "contributing": False, "activity": "out",
-                      "effective_weight": 0})
+    reserve = series(
+        {
+            "name": "ethernet",
+            "state": "up",
+            "in_bond": False,
+            "contributing": False,
+            "activity": "out",
+            "effective_weight": 0,
+        }
+    )
     assert reserve["path.idle_in_bond"] == 0
     assert reserve["path.weight"] == 0

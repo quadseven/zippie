@@ -10,6 +10,7 @@ reported failure every six.
 The first test below is that exact history. It is the reason this file exists,
 and it fails against the old run-level query.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -45,8 +46,10 @@ def _jobs(**by_run_id):
         if conclusion is None:
             return []
         return [
-            {"name": "assert the reconcile schedule is still firing",
-             "conclusion": "failure"},
+            {
+                "name": "assert the reconcile schedule is still firing",
+                "conclusion": "failure",
+            },
             {"name": cadence.RECONCILE_JOB, "conclusion": conclusion},
         ]
 

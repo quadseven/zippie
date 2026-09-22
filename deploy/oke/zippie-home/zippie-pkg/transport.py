@@ -289,9 +289,12 @@ class AdaptiveRecovery:
                 f"to compute a default"
             )
         self.max_deadline_ms = (
-            max_deadline_ms if max_deadline_ms is not None
-            else min(ADAPT_MAX_DEADLINE_MULTIPLIER * baseline_deadline_ms,
-                     ADAPT_MAX_DEADLINE_HARD_CEILING_MS)
+            max_deadline_ms
+            if max_deadline_ms is not None
+            else min(
+                ADAPT_MAX_DEADLINE_MULTIPLIER * baseline_deadline_ms,
+                ADAPT_MAX_DEADLINE_HARD_CEILING_MS,
+            )
         )
         self._step_ms = step_ms
         self._eval_interval_s = eval_interval_s
@@ -335,8 +338,7 @@ class AdaptiveRecovery:
             return False
 
         rtt_pressure = (
-            worst_rtt_ms is not None
-            and worst_rtt_ms > self.deadline_ms * self._rtt_headroom
+            worst_rtt_ms is not None and worst_rtt_ms > self.deadline_ms * self._rtt_headroom
         )
         impaired = capped_delta > 0 or abandoned_delta > 0 or rtt_pressure
 
@@ -344,17 +346,13 @@ class AdaptiveRecovery:
         if impaired:
             self._healthy_streak = 0
             if self.deadline_ms < self.max_deadline_ms:
-                self.deadline_ms = min(
-                    self.max_deadline_ms, self.deadline_ms + self._step_ms
-                )
+                self.deadline_ms = min(self.max_deadline_ms, self.deadline_ms + self._step_ms)
                 self.stats.increases += 1
                 changed = True
         elif self.deadline_ms > self.baseline_ms:
             self._healthy_streak += 1
             if self._healthy_streak >= self._sustained_healthy_evals:
-                self.deadline_ms = max(
-                    self.baseline_ms, self.deadline_ms - self._step_ms
-                )
+                self.deadline_ms = max(self.baseline_ms, self.deadline_ms - self._step_ms)
                 self.stats.decreases += 1
                 self._healthy_streak = 0
                 changed = True
@@ -366,9 +364,7 @@ class AdaptiveRecovery:
         return self.deadline_ms + self._hold_margin_ms
 
     def nack_max_delay_ms(self) -> int:
-        return max(
-            self._nack_delay_ms, int(self.deadline_ms * NACK_MAX_DELAY_FRACTION)
-        )
+        return max(self._nack_delay_ms, int(self.deadline_ms * NACK_MAX_DELAY_FRACTION))
 
 
 # How many unanswered probes one leg may have outstanding. Eight is ~4 s at the
@@ -516,8 +512,8 @@ class LinkEndpoint:
 
     path_id: int
     name: str
-    device: str | None          # SO_BINDTODEVICE target, e.g. "apclix0"
-    remote: tuple[str, int]     # home endpoint for this link
+    device: str | None  # SO_BINDTODEVICE target, e.g. "apclix0"
+    remote: tuple[str, int]  # home endpoint for this link
     weight: int = 100
     # A DELIBERATE ceiling in kilobits per second; 0 means uncapped.
     #
@@ -569,9 +565,12 @@ class TransportStats:
 
     def as_dict(self) -> dict[str, int]:
         return {
-            "sent": self.sent, "received": self.received,
-            "send_errors": self.send_errors, "malformed": self.malformed,
-            "nacks_received": self.nacks_received, "no_path": self.no_path,
+            "sent": self.sent,
+            "received": self.received,
+            "send_errors": self.send_errors,
+            "malformed": self.malformed,
+            "nacks_received": self.nacks_received,
+            "no_path": self.no_path,
             # Counted at the send path but never reported until now, so a leg
             # deliberately throttled to a trickle looked exactly like a leg
             # whose radio was dying. That is the distinction max_kbps exists to
@@ -662,7 +661,8 @@ class Transport:
         if identity is not None and auth_level is AuthLevel.OFF:
             raise ValueError(
                 "an auth identity was configured with auth level off: set the "
-                "level to observe, sign or require, or pass no identity")
+                "level to observe, sign or require, or pass no identity"
+            )
         if identity is None and auth_level is not AuthLevel.OFF:
             raise ValueError(f"auth level {auth_level} needs an identity")
         self._auth = auth_level
@@ -677,14 +677,14 @@ class Transport:
             # across the two ends is the one-step way to tell "the MAC is
             # broken" apart from "the ends hold different key material", which
             # is the failure this rollout actually has.
-            log.info("header MAC %s (key %s, peer %d)",
-                     auth_level, identity.key_id(), identity.client_id)
+            log.info(
+                "header MAC %s (key %s, peer %d)", auth_level, identity.key_id(), identity.client_id
+            )
         # WHICH RUN OF THIS PROCESS FRAMES BELONG TO. Random rather than a
         # counter because there is nowhere durable to keep a counter on a
         # router whose /tmp is wiped, and a repeated epoch after a reboot
         # would look like no restart at all.
-        self._epoch = (int.from_bytes(os.urandom(4), 'big')
-                       if epoch is None else epoch)
+        self._epoch = int.from_bytes(os.urandom(4), "big") if epoch is None else epoch
         self._peer_epoch: int | None = None
         self._socket_factory = socket_factory
         # ENDPOINT ROAMING. The home end has one physical link but hears the
@@ -704,8 +704,7 @@ class Transport:
             # independent knob. An independent knob is how one number ends up
             # being asked a question it cannot answer, which is the whole shape
             # of #108.
-            max_delay_ms=max(nack_delay_ms,
-                             int(reorder_deadline_ms * NACK_MAX_DELAY_FRACTION)),
+            max_delay_ms=max(nack_delay_ms, int(reorder_deadline_ms * NACK_MAX_DELAY_FRACTION)),
             _clock=_clock,
         )
         # THE MARGIN retransmit hold_ms KEEPS ABOVE THE REORDER DEADLINE,
@@ -945,10 +944,15 @@ class Transport:
             # the wire and an old peer on either end still interoperates. A
             # keepalive returns before the reassembler, so a non-zero seq here
             # never touches the data stream.
-            wire = self._pack(Frame(
-                seq=probe, path_id=path_id, payload=b"", flags=FLAG_KEEPALIVE,
-                epoch=self._epoch,
-            ))
+            wire = self._pack(
+                Frame(
+                    seq=probe,
+                    path_id=path_id,
+                    payload=b"",
+                    flags=FLAG_KEEPALIVE,
+                    epoch=self._epoch,
+                )
+            )
             if self._send_on(path_id, wire):
                 outstanding = self._ka_sent.setdefault(path_id, {})
                 outstanding[probe] = self._clock()
@@ -967,9 +971,7 @@ class Transport:
                     self._note_ka_outcome(path_id, lost=True)
 
     def _note_ka_outcome(self, path_id: int, *, lost: bool) -> None:
-        self._ka_loss.setdefault(
-            path_id, deque(maxlen=_KA_LOSS_WINDOW)
-        ).append(lost)
+        self._ka_loss.setdefault(path_id, deque(maxlen=_KA_LOSS_WINDOW)).append(lost)
 
     def link_rx_age_s(self, path_id: int) -> float | None:
         """Seconds since anything arrived on this leg; None if unknown."""
@@ -1086,8 +1088,7 @@ class Transport:
             sock.sendto(wire, link.remote)
             self.stats.sent += 1
             self._link_tx_bytes[path_id] = (
-                self._link_tx_bytes.get(path_id, 0)
-                + len(wire) + _IPV4_UDP_HEADER_BYTES
+                self._link_tx_bytes.get(path_id, 0) + len(wire) + _IPV4_UDP_HEADER_BYTES
             )
             return True
         except OSError as exc:
@@ -1109,8 +1110,7 @@ class Transport:
         mode = self.classifier.mode_for(
             len(payload), paths_available=len(healthy), overhead=overhead
         )
-        targets, frames = self.scheduler.build(
-            payload, mode, self._epoch, pack=self._pack)
+        targets, frames = self.scheduler.build(payload, mode, self._epoch, pack=self._pack)
         if not targets:
             self.stats.no_path += 1
             return 0
@@ -1133,8 +1133,9 @@ class Transport:
 
     def _send_nack(self, seq: int) -> None:
         """Ask the far end for a missing sequence, on any healthy link."""
-        frame = self._pack(Frame(seq=seq, path_id=0, payload=b"", flags=FLAG_NACK,
-                                 epoch=self._epoch))
+        frame = self._pack(
+            Frame(seq=seq, path_id=0, payload=b"", flags=FLAG_NACK, epoch=self._epoch)
+        )
         for path_id in [p.path_id for p in self.scheduler.healthy_paths]:
             if self._send_on(path_id, frame):
                 return
@@ -1150,12 +1151,20 @@ class Transport:
             candidates = [p.path_id for p in self.scheduler.healthy_paths]
         if not candidates:
             return
-        wire = self._pack(Frame(seq=seq, path_id=candidates[0], payload=payload,
-                                flags=FLAG_RETRANSMIT, epoch=self._epoch))
+        wire = self._pack(
+            Frame(
+                seq=seq,
+                path_id=candidates[0],
+                payload=payload,
+                flags=FLAG_RETRANSMIT,
+                epoch=self._epoch,
+            )
+        )
         self._send_on(candidates[0], wire)
 
-    def _on_link_data(self, raw: bytes, path_id: int | None = None,
-                      addr: tuple[str, int] | None = None) -> list[bytes]:
+    def _on_link_data(
+        self, raw: bytes, path_id: int | None = None, addr: tuple[str, int] | None = None
+    ) -> list[bytes]:
         """Handle one datagram off a link socket. Returns payloads to deliver.
 
         THIS FUNCTION IS THE ORDER, AND ONLY THE ORDER. Each decision it
@@ -1295,8 +1304,9 @@ class Transport:
         if not known and not self._adopt_epoch(frame):
             # Wrong epoch on a live tunnel: someone else's packet.
             self.stats.unauthenticated += 1
-            log.debug("dropping frame with epoch %d (stream is on %d)",
-                      frame.epoch, self._peer_epoch)
+            log.debug(
+                "dropping frame with epoch %d (stream is on %d)", frame.epoch, self._peer_epoch
+            )
             return False
         self._last_good_frame = self._clock()
         return True
@@ -1314,16 +1324,18 @@ class Transport:
 
         Returns True when the frame's epoch is now the stream's epoch.
         """
-        idle = (self._last_good_frame is None
-                or self._clock() - self._last_good_frame
-                > self._epoch_takeover_idle_s)
+        idle = (
+            self._last_good_frame is None
+            or self._clock() - self._last_good_frame > self._epoch_takeover_idle_s
+        )
         first_ever = self._peer_epoch is None
         takeover = not frame.is_keepalive and not (frame.flags & FLAG_NACK) and idle
         if not first_ever and not takeover:
             return False
         if not first_ever:
-            log.info("peer restarted (epoch %d -> %d); resetting stream",
-                     self._peer_epoch, frame.epoch)
+            log.info(
+                "peer restarted (epoch %d -> %d); resetting stream", self._peer_epoch, frame.epoch
+            )
             self.reassembler.reset_stream()
             self._reset_gap_tracking()
         self._peer_epoch = frame.epoch
@@ -1343,8 +1355,7 @@ class Transport:
         # UDP payload only, so add its fixed IPv4+UDP headers; the payload
         # after reassembly would also miss every zippie header and duplicate.
         self._link_rx_bytes[path_id] = (
-            self._link_rx_bytes.get(path_id, 0)
-            + wire_len + _IPV4_UDP_HEADER_BYTES
+            self._link_rx_bytes.get(path_id, 0) + wire_len + _IPV4_UDP_HEADER_BYTES
         )
         # RECEIVING IS PROOF, so it must be able to UNDO a demotion.
         #
@@ -1389,13 +1400,18 @@ class Transport:
             # link the scheduler happens to like would measure that link
             # instead, and the answer would prove nothing about the leg
             # being probed.
-            self._send_on(path_id, self._pack(Frame(
-                seq=frame.seq,
-                path_id=path_id,
-                payload=b"",
-                flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
-                epoch=self._epoch,
-            )))
+            self._send_on(
+                path_id,
+                self._pack(
+                    Frame(
+                        seq=frame.seq,
+                        path_id=path_id,
+                        payload=b"",
+                        flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
+                        epoch=self._epoch,
+                    )
+                ),
+            )
         return True
 
     def _note_keepalive_reply(self, probe: int, path_id: int) -> None:
@@ -1462,7 +1478,7 @@ class Transport:
             self._gap_scanned_to = nxt - 1
 
         start = self._gap_scanned_to + 1
-        end = self._gap_high_water          # the high water itself is present
+        end = self._gap_high_water  # the high water itself is present
         if end > start:
             # BOUNDED PER CALL, because ONE datagram can move the high-water
             # mark arbitrarily far and the strip below it is then enumerated in
@@ -1572,8 +1588,9 @@ class Transport:
     def _maybe_adapt_recovery(self) -> None:
         changed = self._adaptive.maybe_adapt(
             capped_total=self.nacks.stats.capped,
-            abandoned_total=(self.reassembler.stats.too_late_dropped
-                             + self.reassembler.stats.gaps_abandoned),
+            abandoned_total=(
+                self.reassembler.stats.too_late_dropped + self.reassembler.stats.gaps_abandoned
+            ),
             worst_rtt_ms=self._worst_known_rtt_ms(),
         )
         if not changed:
@@ -1583,7 +1600,8 @@ class Transport:
         self.nacks.set_max_delay_ms(self._adaptive.nack_max_delay_ms())
         log.info(
             "adaptive recovery: reorder deadline now %dms (hold %dms, nack ceiling %dms)",
-            self._adaptive.deadline_ms, self._adaptive.hold_ms(),
+            self._adaptive.deadline_ms,
+            self._adaptive.hold_ms(),
             self._adaptive.nack_max_delay_ms(),
         )
 
@@ -1619,8 +1637,7 @@ class Transport:
                     # reply at a stranger. _on_link_data roams only after the
                     # frame has passed the epoch gate (and, above the off rung,
                     # its MAC).
-                    self._deliver_to_wireguard(
-                        self._on_link_data(raw, path_id, addr))
+                    self._deliver_to_wireguard(self._on_link_data(raw, path_id, addr))
         self.tick()
         # Rolling mean, cheap and good enough to spot a datapath regression.
         # Weighted so a single slow iteration does not dominate but a sustained
@@ -1629,8 +1646,7 @@ class Transport:
         # costs nothing and would drag the mean toward zero, hiding a regression.
         if events:
             _us = (self._clock() - _t0) * 1e6
-            self._loop_us = (_us if self._loop_us == 0.0
-                             else self._loop_us * 0.99 + _us * 0.01)
+            self._loop_us = _us if self._loop_us == 0.0 else self._loop_us * 0.99 + _us * 0.01
 
     def run(self) -> None:
         self._running = True
@@ -1659,8 +1675,7 @@ class Transport:
 
     def stats_dict(self) -> dict[str, object]:
         client_payload_bytes = (
-            self.stats.client_payload_tx_bytes
-            + self.stats.client_payload_rx_bytes
+            self.stats.client_payload_tx_bytes + self.stats.client_payload_rx_bytes
         )
         out: dict[str, object] = {
             "transport": self.stats.as_dict(),
@@ -1679,8 +1694,7 @@ class Transport:
             # that vanishes causes none - this read 1 for the whole 7 h the
             # router was gone on 2026-09-04 (#4, PEER_SILENT_S).
             "healthy": sum(
-                1 for p in self.scheduler.healthy_paths
-                if self._heard_recently(p.path_id)
+                1 for p in self.scheduler.healthy_paths if self._heard_recently(p.path_id)
             ),
             "peer_silent_s": round(self.peer_silent_s(), 1),
             "client_payload_bytes": client_payload_bytes,

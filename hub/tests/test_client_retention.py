@@ -28,6 +28,7 @@ about an endpoint too large to fetch over the tailnet. This is the same failure
 arriving slowly. It is currently masked by pod restarts clearing the in-memory
 registry, which is an accident, not a retention policy.
 """
+
 from __future__ import annotations
 
 import time

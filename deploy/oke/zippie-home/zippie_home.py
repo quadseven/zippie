@@ -7,6 +7,7 @@ port-forwards from your gateway.
 Each travel path is a distinct WireGuard peer (own key + tunnel IP) so return
 traffic is not collapsed onto a single endpoint the way a shared peer would be.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -26,8 +27,12 @@ DEFAULT_WG_DIR = Path("/etc/wireguard")
 DEFAULT_PATH_NAMES = ("starlink", "tmobile", "verizon", "spare")
 
 
-def run(args: list[str], check: bool = True, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, check=check, text=True, capture_output=True, input=input_text)
+def run(
+    args: list[str], check: bool = True, input_text: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        args, check=check, text=True, capture_output=True, input=input_text
+    )
 
 
 def which(name: str) -> str | None:
@@ -46,7 +51,9 @@ def gen_keypair() -> tuple[str, str]:
 
 def ensure_root() -> None:
     if os.geteuid() != 0 and os.environ.get("ZIPPIE_ALLOW_NONROOT") != "1":
-        sys.exit("zippie-home must run as root (or set ZIPPIE_ALLOW_NONROOT=1 for dry tests)")
+        sys.exit(
+            "zippie-home must run as root (or set ZIPPIE_ALLOW_NONROOT=1 for dry tests)"
+        )
 
 
 def state_dir() -> Path:
@@ -273,8 +280,8 @@ def _write_redirect_script(
         "  while :; do",
         "    n=$(iptables -t nat -L PREROUTING --line-numbers -n 2>/dev/null \\",
         "        | awk -v pat=\"dpt:$p \" '/REDIRECT/ && $0 ~ pat {print $1; exit}')",
-        "    [ -z \"$n\" ] && break",
-        "    iptables -t nat -D PREROUTING \"$n\"",
+        '    [ -z "$n" ] && break',
+        '    iptables -t nat -D PREROUTING "$n"',
         "  done",
         "}",
         "",
@@ -357,7 +364,9 @@ def _peer_section(text: str) -> str:
     return ""
 
 
-def _write_server_conf(wg_path: Path, meta: dict[str, Any], *, keep_peers: bool) -> bool:
+def _write_server_conf(
+    wg_path: Path, meta: dict[str, Any], *, keep_peers: bool
+) -> bool:
     """Write pb-home0.conf and report whether the bytes changed.
 
     The interface stanza is DERIVED from server.json and is therefore
@@ -499,7 +508,10 @@ AllowedIPs = {allowed}
         if public_key not in text:
             wg_path.write_text(text.rstrip() + "\n" + peer_block, encoding="utf-8")
     if which("wg") and Path("/sys/class/net/pb-home0").exists():
-        run(["wg", "set", "pb-home0", "peer", public_key, "allowed-ips", allowed], check=False)
+        run(
+            ["wg", "set", "pb-home0", "peer", public_key, "allowed-ips", allowed],
+            check=False,
+        )
 
 
 def cmd_add_client(args: argparse.Namespace) -> int:
@@ -589,7 +601,10 @@ def cmd_add_client(args: argparse.Namespace) -> int:
     save_json(out_path, bundle)
     print(json.dumps(bundle, indent=2))
     print(f"\nsaved: {out_path}", file=sys.stderr)
-    print("copy this file to the travel device and run: sudo zippie import <file>", file=sys.stderr)
+    print(
+        "copy this file to the travel device and run: sudo zippie import <file>",
+        file=sys.stderr,
+    )
     return 0
 
 
@@ -621,7 +636,9 @@ def cmd_add_path(args: argparse.Namespace) -> int:
     # sends into a black hole forever) - hence --port to pin it.
     port = args.port if args.port else ports[len(client["paths"]) % len(ports)]
 
-    _append_peer(wg_dir() / "pb-home0.conf", f"{args.client}/{args.path}", cpub, client_cidr)
+    _append_peer(
+        wg_dir() / "pb-home0.conf", f"{args.client}/{args.path}", cpub, client_cidr
+    )
     client["paths"].append(
         {"name": args.path, "public_key": cpub, "address": client_cidr, "port": port}
     )
@@ -640,11 +657,17 @@ def cmd_add_path(args: argparse.Namespace) -> int:
         },
     }
     print(json.dumps(fragment, indent=2))
-    print(f"\npeer appended to {wg_dir() / 'pb-home0.conf'}"
-          " (and applied live if pb-home0 is up)", file=sys.stderr)
-    print("on the device: merge path into /etc/zippie/keys.json"
-          " (private_key/address_cidr/port under paths.<name>) and add a"
-          " matching [[paths]] entry to zippie.toml", file=sys.stderr)
+    print(
+        f"\npeer appended to {wg_dir() / 'pb-home0.conf'}"
+        " (and applied live if pb-home0 is up)",
+        file=sys.stderr,
+    )
+    print(
+        "on the device: merge path into /etc/zippie/keys.json"
+        " (private_key/address_cidr/port under paths.<name>) and add a"
+        " matching [[paths]] entry to zippie.toml",
+        file=sys.stderr,
+    )
     return 0
 
 
@@ -685,14 +708,19 @@ def cmd_up(_args: argparse.Namespace) -> int:
     missing = _conf_inputs_missing(meta)
     if missing:
         # Leave a working conf alone rather than write a broken one over it.
-        print(f"wg conf: NOT refreshed - {meta_path} is missing {missing}", file=sys.stderr)
+        print(
+            f"wg conf: NOT refreshed - {meta_path} is missing {missing}",
+            file=sys.stderr,
+        )
     elif _write_server_conf(conf, meta, keep_peers=True):
         print(f"wg conf: refreshed from {meta_path}")
         if already_up:
             # Deliberately NOT a bounce. Reconfiguring by tearing the interface
             # down would drop every live tunnel each time config changed, which
             # is a worse cure than the disease this fix exists for.
-            print("wg conf: pb-home0 is already up - new config applies at the next bring-up")
+            print(
+                "wg conf: pb-home0 is already up - new config applies at the next bring-up"
+            )
     else:
         print("wg conf: unchanged")
 
@@ -758,7 +786,9 @@ def cmd_show(_: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="zippie-home", description="Zippie home exit server")
+    p = argparse.ArgumentParser(
+        prog="zippie-home", description="Zippie home exit server"
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
 
     init = sub.add_parser("init", help="initialize home server keys + wg config")
@@ -776,20 +806,22 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="packet mode: local port the userspace transport listens on. "
-             "Every public port is redirected to it (firewalld only passes "
-             "DNAT'd traffic). Omit for route mode.",
+        "Every public port is redirected to it (firewalld only passes "
+        "DNAT'd traffic). Omit for route mode.",
     )
     init.add_argument(
         "--transport-public-ports",
         default=None,
         help="comma-separated public ports the transport claims. Omit to "
-             "claim all of them. A subset is the staged rollout: the transport "
-             "gets a spare port while route mode keeps its own.",
+        "claim all of them. A subset is the staged rollout: the transport "
+        "gets a spare port while route mode keeps its own.",
     )
     init.add_argument("--force", action="store_true")
     init.set_defaults(func=cmd_init)
 
-    add = sub.add_parser("add-client", help="provision a travel client bundle (one WG peer per path)")
+    add = sub.add_parser(
+        "add-client", help="provision a travel client bundle (one WG peer per path)"
+    )
     add.add_argument("name")
     add.add_argument(
         "--paths",

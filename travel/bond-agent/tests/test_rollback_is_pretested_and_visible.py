@@ -23,6 +23,7 @@ this box, in this state. These are text assertions over two shell scripts, which
 is unglamorous; the failure mode is a router that leaves the network, and there
 is no other test for it.
 """
+
 from __future__ import annotations
 
 import re
@@ -60,9 +61,7 @@ def _code(text: str) -> str:
     scripts are heavily commented on purpose - the comments are where the two
     incidents are recorded, so they are full of the exact strings being asserted.
     """
-    return "\n".join(
-        line for line in text.splitlines() if not line.lstrip().startswith("#")
-    )
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
 
 
 # --------------------------------------------------------------------------
@@ -115,16 +114,12 @@ def test_the_marker_is_appended_not_truncated(rollback):
     first at the exact moment there is a pattern worth seeing.
     """
     code = _code(rollback)
-    line = next(
-        (l for l in code.splitlines() if "FIRED_MARKER" in l and ">" in l), ""
-    )
-    assert ">>" in line, (
-        f"the marker is written with a truncating redirect: {line.strip()!r}"
-    )
+    line = next((line for line in code.splitlines() if "FIRED_MARKER" in line and ">" in line), "")
+    assert ">>" in line, f"the marker is written with a truncating redirect: {line.strip()!r}"
 
 
 def test_the_evidence_is_written_before_the_restore_is_attempted(rollback):
-    """"It fired and did not finish" and "it never fired" call for opposite
+    """ "It fired and did not finish" and "it never fired" call for opposite
     responses from whoever is holding the router.
 
     A restore that hangs, or that kills this shell, must still have left proof
@@ -147,9 +142,7 @@ def test_both_scripts_agree_where_the_marker_lives(deploy, rollback):
     ever disagree the report is silently always "no rollback fired", which is
     the failure this whole file exists to stop.
     """
-    assert _shell_assignment(deploy, "FIRED_MARKER") == _shell_assignment(
-        rollback, "FIRED_MARKER"
-    )
+    assert _shell_assignment(deploy, "FIRED_MARKER") == _shell_assignment(rollback, "FIRED_MARKER")
 
 
 # --------------------------------------------------------------------------
@@ -185,7 +178,7 @@ def test_the_pretest_is_on_by_default(deploy):
 
 
 def test_the_pretest_waits_for_evidence_rather_than_for_the_clock(deploy):
-    """"The minute has passed" is not evidence that cron ran.
+    """ "The minute has passed" is not evidence that cron ran.
 
     busybox cron accepts a malformed line silently and never fires it, which is
     the documented failure this whole mechanism was built around. The marker is
@@ -216,9 +209,7 @@ def test_a_failed_pretest_disarms_before_it_gives_up(deploy):
     nobody is expecting, and restarts the agent under whoever is driving behind
     this router."""
     code = _code(deploy)
-    block = code.split('if [[ "${pretest_fired}" -ne 1 ]]; then', 1)[1].split(
-        "fi", 1
-    )[0]
+    block = code.split('if [[ "${pretest_fired}" -ne 1 ]]; then', 1)[1].split("fi", 1)[0]
     assert "disarm_rollback" in block, (
         "a failed pre-test dies with the one-shot still armed, leaving a "
         "scheduled agent restart behind it"
@@ -230,9 +221,7 @@ def test_the_pretest_checks_the_router_came_back(deploy):
     box is still on the network", which is the only thing that matters at
     23:47 with nobody connected."""
     code = _code(deploy)
-    block = code.split('say "pre-testing the rollback', 1)[1].split(
-        'say "re-arming', 1
-    )[0]
+    block = code.split('say "pre-testing the rollback', 1)[1].split('say "re-arming', 1)[0]
     assert "STATUS_URL" in block, (
         "the pre-test never asks the agent whether it came back, so a rollback "
         "that restores files and leaves the bond dead reads as a success"
@@ -244,12 +233,10 @@ def test_the_pretest_re_arms_afterwards(deploy):
     one the fallback exists for - is made with no fallback at all, which is
     strictly worse than not pre-testing."""
     code = _code(deploy)
-    block = code.split('say "pre-testing the rollback', 1)[1].split(
-        'say "copying package"', 1
-    )[0]
-    assert 'say "re-arming' in block and "arm_rollback" in block.split(
-        'say "re-arming', 1
-    )[1], "the pre-test fires the one-shot and never re-arms it"
+    block = code.split('say "pre-testing the rollback', 1)[1].split('say "copying package"', 1)[0]
+    assert 'say "re-arming' in block and "arm_rollback" in block.split('say "re-arming', 1)[1], (
+        "the pre-test fires the one-shot and never re-arms it"
+    )
 
 
 def test_the_re_arm_takes_a_fresh_snapshot(deploy):
@@ -314,7 +301,9 @@ def test_that_report_does_not_fail_the_deploy(deploy):
     router on the OLD build with no way to ship the fix.
     """
     code = _code(deploy)
-    block = code.split('if [[ "${ROLLBACKS_FIRED}" -gt "${ROLLBACKS_AT_LAST_DEPLOY}" ]]; then', 1)[1]
+    block = code.split('if [[ "${ROLLBACKS_FIRED}" -gt "${ROLLBACKS_AT_LAST_DEPLOY}" ]]; then', 1)[
+        1
+    ]
     body = block.split("\nfi", 1)[0]
     assert "die " not in body and "exit 1" not in body, (
         "a past rollback aborts the deploy, which leaves the router on the "
@@ -398,17 +387,13 @@ def test_the_crontab_count_is_read_without_a_local_fallback(deploy):
     assert 'grep -c deploy-rollback" || echo 0' not in code, (
         "a local `|| echo 0` after a remote `grep -c` appends a second count"
     )
-    counter = re.search(
-        r"^rollback_cron_lines\(\) \{(.*?)^\}", code, re.MULTILINE | re.DOTALL
-    )
+    counter = re.search(r"^rollback_cron_lines\(\) \{(.*?)^\}", code, re.MULTILINE | re.DOTALL)
     assert counter, "the crontab count is not a single shared function"
     body = counter.group(1)
     assert "grep -c deploy-rollback || true" in body, (
         "the zero-match fallback must run on the ROUTER, not after ssh returns"
     )
-    assert "tr -d" in body, (
-        "the count is compared as a string, so its whitespace has to go"
-    )
+    assert "tr -d" in body, "the count is compared as a string, so its whitespace has to go"
     # And nobody else may count it by hand again.
     assert code.count("grep -c deploy-rollback") == 1, (
         "a second hand-rolled count is a second chance to make the same mistake"
@@ -453,8 +438,7 @@ def test_the_restart_is_handed_to_cron_and_read_back(deploy):
     code = _code(deploy)
     assert "restart-once.sh" in code, "nothing schedules a detached restart"
     assert "RESTART_ARMED=" in code, (
-        "the restart line is not read back, and it is now the ONLY thing that "
-        "will start the agent"
+        "the restart line is not read back, and it is now the ONLY thing that will start the agent"
     )
     armed = code.split("RESTART_ARMED=", 1)[1].split("esac", 1)[0]
     assert "die " in armed, "a malformed restart line does not abort the deploy"
@@ -533,8 +517,7 @@ def test_the_running_agent_proof_is_not_the_fingerprint_alone(deploy):
     captured = code.index("AGENT_PID_BEFORE=")
     scheduled = code.index("RESTART_WHEN=")
     assert captured < scheduled, (
-        "the pid is captured after the restart is scheduled, so it may already "
-        "be the new one"
+        "the pid is captured after the restart is scheduled, so it may already be the new one"
     )
 
 
@@ -549,14 +532,16 @@ def test_the_verification_waits_for_a_new_process(deploy):
         "the fingerprint is read before the pid is checked, so a deploy can "
         "still be verified by the process it is replacing"
     )
-    assert 'continue' in loop, "the loop does not skip until the pid has moved"
+    assert "continue" in loop, "the loop does not skip until the pid has moved"
 
 
 def test_a_restart_that_never_happened_stops_the_deploy(deploy):
     """And says the rollback is still armed, because it is - the disarm is below
     this point and that ordering is the whole fix."""
     code = _code(deploy)
-    block = code.split('if [[ -z "${AGENT_PID_NOW}" || "${AGENT_PID_NOW}" == "${AGENT_PID_BEFORE}" ]]; then', 1)
+    block = code.split(
+        'if [[ -z "${AGENT_PID_NOW}" || "${AGENT_PID_NOW}" == "${AGENT_PID_BEFORE}" ]]; then', 1
+    )
     assert len(block) == 2, "nothing refuses a restart that did not happen"
     body = block[1].split("\nfi", 1)[0]
     assert "die " in body

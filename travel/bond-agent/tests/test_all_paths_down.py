@@ -15,8 +15,9 @@ from zippie.models import PathConfig, PathMatch, PathRuntime
 def _path(name, iface, priority):
     return PathRuntime(
         name=name,
-        config=PathConfig(name=name, match=PathMatch(type="interface", interface=iface),
-                          priority=priority),
+        config=PathConfig(
+            name=name, match=PathMatch(type="interface", interface=iface), priority=priority
+        ),
         interface=iface,
     )
 
@@ -72,11 +73,13 @@ def test_degrade_withdraws_the_bonded_route_and_installs_nothing(monkeypatch):
     """
     calls = []
     monkeypatch.setattr(agent_mod.net, "ip_route_replace_multipath", lambda h: calls.append(h))
-    monkeypatch.setattr(agent_mod.net, "list_links",
-                        lambda: [FakeLink("apclix0"), FakeLink("eth2")])
+    monkeypatch.setattr(
+        agent_mod.net, "list_links", lambda: [FakeLink("apclix0"), FakeLink("eth2")]
+    )
 
-    _Agent([_path("dongle", "eth2", 30), _path("hotspot", "apclix0", 20)],
-           "degrade")._apply_all_paths_down()
+    _Agent(
+        [_path("dongle", "eth2", 30), _path("hotspot", "apclix0", 20)], "degrade"
+    )._apply_all_paths_down()
 
     assert calls == [[]], "degrade must withdraw our route only, never install one"
 
@@ -91,8 +94,9 @@ def test_degrade_does_not_consult_the_link_list_at_all(monkeypatch):
     calls = []
     consulted = []
     monkeypatch.setattr(agent_mod.net, "ip_route_replace_multipath", lambda h: calls.append(h))
-    monkeypatch.setattr(agent_mod.net, "list_links",
-                        lambda: consulted.append(True) or [FakeLink("apclix0")])
+    monkeypatch.setattr(
+        agent_mod.net, "list_links", lambda: consulted.append(True) or [FakeLink("apclix0")]
+    )
 
     _Agent([_path("hotspot", "apclix0", 20)], "degrade")._apply_all_paths_down()
 
@@ -141,6 +145,7 @@ class TestRouteOwnershipIsScopedToOurMetric:
 
     def _cmds(self, monkeypatch, nexthops):
         from zippie import net as net_mod
+
         seen = []
         monkeypatch.setattr(net_mod, "run_or_dry", lambda args, **kw: seen.append(args))
         net_mod.ip_route_replace_multipath(nexthops)
@@ -148,6 +153,7 @@ class TestRouteOwnershipIsScopedToOurMetric:
 
     def test_install_carries_our_metric(self, monkeypatch):
         from zippie.net import ZIPPIE_ROUTE_METRIC
+
         cmds = self._cmds(monkeypatch, [("pb0", 100), ("pb1", 50)])
         assert len(cmds) == 1
         argv = cmds[0]
@@ -158,6 +164,7 @@ class TestRouteOwnershipIsScopedToOurMetric:
         """The one-nexthop branch is the one that regressed live -- it used to
         emit a bare `ip route replace default dev <if>`."""
         from zippie.net import ZIPPIE_ROUTE_METRIC
+
         argv = self._cmds(monkeypatch, [("pb1", 1)])[0]
         assert argv[argv.index("metric") + 1] == str(ZIPPIE_ROUTE_METRIC)
         assert "dev" in argv and "pb1" in argv
@@ -167,6 +174,7 @@ class TestRouteOwnershipIsScopedToOurMetric:
         currently best -- which can be netifd's. That is what stranded the
         router in infra#2065."""
         from zippie.net import ZIPPIE_ROUTE_METRIC
+
         argv = self._cmds(monkeypatch, [])[0]
         assert argv[:4] == ["ip", "route", "del", "default"]
         assert argv[argv.index("metric") + 1] == str(ZIPPIE_ROUTE_METRIC)
@@ -175,4 +183,5 @@ class TestRouteOwnershipIsScopedToOurMetric:
         """Must beat netifd (metric 20+) while remaining a distinct, findable
         route. Metric 0 is indistinguishable from a hand-added default."""
         from zippie.net import ZIPPIE_ROUTE_METRIC
+
         assert 0 < ZIPPIE_ROUTE_METRIC < 20

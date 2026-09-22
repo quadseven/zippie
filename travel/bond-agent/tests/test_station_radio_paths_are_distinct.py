@@ -13,6 +13,7 @@ or degraded, it simply never gets a `path.interface` at all.
 These tests run entirely offline: `net.list_links` and `net.wan_gateways` are
 monkeypatched, so nothing here touches a real router.
 """
+
 from __future__ import annotations
 
 from zippie import agent as agent_mod
@@ -58,8 +59,8 @@ def test_two_associated_station_radios_produce_two_legs(monkeypatch):
     """The exact scenario in #154: a phone joins 2.4GHz while an AP holds
     5GHz. With one explicit path per interface, BOTH must show up as
     distinct, independently-bound legs - not one leg and one silent absence."""
-    hotspot = _leg("hotspot", "apclix0")          # 5GHz, e.g. the upstream AP
-    hotspot_24 = _leg("hotspot-2ghz", "apcli0")    # 2.4GHz, e.g. a phone
+    hotspot = _leg("hotspot", "apclix0")  # 5GHz, e.g. the upstream AP
+    hotspot_24 = _leg("hotspot-2ghz", "apcli0")  # 2.4GHz, e.g. a phone
     a = _agent([hotspot, hotspot_24])
 
     _match(monkeypatch, a, [_Link("apclix0"), _Link("apcli0")])

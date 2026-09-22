@@ -22,6 +22,7 @@ scripts/deploy-openwrt.sh's comments do the identical thing for the router
 side. A text-wide scan would flag its own documentation. Structured extraction
 of `status_url` does not have that problem, because a comment is not a value.
 """
+
 from __future__ import annotations
 
 import json
@@ -47,7 +48,10 @@ def _docs() -> list[dict]:
 
 def _hub_config() -> dict:
     for doc in _docs():
-        if doc.get("kind") == "ConfigMap" and doc["metadata"]["name"] == "zippie-hub-config":
+        if (
+            doc.get("kind") == "ConfigMap"
+            and doc["metadata"]["name"] == "zippie-hub-config"
+        ):
             return json.loads(doc["data"]["hub.json"])
     raise AssertionError("no zippie-hub-config ConfigMap in the manifest")
 
@@ -89,8 +93,11 @@ def test_the_current_template_is_refused_until_the_secret_is_set():
     cfg = _hub_config()
     url = next(r["status_url"] for r in cfg["routers"] if r["name"] == "travel-router")
     import os
+
     if "TRAVEL_ROUTER_HOST" in os.environ:  # pragma: no cover - CI hygiene
-        pytest.skip("TRAVEL_ROUTER_HOST is set in this environment; can't test the unset path")
+        pytest.skip(
+            "TRAVEL_ROUTER_HOST is set in this environment; can't test the unset path"
+        )
     assert hub.router_config_error(url) is not None
 
 

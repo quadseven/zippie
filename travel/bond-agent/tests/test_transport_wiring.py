@@ -43,8 +43,8 @@ class TestTransportLifecycle:
         """sync_transport runs every control loop; in route mode it must cost
         nothing and never raise."""
         a = self._agent(Datapath.ROUTE)
-        a.sync_transport()          # must not raise
-        a.stop_transport()          # must not raise
+        a.sync_transport()  # must not raise
+        a.stop_transport()  # must not raise
 
     def test_stop_is_idempotent(self):
         a = self._agent(Datapath.ROUTE)

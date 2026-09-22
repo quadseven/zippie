@@ -104,8 +104,7 @@ def _lan_endpoints(raw: list) -> list[LanEndpoint]:
         network = str(item.get("network") or "").strip()
         address = str(item.get("address") or "").strip()
         if not network or not address:
-            log.warning("lan_endpoints: entry needs both network and address; "
-                        "ignoring %r", item)
+            log.warning("lan_endpoints: entry needs both network and address; ignoring %r", item)
             continue
         # VALIDATED HERE, ONCE. Left to use-time this warns on every reconcile
         # pass forever, filling the log of a router nobody is watching with the
@@ -130,8 +129,7 @@ def validate_dashboard_tls(port: int | None, cert: str, key: str) -> bool:
     parts = (port is not None, bool(cert), bool(key))
     if any(parts) and not all(parts):
         raise ValueError(
-            "dashboard_tls_port, dashboard_tls_cert, and dashboard_tls_key "
-            "must be set together"
+            "dashboard_tls_port, dashboard_tls_cert, and dashboard_tls_key must be set together"
         )
     return all(parts)
 
@@ -156,7 +154,9 @@ def _positive_int(raw: Any, key: str) -> int:
     return value
 
 
-def parse_config(data: dict[str, Any], *, private_key: str = "", public_key: str = "") -> AgentConfig:
+def parse_config(
+    data: dict[str, Any], *, private_key: str = "", public_key: str = ""
+) -> AgentConfig:
     home_raw = data.get("home") or {}
     policy_raw = data.get("policy") or {}
     paths_raw = data.get("paths") or data.get("path") or []
@@ -178,12 +178,8 @@ def parse_config(data: dict[str, Any], *, private_key: str = "", public_key: str
         min_paths=int(policy_raw.get("min_paths", 1)),
         probe_interval_ms=int(policy_raw.get("probe_interval_ms", 500)),
         idle_after_s=float(policy_raw.get("idle_after_s", 60.0)),
-        idle_probe_interval_ms=int(
-            policy_raw.get("idle_probe_interval_ms", 2000)
-        ),
-        idle_persistent_keepalive=int(
-            policy_raw.get("idle_persistent_keepalive", 25)
-        ),
+        idle_probe_interval_ms=int(policy_raw.get("idle_probe_interval_ms", 2000)),
+        idle_persistent_keepalive=int(policy_raw.get("idle_persistent_keepalive", 25)),
         failover_loss_pct=float(policy_raw.get("failover_loss_pct", 15.0)),
         failover_rtt_ms=float(policy_raw.get("failover_rtt_ms", 400.0)),
         degraded_loss_pct=float(policy_raw.get("degraded_loss_pct", 5.0)),
@@ -196,9 +192,7 @@ def parse_config(data: dict[str, Any], *, private_key: str = "", public_key: str
         # a longer window than one carrying nothing but web requests. 0 or a
         # negative count DISABLES damping rather than being rejected here - a
         # knob reached for on a router in a car must not stop the agent booting.
-        weight_rise_window_passes=int(
-            policy_raw.get("weight_rise_window_passes", 40)
-        ),
+        weight_rise_window_passes=int(policy_raw.get("weight_rise_window_passes", 40)),
         weight_rises_per_window=int(policy_raw.get("weight_rises_per_window", 2)),
         # Bufferbloat shedding (#81). Tunable on the device because the right
         # ratio depends on what is bonded: a starlink-plus-cellular bond has a
@@ -208,15 +202,11 @@ def parse_config(data: dict[str, Any], *, private_key: str = "", public_key: str
         # router in a car, over a phone hotspot, must not be able to stop the
         # agent from starting.
         rtt_tail_decay=float(policy_raw.get("rtt_tail_decay", 0.9)),
-        bufferbloat_shed_ratio=float(
-            policy_raw.get("bufferbloat_shed_ratio", 5.0)
-        ),
+        bufferbloat_shed_ratio=float(policy_raw.get("bufferbloat_shed_ratio", 5.0)),
         # The self-referential half of the shed test (#82). Not validated
         # here - 0 or below disables it, degrading toward the cross-leg ratio
         # alone, same direction every other knob in this block degrades.
-        bufferbloat_spread_ratio=float(
-            policy_raw.get("bufferbloat_spread_ratio", 1.5)
-        ),
+        bufferbloat_spread_ratio=float(policy_raw.get("bufferbloat_spread_ratio", 1.5)),
         sticky_primary_ms=int(policy_raw.get("sticky_primary_ms", 3000)),
         sticky_rtt_slack_ms=float(policy_raw.get("sticky_rtt_slack_ms", 40.0)),
         on_all_paths_down=str(policy_raw.get("on_all_paths_down", "degrade")),
@@ -228,30 +218,18 @@ def parse_config(data: dict[str, Any], *, private_key: str = "", public_key: str
         # here - out of range degrades toward holding a proven leg out LESS
         # (see the fields' own comments), and a knob reached for on a router in
         # a car must not stop the agent booting.
-        join_streak_miss_penalty=float(
-            policy_raw.get("join_streak_miss_penalty", 1.0)
-        ),
+        join_streak_miss_penalty=float(policy_raw.get("join_streak_miss_penalty", 1.0)),
         probation_after_ms=int(policy_raw.get("probation_after_ms", 30_000)),
         # Adaptive cake rate (#41). Not validated here, same reasoning as the
         # rest of this block: a bad value degrades toward less shaping or no
         # auto-adjustment at all, never toward a wrong rate silently applied,
         # and none of it may stop the agent booting on a router in a car.
         shaper_auto_rate=bool(policy_raw.get("shaper_auto_rate", True)),
-        shaper_capacity_fraction=float(
-            policy_raw.get("shaper_capacity_fraction", 0.85)
-        ),
-        shaper_min_download_kbit=float(
-            policy_raw.get("shaper_min_download_kbit", 1000.0)
-        ),
-        shaper_min_upload_kbit=float(
-            policy_raw.get("shaper_min_upload_kbit", 500.0)
-        ),
-        shaper_reapply_hysteresis_pct=float(
-            policy_raw.get("shaper_reapply_hysteresis_pct", 20.0)
-        ),
-        shaper_capacity_decay_s=float(
-            policy_raw.get("shaper_capacity_decay_s", 300.0)
-        ),
+        shaper_capacity_fraction=float(policy_raw.get("shaper_capacity_fraction", 0.85)),
+        shaper_min_download_kbit=float(policy_raw.get("shaper_min_download_kbit", 1000.0)),
+        shaper_min_upload_kbit=float(policy_raw.get("shaper_min_upload_kbit", 500.0)),
+        shaper_reapply_hysteresis_pct=float(policy_raw.get("shaper_reapply_hysteresis_pct", 20.0)),
+        shaper_capacity_decay_s=float(policy_raw.get("shaper_capacity_decay_s", 300.0)),
         # Router DNS must survive a route flip (#21, the travel router 2026-08-02). The
         # OpenWrt path is only the DEFAULT - an empty string disables the kick,
         # and any other init script can be named instead, because this agent
@@ -259,12 +237,8 @@ def parse_config(data: dict[str, Any], *, private_key: str = "", public_key: str
         # validated here: a wrong path degrades to "announced absent once" and
         # a silly interval is clamped by net.ResolverKicker, and neither may
         # stop the agent booting on a router in a car.
-        resolver_kick_service=str(
-            policy_raw.get("resolver_kick_service", "/etc/init.d/nextdns")
-        ),
-        resolver_kick_min_interval_s=float(
-            policy_raw.get("resolver_kick_min_interval_s", 10.0)
-        ),
+        resolver_kick_service=str(policy_raw.get("resolver_kick_service", "/etc/init.d/nextdns")),
+        resolver_kick_min_interval_s=float(policy_raw.get("resolver_kick_min_interval_s", 10.0)),
         # Packet datapath (#2112). Absent / "route" keeps kernel ECMP; "packet"
         # routes every byte through the per-packet transport. A bad value fails
         # LOUD at load rather than silently falling back, because the two modes
@@ -285,7 +259,8 @@ def parse_config(data: dict[str, Any], *, private_key: str = "", public_key: str
         # happen).
         max_reorder_deadline_ms=(
             _positive_int(policy_raw["max_reorder_deadline_ms"], "max_reorder_deadline_ms")
-            if "max_reorder_deadline_ms" in policy_raw else None
+            if "max_reorder_deadline_ms" in policy_raw
+            else None
         ),
         transport_roam=bool(policy_raw.get("transport_roam", False)),
         # Validated HERE, at load, rather than at first use. parse_auth_level
@@ -293,8 +268,7 @@ def parse_config(data: dict[str, Any], *, private_key: str = "", public_key: str
         # would look exactly like a working rollout - the agent must refuse to
         # start instead. The value is stored as the string it came in as; the
         # agent parses it again where it builds the Transport.
-        auth_level=str(parse_auth_level(
-            str(policy_raw.get("auth_level", "off")))),
+        auth_level=str(parse_auth_level(str(policy_raw.get("auth_level", "off")))),
         auth_key_file=str(policy_raw.get("auth_key_file", "")),
         auth_peer_id=int(policy_raw.get("auth_peer_id", 1)),
         # Flat under [policy], matching every other transport knob above
@@ -313,12 +287,8 @@ def parse_config(data: dict[str, Any], *, private_key: str = "", public_key: str
         # degrade rather than stop the agent booting. 0 or negative disables
         # the mechanism (see PolicyConfig.standdown_rtt_ms).
         standdown_rtt_ms=float(policy_raw.get("standdown_rtt_ms", 500.0)),
-        standdown_enter_after_s=float(
-            policy_raw.get("standdown_enter_after_s", 5.0)
-        ),
-        standdown_recover_after_s=float(
-            policy_raw.get("standdown_recover_after_s", 30.0)
-        ),
+        standdown_enter_after_s=float(policy_raw.get("standdown_enter_after_s", 5.0)),
+        standdown_recover_after_s=float(policy_raw.get("standdown_recover_after_s", 30.0)),
     )
 
     paths: list[PathConfig] = []
@@ -356,9 +326,7 @@ def parse_config(data: dict[str, Any], *, private_key: str = "", public_key: str
         )
 
     agent_raw = data.get("agent") or {}
-    dashboard_tls_port, dashboard_tls_cert, dashboard_tls_key = (
-        _dashboard_tls_config(agent_raw)
-    )
+    dashboard_tls_port, dashboard_tls_cert, dashboard_tls_key = _dashboard_tls_config(agent_raw)
 
     return AgentConfig(
         home=home,

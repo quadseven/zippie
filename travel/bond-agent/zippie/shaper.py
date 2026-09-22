@@ -31,6 +31,7 @@ and short enough that a peak measured on one road does not linger for hours
 into a much worse one. Re-tune here rather than trusting either number as
 more precise than it is.
 """
+
 from __future__ import annotations
 
 import math
@@ -153,8 +154,9 @@ class ShaperRateController:
             return self._last_applied
 
         prev_down, prev_up = self._last_applied
-        if (_changed_enough(prev_down, target_down, self.hysteresis_pct)
-                or _changed_enough(prev_up, target_up, self.hysteresis_pct)):
+        if _changed_enough(prev_down, target_down, self.hysteresis_pct) or _changed_enough(
+            prev_up, target_up, self.hysteresis_pct
+        ):
             self._last_applied = (target_down, target_up)
             return self._last_applied
         return None

@@ -15,18 +15,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from zippie import net, policy
-from zippie.agent import (_HOME_IP_TTL_S, PACKET_IFACE, PACKET_LINK_STALE_S,
-                          BondAgent)
+from zippie.agent import _HOME_IP_TTL_S, PACKET_IFACE, PACKET_LINK_STALE_S, BondAgent
 from zippie.config import parse_config
 from zippie.datapath import HEADER_LEN
 from zippie.models import PathState
 
 
 def _cfg(tmp_path: Path, datapath: str = "packet", mtus=(1420, 1280)):
-    paths = [
-        {"name": f"leg{i}", "interface": f"eth{i}", "mtu": m}
-        for i, m in enumerate(mtus)
-    ]
+    paths = [{"name": f"leg{i}", "interface": f"eth{i}", "mtu": m} for i, m in enumerate(mtus)]
     return parse_config(
         {
             "agent": {
@@ -40,8 +36,7 @@ def _cfg(tmp_path: Path, datapath: str = "packet", mtus=(1420, 1280)):
                 "address_cidr": "10.66.0.10/24",
                 "ports": [51900, 51901],
             },
-            "policy": {"datapath": datapath, "transport_port": 51830,
-                       "mode": "aggregate"},
+            "policy": {"datapath": datapath, "transport_port": 51830, "mode": "aggregate"},
             "paths": paths,
         }
     )
@@ -207,14 +202,28 @@ def test_every_leg_sprays_to_the_same_home_port(tmp_path):
     a._home_ip = "203.0.113.9"
 
     keepalives: list[bool] = []
+
     class FakeTransport:
-        def add_link(self, ep: LinkEndpoint): added.append(ep)
-        def remove_link(self, pid): pass
-        def set_link_weight(self, pid, w): pass
-        def set_link_health(self, pid, ok): pass
-        def send_keepalives(self): keepalives.append(True)
-        def link_rx_age_s(self, pid): return 0.0
-        def link_rtt_ms(self, pid): return 12.0
+        def add_link(self, ep: LinkEndpoint):
+            added.append(ep)
+
+        def remove_link(self, pid):
+            pass
+
+        def set_link_weight(self, pid, w):
+            pass
+
+        def set_link_health(self, pid, ok):
+            pass
+
+        def send_keepalives(self):
+            keepalives.append(True)
+
+        def link_rx_age_s(self, pid):
+            return 0.0
+
+        def link_rtt_ms(self, pid):
+            return 12.0
 
     a._transport = FakeTransport()
     for i, p in enumerate(a.paths):
@@ -235,7 +244,9 @@ def test_without_home_port_a_leg_keeps_its_own_port(tmp_path):
     assert a.config.policy.home_port is None
 
 
-def test_packet_mode_adopts_a_per_leg_identity_when_there_is_no_top_level_key(tmp_path, monkeypatch):
+def test_packet_mode_adopts_a_per_leg_identity_when_there_is_no_top_level_key(
+    tmp_path, monkeypatch
+):
     """`zippie-home add-client` provisions a keypair and /32 PER LEG, because
     route mode needs each tunnel to be a distinct peer. There is often no
     top-level key at all - the travel router has none, and the first live cutover died here
@@ -294,7 +305,7 @@ def test_adopted_identity_is_stable_when_a_leg_goes_down(tmp_path, monkeypatch):
     a.config.home.address_cidr = ""
     for i, p in enumerate(a.paths):
         p.config.private_key = f"bGVn{i}"
-        p.config.address_cidr = f"10.66.0.{5+i}/32"
+        p.config.address_cidr = f"10.66.0.{5 + i}/32"
     a.paths[0].state = PathState.DOWN
     a.paths[0].effective_weight = 0
 
@@ -317,14 +328,28 @@ def test_sync_transport_adds_links_without_per_leg_tunnels(tmp_path):
     a._home_ip = "203.0.113.9"
 
     keepalives: list[bool] = []
+
     class FakeTransport:
-        def add_link(self, ep: LinkEndpoint): added.append(ep)
-        def remove_link(self, pid): pass
-        def set_link_weight(self, pid, w): pass
-        def set_link_health(self, pid, ok): pass
-        def send_keepalives(self): keepalives.append(True)
-        def link_rx_age_s(self, pid): return 0.0
-        def link_rtt_ms(self, pid): return 12.0
+        def add_link(self, ep: LinkEndpoint):
+            added.append(ep)
+
+        def remove_link(self, pid):
+            pass
+
+        def set_link_weight(self, pid, w):
+            pass
+
+        def set_link_health(self, pid, ok):
+            pass
+
+        def send_keepalives(self):
+            keepalives.append(True)
+
+        def link_rx_age_s(self, pid):
+            return 0.0
+
+        def link_rtt_ms(self, pid):
+            return 12.0
 
     a._transport = FakeTransport()
     for p in a.paths:
@@ -347,7 +372,7 @@ def test_packet_mode_legs_still_honours_the_tier_gate(tmp_path):
     # Liveness, not weight: weight is an OUTPUT of probing and in packet mode
     # every leg reads weight 0 until the transport exists, which is exactly the
     # deadlock this gate used to cause.
-    a.paths[0].state = PathState.DOWN        # tier 1 dies
+    a.paths[0].state = PathState.DOWN  # tier 1 dies
     legs = policy.packet_mode_legs(a.paths)
     assert [p.name for p in legs] == ["leg1"], "reserve must take over"
 
@@ -360,13 +385,19 @@ class _FakeT:
 
     def __init__(self, age=0.0, rtt=None, loss=None):
         self.age, self.rtt, self.loss = age, rtt, loss
-    def link_rx_age_s(self, pid): return self.age
-    def link_rtt_ms(self, pid): return self.rtt
+
+    def link_rx_age_s(self, pid):
+        return self.age
+
+    def link_rtt_ms(self, pid):
+        return self.rtt
+
     # `loss` stays None by default - the same "no evidence yet" reading the
     # real Transport gives before any keepalive has resolved (#115) - so
     # every existing caller of _packet_agent that never mentions loss is
     # unaffected.
-    def link_loss_pct(self, pid): return self.loss
+    def link_loss_pct(self, pid):
+        return self.loss
 
 
 def _packet_agent(tmp_path, *, age=0.0, rtt=None, loss=None, adopted=True):
@@ -468,6 +499,7 @@ def test_awaiting_transport_still_reports_the_legs_loss_history(tmp_path):
 
 def test_a_silent_leg_goes_down(tmp_path):
     from zippie.agent import PACKET_LINK_STALE_S
+
     a = _packet_agent(tmp_path, age=PACKET_LINK_STALE_S + 1)
     a._probe_packet_leg(a.paths[0])
     assert a.paths[0].state is PathState.DOWN
@@ -504,9 +536,7 @@ def test_an_answered_leg_is_classified_on_its_measured_rtt(tmp_path):
 def test_partial_loss_is_reported_instead_of_a_hardcoded_zero(tmp_path):
     a = _packet_agent(tmp_path, age=0.2, rtt=18.0, loss=12.5)
     a._probe_packet_leg(a.paths[0])
-    assert a.paths[0].loss_pct == 12.5, (
-        "the transport's own loss reading never reached the leg"
-    )
+    assert a.paths[0].loss_pct == 12.5, "the transport's own loss reading never reached the leg"
 
 
 def test_no_loss_evidence_yet_still_reads_the_honest_zero(tmp_path):
@@ -574,8 +604,7 @@ def test_packet_mode_never_probes_through_a_tunnel(tmp_path, monkeypatch):
     """The physical-interface fallback is the one thing that must never come
     back: it probes BENEATH the failure and can only report success."""
     called = []
-    monkeypatch.setattr(net, "ping_rtt_ms",
-                        lambda *a, **k: called.append(k) or (5.0, 0.0))
+    monkeypatch.setattr(net, "ping_rtt_ms", lambda *a, **k: called.append(k) or (5.0, 0.0))
     a = _packet_agent(tmp_path, age=0.2, rtt=18.0)
     a.probe_paths()
     assert not called, "packet mode fell back to pinging an interface"
@@ -603,13 +632,26 @@ def test_links_dial_an_address_never_a_hostname(tmp_path, monkeypatch):
     keepalives: list[bool] = []
 
     class FakeTransport:
-        def add_link(self, ep): added.append(ep)
-        def remove_link(self, pid): pass
-        def set_link_weight(self, pid, w): pass
-        def set_link_health(self, pid, ok): pass
-        def send_keepalives(self): keepalives.append(True)
-        def link_rx_age_s(self, pid): return 0.0
-        def link_rtt_ms(self, pid): return 12.0
+        def add_link(self, ep):
+            added.append(ep)
+
+        def remove_link(self, pid):
+            pass
+
+        def set_link_weight(self, pid, w):
+            pass
+
+        def set_link_health(self, pid, ok):
+            pass
+
+        def send_keepalives(self):
+            keepalives.append(True)
+
+        def link_rx_age_s(self, pid):
+            return 0.0
+
+        def link_rtt_ms(self, pid):
+            return 12.0
 
     a = _agent(tmp_path)
     a._transport = FakeTransport()
@@ -625,8 +667,7 @@ def test_the_home_address_is_resolved_once_not_per_pass(tmp_path, monkeypatch):
     """Resolution belongs in the control loop. Re-resolving every pass would
     move the cost back toward the datapath it was taken out of."""
     calls = []
-    monkeypatch.setattr(net, "resolve_host",
-                        lambda h, **kw: calls.append(h) or "203.0.113.7")
+    monkeypatch.setattr(net, "resolve_host", lambda h, **kw: calls.append(h) or "203.0.113.7")
     a = _agent(tmp_path)
     for _ in range(5):
         a._resolve_home_ip()
@@ -643,6 +684,7 @@ def test_a_failed_lookup_keeps_the_last_good_address(tmp_path, monkeypatch):
 
     def boom(h, **kw):
         raise OSError("no DNS")
+
     monkeypatch.setattr(net, "resolve_host", boom)
     # Subtract the TTL rather than zeroing: time.monotonic() starts near
     # zero on some platforms, so 0.0 is not reliably in the past.
@@ -660,13 +702,26 @@ def test_a_moved_home_endpoint_rebuilds_the_link(tmp_path, monkeypatch):
     keepalives: list[bool] = []
 
     class FakeTransport:
-        def add_link(self, ep): added.append(ep)
-        def remove_link(self, pid): removed.append(pid)
-        def set_link_weight(self, pid, w): pass
-        def set_link_health(self, pid, ok): pass
-        def send_keepalives(self): keepalives.append(True)
-        def link_rx_age_s(self, pid): return 0.0
-        def link_rtt_ms(self, pid): return 12.0
+        def add_link(self, ep):
+            added.append(ep)
+
+        def remove_link(self, pid):
+            removed.append(pid)
+
+        def set_link_weight(self, pid, w):
+            pass
+
+        def set_link_health(self, pid, ok):
+            pass
+
+        def send_keepalives(self):
+            keepalives.append(True)
+
+        def link_rx_age_s(self, pid):
+            return 0.0
+
+        def link_rtt_ms(self, pid):
+            return 12.0
 
     a = _agent(tmp_path)
     a._transport = FakeTransport()
@@ -709,13 +764,15 @@ def test_a_hijacked_resolution_is_flagged_in_the_status(tmp_path, monkeypatch):
 
 # ------------------------------------------- the home endpoint must not recurse --
 
+
 def _pin_agent(tmp_path, monkeypatch, carrying=True):
     pins, unpins = [], []
     monkeypatch.setattr(net, "resolve_host", lambda h, **kw: "203.0.113.33")
     monkeypatch.setattr(net, "dry_run", lambda: True)
     monkeypatch.setattr(net, "tunnel_is_carrying", lambda i: carrying)
-    monkeypatch.setattr(net, "pin_host_route",
-                        lambda ip, dev, gw: pins.append((ip, dev, gw)) or True)
+    monkeypatch.setattr(
+        net, "pin_host_route", lambda ip, dev, gw: pins.append((ip, dev, gw)) or True
+    )
     monkeypatch.setattr(net, "unpin_host_route", lambda ip: unpins.append(ip))
     a = _agent(tmp_path)
     monkeypatch.setattr(a, "_default_gw", lambda i: "10.3.0.1")
@@ -747,10 +804,8 @@ def test_the_pin_lands_before_the_route(tmp_path, monkeypatch):
     window where the home address already resolves into the tunnel."""
     a, _pins, _ = _pin_agent(tmp_path, monkeypatch)
     order = []
-    monkeypatch.setattr(net, "pin_host_route",
-                        lambda ip, dev, gw: order.append("pin") or True)
-    monkeypatch.setattr(net, "ip_route_replace_multipath",
-                        lambda hops: order.append("route"))
+    monkeypatch.setattr(net, "pin_host_route", lambda ip, dev, gw: order.append("pin") or True)
+    monkeypatch.setattr(net, "ip_route_replace_multipath", lambda hops: order.append("route"))
     a.apply_policy()
     assert "pin" in order, "no pin happened during apply_policy"
     assert order.index("pin") < order.index("route"), "route installed before the pin"
@@ -780,14 +835,21 @@ def test_no_pin_when_nothing_can_carry(tmp_path, monkeypatch):
 
 # ------------------------------------- the route follows delivery, not hello --
 
+
 class _DeliverT:
     """Transport stand-in exposing only what the route gate reads."""
+
     def __init__(self, delivered=0):
         from zippie.datapath import Reassembler
+
         self.reassembler = Reassembler(reorder_deadline_ms=10)
         self.reassembler.stats.delivered = delivered
-    def link_rx_age_s(self, pid): return 0.0
-    def link_rtt_ms(self, pid): return 10.0
+
+    def link_rx_age_s(self, pid):
+        return 0.0
+
+    def link_rtt_ms(self, pid):
+        return 10.0
 
 
 def test_a_handshake_alone_does_not_earn_the_route(tmp_path):
@@ -804,7 +866,7 @@ def test_a_handshake_alone_does_not_earn_the_route(tmp_path):
 def test_delivering_bulk_earns_the_route(tmp_path):
     a = _agent(tmp_path)
     a._transport = _DeliverT(delivered=0)
-    a._packet_datapath_delivering()              # prime
+    a._packet_datapath_delivering()  # prime
     a._transport.reassembler.stats.delivered = 12
     a._transport.reassembler.stats.delivered_bytes = 15000
     assert a._packet_datapath_delivering() is True
@@ -818,7 +880,7 @@ def test_the_handshake_exchange_does_not_earn_the_route(tmp_path):
     never moved a single full-size frame. Presence is not proof; volume is."""
     a = _agent(tmp_path)
     a._transport = _DeliverT(delivered=0)
-    a._packet_datapath_delivering()              # prime
+    a._packet_datapath_delivering()  # prime
     a._transport.reassembler.stats.delivered = 6
     a._transport.reassembler.stats.delivered_bytes = 350
     assert a._packet_datapath_delivering() is False
@@ -831,7 +893,7 @@ def test_a_flood_of_tiny_payloads_does_not_earn_the_route(tmp_path):
     every 1300-byte frame died - a count threshold alone cannot see that."""
     a = _agent(tmp_path)
     a._transport = _DeliverT(delivered=0)
-    a._packet_datapath_delivering()              # prime
+    a._packet_datapath_delivering()  # prime
     a._transport.reassembler.stats.delivered = 50
     a._transport.reassembler.stats.delivered_bytes = 1000
     assert a._packet_datapath_delivering() is False
@@ -842,7 +904,7 @@ def test_a_transport_restart_re_earns_the_route_from_zero(tmp_path):
     not vouch for it."""
     a = _agent(tmp_path)
     a._transport = _DeliverT(delivered=0)
-    a._packet_datapath_delivering()              # prime
+    a._packet_datapath_delivering()  # prime
     a._transport.reassembler.stats.delivered = 12
     a._transport.reassembler.stats.delivered_bytes = 15000
     assert a._packet_datapath_delivering() is True
@@ -856,9 +918,10 @@ def test_the_route_is_withdrawn_when_delivery_stops(tmp_path, monkeypatch):
     """A datapath that stops carrying must hand the LAN back to the physical
     WAN rather than hold a route into a hole."""
     import zippie.agent as agent_mod
+
     a = _agent(tmp_path)
     a._transport = _DeliverT(delivered=0)
-    a._packet_datapath_delivering()              # prime the window baseline
+    a._packet_datapath_delivering()  # prime the window baseline
     a._transport.reassembler.stats.delivered = 12
     a._transport.reassembler.stats.delivered_bytes = 15000
     assert a._packet_datapath_delivering() is True
@@ -877,8 +940,26 @@ def test_no_transport_means_no_route(tmp_path):
 
 # The RTTs below are the REAL ones sampled off the travel router's hotspot leg on
 # 2026-08-04, not invented jitter.
-_HOTSPOT_RTTS = [57, 303, 238, 262, 129, 278, 99, 311, 109, 267,
-                      150, 280, 113, 272, 190, 260, 121, 268]
+_HOTSPOT_RTTS = [
+    57,
+    303,
+    238,
+    262,
+    129,
+    278,
+    99,
+    311,
+    109,
+    267,
+    150,
+    280,
+    113,
+    272,
+    190,
+    260,
+    121,
+    268,
+]
 
 
 def test_a_jittery_leg_does_not_flap_between_up_and_degraded(tmp_path):
@@ -898,7 +979,7 @@ def test_a_jittery_leg_does_not_flap_between_up_and_degraded(tmp_path):
     Classify on the same smoothed RTT the weighting uses.
     """
     a = _packet_agent(tmp_path, age=0.2, rtt=100.0)
-    a.config.policy.degraded_rtt_ms = 250.0    # the travel router live values, not defaults
+    a.config.policy.degraded_rtt_ms = 250.0  # the travel router live values, not defaults
     a.config.policy.failover_rtt_ms = 1500.0
     path = a.paths[0]
 
@@ -914,8 +995,7 @@ def test_a_jittery_leg_does_not_flap_between_up_and_degraded(tmp_path):
     assert flips <= 1, (
         "leg changed state %d times on ordinary jitter (mean rtt %.0fms, "
         "threshold %.0fms); each flip is a 3x weight lurch: %s"
-        % (flips, sum(_HOTSPOT_RTTS) / len(_HOTSPOT_RTTS), 250.0,
-           [s.value for s in states])
+        % (flips, sum(_HOTSPOT_RTTS) / len(_HOTSPOT_RTTS), 250.0, [s.value for s in states])
     )
 
 
@@ -923,17 +1003,17 @@ def test_a_leg_that_genuinely_degrades_still_degrades(tmp_path):
     """The smoothing must not become blindness. A leg that really does go bad
     and STAYS bad has to be demoted, or the anti-flap fix is just a mute."""
     a = _packet_agent(tmp_path, age=0.2, rtt=40.0)
-    a.config.policy.degraded_rtt_ms = 250.0    # the travel router live values, not defaults
+    a.config.policy.degraded_rtt_ms = 250.0  # the travel router live values, not defaults
     a.config.policy.failover_rtt_ms = 1500.0
     path = a.paths[0]
 
-    for _ in range(5):                      # settle healthy
+    for _ in range(5):  # settle healthy
         a._transport.rtt = 40.0
         a._probe_packet_leg(path)
         policy.update_rtt_ewma(path, a.config.policy)
     assert path.state is PathState.UP
 
-    for _ in range(30):                     # sustained real degradation
+    for _ in range(30):  # sustained real degradation
         a._transport.rtt = 600.0
         a._probe_packet_leg(path)
         policy.update_rtt_ewma(path, a.config.policy)
@@ -945,8 +1025,24 @@ def test_a_leg_that_genuinely_degrades_still_degrades(tmp_path):
 # Sampled off the SAME leg 2026-08-04 after the smoothing fix went in. Mean
 # ~228ms against a 250ms threshold: a distribution centred on the boundary,
 # which smoothing alone cannot settle because the AVERAGE itself drifts across.
-_HOTSPOT_RTTS_NEAR_THRESHOLD = [280, 98, 100, 257, 181, 326, 344, 239,
-                                     212, 268, 195, 301, 224, 249, 271, 188]
+_HOTSPOT_RTTS_NEAR_THRESHOLD = [
+    280,
+    98,
+    100,
+    257,
+    181,
+    326,
+    344,
+    239,
+    212,
+    268,
+    195,
+    301,
+    224,
+    249,
+    271,
+    188,
+]
 
 
 def test_a_leg_whose_average_sits_on_the_threshold_still_does_not_flap(tmp_path):
@@ -977,9 +1073,11 @@ def test_a_leg_whose_average_sits_on_the_threshold_still_does_not_flap(tmp_path)
     assert flips <= 2, (
         "leg changed state %d times with an average (%.0fms) sitting near the "
         "threshold (250ms); hysteresis is what stops boundary chatter: %s"
-        % (flips,
-           sum(_HOTSPOT_RTTS_NEAR_THRESHOLD) / len(_HOTSPOT_RTTS_NEAR_THRESHOLD),
-           [s.value for s in states])
+        % (
+            flips,
+            sum(_HOTSPOT_RTTS_NEAR_THRESHOLD) / len(_HOTSPOT_RTTS_NEAR_THRESHOLD),
+            [s.value for s in states],
+        )
     )
 
 
@@ -1043,8 +1141,7 @@ def test_an_ordinary_leg_still_dials_home(tmp_path):
     home_host = a.config.home.endpoint
     expected_port = a.config.policy.home_port or ordinary.config.port or 51820
     assert sent[pid].remote == (home_host, expected_port), (
-        "an ordinary leg stopped dialling the shared home endpoint: %r"
-        % (sent[pid].remote,)
+        "an ordinary leg stopped dialling the shared home endpoint: %r" % (sent[pid].remote,)
     )
 
 
@@ -1057,12 +1154,12 @@ def test_a_relay_endpoint_is_read_from_the_config_file(tmp_path):
     cfg = tmp_path / "z.toml"
     cfg.write_text(
         'mode = "aggregate"\n'
-        '[home]\n'
+        "[home]\n"
         'endpoint = "home.example:51902"\n'
-        '[[paths]]\n'
+        "[[paths]]\n"
         'name = "companion-iphone"\n'
         'relay_endpoint = "10.99.0.55:51999"\n'
-        '[paths.match]\n'
+        "[paths.match]\n"
         'type = "interface"\n'
         'interface = "br-lan"\n'
     )
@@ -1099,7 +1196,7 @@ def test_packet_mode_masquerades_the_packet_interface(tmp_path):
     for p in a.paths:
         p.state = PathState.UP
         p.effective_weight = 100
-        p.wg_iface = None          # packet mode: no per-leg tunnels, by design
+        p.wg_iface = None  # packet mode: no per-leg tunnels, by design
 
     ifaces = a._masquerade_ifaces()
 
@@ -1135,14 +1232,23 @@ def _relay_agent(tmp_path, endpoints):
         {"name": "phone%d" % i, "interface": "br-lan", "relay_endpoint": ep}
         for i, ep in enumerate(endpoints)
     ]
-    cfg = parse_config({
-        "agent": {"private_key": "cGtleQ==",
-                  "state_dir": str(tmp_path / "s"), "run_dir": str(tmp_path / "r")},
-        "home": {"endpoint": "home.example:51902", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
-        "paths": paths,
-    })
+    cfg = parse_config(
+        {
+            "agent": {
+                "private_key": "cGtleQ==",
+                "state_dir": str(tmp_path / "s"),
+                "run_dir": str(tmp_path / "r"),
+            },
+            "home": {
+                "endpoint": "home.example:51902",
+                "server_public_key": "c2VydmVy",
+                "address_cidr": "10.66.0.10/24",
+                "ports": [51900],
+            },
+            "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
+            "paths": paths,
+        }
+    )
     a = BondAgent(cfg)
     a.prepare_dirs()
     return a
@@ -1162,6 +1268,7 @@ def test_two_phones_can_both_relay_over_the_same_lan_bridge(tmp_path, monkeypatc
     the same bridge are two genuinely independent cellular uplinks, and
     excluding the second one throws away a whole extra carrier.
     """
+
     class _L:
         def __init__(self, ifname):
             self.ifname = ifname
@@ -1189,6 +1296,7 @@ def test_two_physical_paths_still_cannot_claim_one_uplink(tmp_path, monkeypatch)
     """The exclusivity must survive for ordinary legs. Two paths bonding one
     physical link is one link wearing two hats, and every weight computed off
     it is a lie."""
+
     class _L:
         def __init__(self, ifname):
             self.ifname = ifname
@@ -1202,23 +1310,29 @@ def test_two_physical_paths_still_cannot_claim_one_uplink(tmp_path, monkeypatch)
     monkeypatch.setattr(net, "list_links", lambda: [_L("eth0")])
     monkeypatch.setattr(net, "wan_gateways", lambda: {})
 
-    cfg = parse_config({
-        "agent": {"private_key": "cGtleQ==",
-                  "state_dir": str(tmp_path / "s"), "run_dir": str(tmp_path / "r")},
-        "home": {"endpoint": "home.example:51902", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
-        "paths": [{"name": "a", "interface": "eth0"},
-                  {"name": "b", "interface": "eth0"}],
-    })
+    cfg = parse_config(
+        {
+            "agent": {
+                "private_key": "cGtleQ==",
+                "state_dir": str(tmp_path / "s"),
+                "run_dir": str(tmp_path / "r"),
+            },
+            "home": {
+                "endpoint": "home.example:51902",
+                "server_public_key": "c2VydmVy",
+                "address_cidr": "10.66.0.10/24",
+                "ports": [51900],
+            },
+            "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
+            "paths": [{"name": "a", "interface": "eth0"}, {"name": "b", "interface": "eth0"}],
+        }
+    )
     a = BondAgent(cfg)
     a.prepare_dirs()
     a.match_interfaces()
 
     claimed = [p.name for p in a.paths if p.interface == "eth0"]
-    assert claimed == ["a"], (
-        "two physical paths both claimed eth0: %r" % (claimed,)
-    )
+    assert claimed == ["a"], "two physical paths both claimed eth0: %r" % (claimed,)
 
 
 def test_two_legs_cannot_point_at_the_same_phone(tmp_path, monkeypatch):
@@ -1227,6 +1341,7 @@ def test_two_legs_cannot_point_at_the_same_phone(tmp_path, monkeypatch):
     Two legs aimed at one phone would double-count a single cellular uplink,
     which is exactly the mistake the interface exclusivity exists to prevent,
     just moved one hop out."""
+
     class _L:
         def __init__(self, ifname):
             self.ifname = ifname
@@ -1249,8 +1364,7 @@ def test_two_legs_cannot_point_at_the_same_phone(tmp_path, monkeypatch):
 
     matched = [p.name for p in a.paths if p.interface == "br-lan"]
     assert matched == ["phone0"], (
-        "both legs claimed the same phone (%r) - one cellular uplink counted "
-        "twice" % (matched,)
+        "both legs claimed the same phone (%r) - one cellular uplink counted twice" % (matched,)
     )
     assert "already relays" in (a.paths[1].last_error or ""), a.paths[1].last_error
 

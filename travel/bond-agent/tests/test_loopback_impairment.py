@@ -111,7 +111,11 @@ def test_an_unimpaired_leg_is_a_pure_passthrough():
     assert [d for d, _ in inner.sent] == [b"frame-%04d" % i for i in range(50)]
     assert all(addr == PEER for _, addr in inner.sent)
     assert imp.counters()[0] == {
-        "offered": 50, "dropped": 0, "delayed": 0, "overflowed": 0, "passed": 50,
+        "offered": 50,
+        "dropped": 0,
+        "delayed": 0,
+        "overflowed": 0,
+        "passed": 50,
     }
 
 
@@ -215,7 +219,7 @@ def test_the_stated_loss_fraction_is_what_actually_happens():
 
 
 def test_only_the_named_leg_is_impaired():
-    """"One lossy leg beside a healthy one" is the whole experiment; a plan that
+    """ "One lossy leg beside a healthy one" is the whole experiment; a plan that
     leaked onto every leg would be measuring a bond that is uniformly bad."""
     clean, lossy = FakeSocket(), FakeSocket()
     imp = Impairer(seed=11, plan={1: Impairment(loss=0.5)})
@@ -462,7 +466,12 @@ def test_exactly_the_requested_number_of_payloads_is_offered(ack_every):
     by an ack and the overshoot is maximal."""
     sock = FakeSocket()
     sent, elapsed = _paced_upstream(
-        sock, PEER, payload_len=200, count=500, pps=200000.0, ack_every=ack_every,
+        sock,
+        PEER,
+        payload_len=200,
+        count=500,
+        pps=200000.0,
+        ack_every=ack_every,
     )
 
     assert sent == 500
@@ -509,8 +518,9 @@ def test_a_rejoining_leg_keeps_its_counters_and_its_drop_stream():
     ref = Impairer(seed=5, plan={0: Impairment(loss=0.5)}).wrap(0, solo)
     for i in range(200):
         ref.sendto(b"%d" % i, PEER)
-    assert ([d for d, _ in first.sent] + [d for d, _ in second.sent]
-            == [d for d, _ in solo.sent]), "the PRNG restarted when the leg rejoined"
+    assert [d for d, _ in first.sent] + [d for d, _ in second.sent] == [d for d, _ in solo.sent], (
+        "the PRNG restarted when the leg rejoined"
+    )
 
 
 def test_a_rejoining_leg_sends_down_its_new_socket():
@@ -547,7 +557,7 @@ def test_the_factory_gives_a_rejoining_leg_its_own_id():
 
     factory("leg0")
     factory("leg1")
-    factory("leg1")          # leg1 left the bond and came back
+    factory("leg1")  # leg1 left the bond and came back
 
     assert sorted(imp.counters()) == [0, 1]
     # The device is dropped on the way through: SO_BINDTODEVICE needs a real
@@ -557,8 +567,9 @@ def test_the_factory_gives_a_rejoining_leg_its_own_id():
 
 def test_the_factory_refuses_a_leg_it_has_never_heard_of():
     """Silence here would mean a mis-numbered leg, so it is loud instead."""
-    factory = _ImpairingFactory(Impairer(seed=1, plan={}), ["leg0"],
-                                inner=lambda device, bind=None: FakeSocket())
+    factory = _ImpairingFactory(
+        Impairer(seed=1, plan={}), ["leg0"], inner=lambda device, bind=None: FakeSocket()
+    )
     with pytest.raises(RuntimeError):
         factory("leg7")
 
@@ -598,8 +609,10 @@ class FakePacketTransport:
     # -- what the agent drives
     def add_link(self, ep):
         self.links[ep.path_id] = {
-            "weight": ep.weight, "healthy": True,
-            "device": ep.device, "remote": ep.remote,
+            "weight": ep.weight,
+            "healthy": True,
+            "device": ep.device,
+            "remote": ep.remote,
         }
 
     def remove_link(self, pid):
@@ -625,13 +638,14 @@ class FakePacketTransport:
         return self.loss.get(pid)
 
 
-def _control(tmp_path, rx_age, rtt, *, loss=None, shed_ratio=0.0,
-             names=("leg0", "leg1")):
+def _control(tmp_path, rx_age, rtt, *, loss=None, shed_ratio=0.0, names=("leg0", "leg1")):
     t = FakePacketTransport(rx_age, rtt, loss)
     ctl = PolicyController(
-        t, list(names),
+        t,
+        list(names),
         [("127.0.0.1", 51900 + i) for i in range(len(names))],
-        shed_ratio=shed_ratio, state_dir=str(tmp_path),
+        shed_ratio=shed_ratio,
+        state_dir=str(tmp_path),
     )
     return t, ctl
 
@@ -735,14 +749,13 @@ def test_a_partially_lossy_leg_is_judged_on_the_loss_it_shows(tmp_path):
     degraded_loss_pct (5), below failover_loss_pct (15) - is demoted rather
     than either ignored (the old 0.0) or killed outright (the old 100.0).
     """
-    _t, ctl = _control(tmp_path, rx_age={0: 0.1, 1: 0.1}, rtt={0: 0.4, 1: 0.4},
-                       loss={0: 10.0, 1: 0.0})
+    _t, ctl = _control(
+        tmp_path, rx_age={0: 0.1, 1: 0.1}, rtt={0: 0.4, 1: 0.4}, loss={0: 10.0, 1: 0.0}
+    )
     for _ in range(2):
         ctl.pass_once()
 
-    assert ctl.loss_pct()["leg0"] == 10.0, (
-        "the measured loss never reached the leg's own record"
-    )
+    assert ctl.loss_pct()["leg0"] == 10.0, "the measured loss never reached the leg's own record"
     assert ctl.states()["leg0"] == "degraded", (
         "10%% loss sits between degraded_loss_pct (5) and failover_loss_pct "
         "(15) and used to be unreachable from either threshold"
@@ -757,8 +770,9 @@ def test_loss_past_the_failover_threshold_takes_the_leg_down(tmp_path):
     """The other end of the same fix: enough loss must be able to fail a leg
     over, not merely degrade its weight - #115's acceptance criterion that the
     thresholds either fire from measured loss or stop existing."""
-    _t, ctl = _control(tmp_path, rx_age={0: 0.1, 1: 0.1}, rtt={0: 0.4, 1: 0.4},
-                       loss={0: 20.0, 1: 0.0})
+    _t, ctl = _control(
+        tmp_path, rx_age={0: 0.1, 1: 0.1}, rtt={0: 0.4, 1: 0.4}, loss={0: 20.0, 1: 0.0}
+    )
     for _ in range(2):
         ctl.pass_once()
 
@@ -805,8 +819,7 @@ def test_a_leg_shed_for_latency_is_a_link_with_a_weight_and_carries_nothing(tmp_
     about; it is what makes the harness actually produce a shed leg, so the
     observability invariants below have something to check.
     """
-    t, ctl = _control(tmp_path, rx_age={0: 0.1, 1: 0.1}, rtt={0: 50.0, 1: 0.4},
-                      shed_ratio=5.0)
+    t, ctl = _control(tmp_path, rx_age={0: 0.1, 1: 0.1}, rtt={0: 50.0, 1: 0.4}, shed_ratio=5.0)
     ctl.pass_once()
     ctl.pass_once()
     t.rtt[0] = 300.0
@@ -853,8 +866,14 @@ def test_the_controller_runs_the_shipped_decision_not_a_copy(tmp_path):
     agent = ctl.agent
 
     assert isinstance(agent, BondAgent)
-    for name in ("probe_paths", "_probe_packet_leg", "apply_policy",
-                 "sync_transport", "_reconcile_link", "_gate_flapped_paths"):
+    for name in (
+        "probe_paths",
+        "_probe_packet_leg",
+        "apply_policy",
+        "sync_transport",
+        "_reconcile_link",
+        "_gate_flapped_paths",
+    ):
         assert getattr(agent, name).__func__ is getattr(BondAgent, name), (
             f"{name} is not the shipped implementation"
         )
@@ -939,8 +958,10 @@ def test_a_blackholed_leg_carries_only_until_its_grace_expires(tmp_path):
     """
     t = AgeingPacketTransport(dead={0})
     ctl = PolicyController(
-        t, ["leg0", "leg1"],
-        [("127.0.0.1", 51900), ("127.0.0.1", 51901)], state_dir=str(tmp_path),
+        t,
+        ["leg0", "leg1"],
+        [("127.0.0.1", 51900), ("127.0.0.1", 51901)],
+        state_dir=str(tmp_path),
     )
 
     carrying = []
@@ -978,8 +999,10 @@ def test_a_healthy_bond_reports_no_withdrawal_at_all(tmp_path):
     and would be easy to mistake for a moment when nothing was carrying."""
     t = AgeingPacketTransport(dead=set())
     ctl = PolicyController(
-        t, ["leg0", "leg1"],
-        [("127.0.0.1", 51900), ("127.0.0.1", 51901)], state_dir=str(tmp_path),
+        t,
+        ["leg0", "leg1"],
+        [("127.0.0.1", 51900), ("127.0.0.1", 51901)],
+        state_dir=str(tmp_path),
     )
     for _ in range(8):
         ctl.pass_once()
@@ -996,8 +1019,7 @@ def test_the_controller_clears_up_the_scratch_dir_it_made(tmp_path):
     state dir left behind is one directory per run, forever."""
     import os
 
-    ctl = PolicyController(FakePacketTransport({}, {}), ["leg0"],
-                           [("127.0.0.1", 51900)])
+    ctl = PolicyController(FakePacketTransport({}, {}), ["leg0"], [("127.0.0.1", 51900)])
     made = ctl.state_dir
     assert os.path.isdir(made)
 
@@ -1009,8 +1031,9 @@ def test_the_controller_clears_up_the_scratch_dir_it_made(tmp_path):
 def test_the_controller_never_removes_a_state_dir_it_was_given(tmp_path):
     """A caller that supplied its own owns it. These tests hand over pytest's
     tmp_path, and deleting that would be reaching into the fixture."""
-    ctl = PolicyController(FakePacketTransport({}, {}), ["leg0"],
-                           [("127.0.0.1", 51900)], state_dir=str(tmp_path))
+    ctl = PolicyController(
+        FakePacketTransport({}, {}), ["leg0"], [("127.0.0.1", 51900)], state_dir=str(tmp_path)
+    )
 
     ctl.close()
 
@@ -1022,8 +1045,12 @@ def test_a_leg_without_a_far_end_port_is_refused(tmp_path):
     per-leg RTT is honest (see _home_process). A leg handed the wrong remote,
     or no remote, would be measured through another leg's answers."""
     with pytest.raises(ValueError):
-        PolicyController(FakePacketTransport({}, {}), ["leg0", "leg1"],
-                         [("127.0.0.1", 51900)], state_dir=str(tmp_path))
+        PolicyController(
+            FakePacketTransport({}, {}),
+            ["leg0", "leg1"],
+            [("127.0.0.1", 51900)],
+            state_dir=str(tmp_path),
+        )
 
 
 def test_the_control_pass_probes_every_leg_including_the_dead_one(tmp_path):

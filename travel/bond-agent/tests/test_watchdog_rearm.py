@@ -58,7 +58,7 @@ class Harness:
             f'[ "$1 $2 $3" = "route show default" ] || exit 0\n'
             f'echo "default dev pbz0 scope link metric 1"\n'
             f'[ -f "{tmp}/sole_uplink" ] && exit 0\n'
-            f'echo "default via 192.0.2.1 dev eth0 proto static metric 10"\n'
+            f'echo "default via 192.0.2.1 dev eth0 proto static metric 10"\n',
         )
         self._stub("pgrep", f'[ -f "{tmp}/running" ] && exit 0\nexit 1\n')
         self._stub("logger", f'echo "LOG $*" >> "{self.calls}"\n')
@@ -82,24 +82,24 @@ class Harness:
         self._stub(
             "curl",
             f'case "$*" in\n'
-            f'  *api/status*)\n'
+            f"  *api/status*)\n"
             f'    [ -f "{tmp}/not_carrying" ] && '
             f'{{ echo \'{{"paths":[{{"name":"eth","in_bond": true, '
             f'"effective_weight": 0}}]}}\'; exit 0; }}\n'
             f'    [ -f "{tmp}/no_console" ] && exit 7\n'
             f'    echo \'{{"paths":[{{"name":"phone","in_bond": true, '
             f'"effective_weight": 24}}]}}\'\n'
-            f'    ;;\n'
+            f"    ;;\n"
             f'  *) echo "DD $*" >> "{self.events}" ;;\n'
-            f'esac\nexit 0\n',
+            f"esac\nexit 0\n",
         )
         # A fake credentials file so the Datadog path is actually exercised.
         # Without it dd_event returns early and the "never silent" assertions
         # would pass vacuously on a machine that has no real key.
         (self.persist / "env").write_text(
-            'export DD_API_KEY=test-key-not-real\n'
-            'export DD_SITE=datadoghq.com\n'
-            'export PATHBOND_TAGS=device:test\n'
+            "export DD_API_KEY=test-key-not-real\n"
+            "export DD_SITE=datadoghq.com\n"
+            "export PATHBOND_TAGS=device:test\n"
         )
         # The script sleeps 8s after starting; tests must not.
         self._stub("sleep", "exit 0\n")
@@ -194,8 +194,7 @@ class Harness:
             # these tests are about; stubbing it would test the harness.
             ZIPPIE_CARRYING_LIB=str(REPO / "travel/gl-mt3000/carrying.sh"),
         )
-        subprocess.run(["sh", str(WATCHDOG)], env=env, check=False,
-                       capture_output=True, timeout=60)
+        subprocess.run(["sh", str(WATCHDOG)], env=env, check=False, capture_output=True, timeout=60)
 
 
 @pytest.fixture
@@ -253,7 +252,7 @@ def test_budget_is_capped_so_a_flapping_device_stays_down(hz):
     """The original anti-flap intent, preserved."""
     hz.set_tripped()
     hz.set_running(False)
-    hz.set_budget(MAX_REARMS, int(time.time()))   # inside the window; see set_tripped
+    hz.set_budget(MAX_REARMS, int(time.time()))  # inside the window; see set_tripped
     hz.set_stable(STABLE_MIN - 1)
     hz.run()
     assert not hz.running, "must NOT re-arm once the budget is exhausted"
@@ -265,7 +264,7 @@ def test_budget_is_capped_so_a_flapping_device_stays_down(hz):
 def test_cap_message_is_not_repeated_every_minute(hz):
     hz.set_tripped()
     hz.set_running(False)
-    hz.set_budget(MAX_REARMS, int(time.time()))   # inside the window; see set_tripped
+    hz.set_budget(MAX_REARMS, int(time.time()))  # inside the window; see set_tripped
     hz.set_stable(STABLE_MIN + 5)
     hz.run()
     hz.run()
@@ -324,11 +323,11 @@ def test_no_teardown_when_nothing_is_carrying(tmp_path):
     arrive.
     """
     hz = Harness(tmp_path)
-    (tmp_path / "unreachable").touch()      # router has no internet
-    (tmp_path / "not_carrying").touch()     # ...and zippie carries nothing
+    (tmp_path / "unreachable").touch()  # router has no internet
+    (tmp_path / "not_carrying").touch()  # ...and zippie carries nothing
     (tmp_path / "running").touch()
 
-    for _ in range(4):                      # past MAX_FAILS
+    for _ in range(4):  # past MAX_FAILS
         hz.run()
 
     assert not hz.tripped, (
@@ -346,8 +345,8 @@ def test_teardown_still_fires_when_zippie_is_carrying(tmp_path):
     """The case the teardown WAS written for must be untouched: zippie in the
     path, router still dark, so zippie is the plausible cause."""
     hz = Harness(tmp_path)
-    (tmp_path / "unreachable").touch()      # no internet
-    (tmp_path / "running").touch()          # and zippie IS carrying (default)
+    (tmp_path / "unreachable").touch()  # no internet
+    (tmp_path / "running").touch()  # and zippie IS carrying (default)
 
     for _ in range(4):
         hz.run()
@@ -361,7 +360,7 @@ def test_an_unreadable_console_does_not_trigger_a_teardown(tmp_path):
     unreadable console is exactly the state where a teardown is most useless."""
     hz = Harness(tmp_path)
     (tmp_path / "unreachable").touch()
-    (tmp_path / "no_console").touch()       # curl exits non-zero
+    (tmp_path / "no_console").touch()  # curl exits non-zero
     (tmp_path / "running").touch()
 
     for _ in range(4):
@@ -391,11 +390,11 @@ def test_a_hold_does_not_bank_failures_against_the_next_bond(tmp_path):
     existed.
     """
     hz = Harness(tmp_path)
-    (tmp_path / "unreachable").touch()      # no internet, throughout
-    (tmp_path / "not_carrying").touch()     # and nothing carrying, at first
+    (tmp_path / "unreachable").touch()  # no internet, throughout
+    (tmp_path / "not_carrying").touch()  # and nothing carrying, at first
     (tmp_path / "running").touch()
 
-    for _ in range(2 * MAX_FAILS):          # a long hold, twice the budget
+    for _ in range(2 * MAX_FAILS):  # a long hold, twice the budget
         hz.run()
     assert not hz.tripped, "tore down during the hold"
 
@@ -421,7 +420,7 @@ def test_a_carrying_bond_still_trips_after_a_full_window(tmp_path):
     (tmp_path / "not_carrying").touch()
     (tmp_path / "running").touch()
 
-    for _ in range(2 * MAX_FAILS):          # hold first, so the reset applies
+    for _ in range(2 * MAX_FAILS):  # hold first, so the reset applies
         hz.run()
     (tmp_path / "not_carrying").unlink()
 
@@ -444,13 +443,14 @@ def test_a_missing_carrying_library_holds_rather_than_tears_down(tmp_path):
     """
     hz = Harness(tmp_path)
     (tmp_path / "unreachable").touch()
-    (tmp_path / "running").touch()          # carrying, by the stub's default
+    (tmp_path / "running").touch()  # carrying, by the stub's default
 
     env_lib = tmp_path / "does-not-exist.sh"
     original = Harness.run
 
     def run_without_lib(self) -> None:
         import os as _os
+
         env = dict(_os.environ)
         env.update(
             PATH=f"{self.bin}:{env['PATH']}",
@@ -459,8 +459,7 @@ def test_a_missing_carrying_library_holds_rather_than_tears_down(tmp_path):
             ZIPPIE_INITD=str(self.bin / "initd"),
             ZIPPIE_CARRYING_LIB=str(env_lib),
         )
-        subprocess.run(["sh", str(WATCHDOG)], env=env, check=False,
-                       capture_output=True, timeout=60)
+        subprocess.run(["sh", str(WATCHDOG)], env=env, check=False, capture_output=True, timeout=60)
 
     Harness.run = run_without_lib
     try:
@@ -500,9 +499,9 @@ def test_no_teardown_when_zippie_is_the_only_uplink(tmp_path):
     question is whether anything is underneath.
     """
     hz = Harness(tmp_path)
-    (tmp_path / "unreachable").touch()      # no internet
-    (tmp_path / "running").touch()          # and zippie IS carrying (default)
-    hz.set_sole_uplink(True)                # ...and it is the only uplink
+    (tmp_path / "unreachable").touch()  # no internet
+    (tmp_path / "running").touch()  # and zippie IS carrying (default)
+    hz.set_sole_uplink(True)  # ...and it is the only uplink
 
     for _ in range(2 * MAX_FAILS):
         hz.run()
@@ -512,9 +511,7 @@ def test_no_teardown_when_zippie_is_the_only_uplink(tmp_path):
         "anything, and nothing else can bring it back"
     )
     assert hz.running, "zippie was stopped anyway"
-    assert "only uplink" in hz.log, (
-        "held silently - indistinguishable from a check that never ran"
-    )
+    assert "only uplink" in hz.log, "held silently - indistinguishable from a check that never ran"
 
 
 def test_teardown_still_fires_when_a_second_wan_exists(tmp_path):
@@ -526,7 +523,7 @@ def test_teardown_still_fires_when_a_second_wan_exists(tmp_path):
     hz = Harness(tmp_path)
     (tmp_path / "unreachable").touch()
     (tmp_path / "running").touch()
-    hz.set_sole_uplink(False)               # eth0 default route present
+    hz.set_sole_uplink(False)  # eth0 default route present
 
     for _ in range(2 * MAX_FAILS):
         hz.run()
@@ -546,7 +543,7 @@ def test_a_sole_uplink_trip_recovers_without_needing_internet(tmp_path):
     On 2026-08-17 the bond stayed dead until a human plugged a cable in.
     """
     hz = Harness(tmp_path)
-    (tmp_path / "unreachable").touch()      # no internet, and none is coming
+    (tmp_path / "unreachable").touch()  # no internet, and none is coming
     hz.set_sole_uplink(True)
     hz.set_tripped()
     hz.set_running(False)
@@ -557,8 +554,7 @@ def test_a_sole_uplink_trip_recovers_without_needing_internet(tmp_path):
 
     hz.run()
     assert hz.running, (
-        "never came back: recovery was gated on internet that only zippie could "
-        "have provided"
+        "never came back: recovery was gated on internet that only zippie could have provided"
     )
     assert not hz.tripped
     assert "INITD enable" in hz.log, "must re-enable; the trip disabled it"
@@ -593,7 +589,7 @@ def test_a_second_wan_returning_uses_the_ordinary_recovery(tmp_path):
     hz.set_sole_uplink(False)
     hz.set_tripped()
     hz.set_running(False)
-    hz.set_reachable(True)                  # a WAN came back
+    hz.set_reachable(True)  # a WAN came back
 
     hz.run()
     assert hz.sole_down == 0, "sole-uplink counter ran while a fallback existed"
@@ -610,8 +606,7 @@ def test_the_sole_uplink_constants_match_the_shell_script():
     `test_watchdog_rearm_window_matches_the_shell_script` already pins.
     """
     text = WATCHDOG.read_text()
-    for name, expected in (("MAX_FAILS", MAX_FAILS),
-                           ("SOLE_REARM_AFTER", SOLE_REARM_AFTER)):
+    for name, expected in (("MAX_FAILS", MAX_FAILS), ("SOLE_REARM_AFTER", SOLE_REARM_AFTER)):
         m = re.search(rf"^{name}=(\d+)", text, re.MULTILINE)
         assert m, f"{name} not found in watchdog.sh - did it get renamed?"
         assert int(m.group(1)) == expected, (

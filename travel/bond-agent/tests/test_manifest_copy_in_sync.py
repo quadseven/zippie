@@ -83,8 +83,9 @@ def test_shipped_set_covers_home_transport_import_graph():
         f = PKG_SRC / f"{mod}.py"
         if not f.is_file():
             continue
-        for m in re.findall(r"^\s*(?:from|import)\s+zippie\.(\w+)",
-                            f.read_text(encoding="utf-8"), re.M):
+        for m in re.findall(
+            r"^\s*(?:from|import)\s+zippie\.(\w+)", f.read_text(encoding="utf-8"), re.M
+        ):
             need.add(m)
 
     shipped = {n[:-3] for n in PKG_MODULES if n != "__init__.py"}
@@ -106,8 +107,7 @@ def _kustomization_pkg_files() -> set:
     import yaml
 
     doc = yaml.safe_load(KUSTOMIZATION.read_text(encoding="utf-8"))
-    gens = [g for g in doc.get("configMapGenerator") or []
-            if g.get("name") == PKG_CONFIGMAP]
+    gens = [g for g in doc.get("configMapGenerator") or [] if g.get("name") == PKG_CONFIGMAP]
     assert len(gens) == 1, (
         f"expected exactly one configMapGenerator named {PKG_CONFIGMAP} in "
         f"{KUSTOMIZATION}, found {len(gens)}"
@@ -120,7 +120,7 @@ def _kustomization_pkg_files() -> set:
             f"{PKG_CONFIGMAP} ships {path!r}, which is outside "
             f"{PKG_FILE_PREFIX} - this test no longer describes the generator"
         )
-        names.add(path[len(PKG_FILE_PREFIX):])
+        names.add(path[len(PKG_FILE_PREFIX) :])
     return names
 
 
@@ -144,14 +144,19 @@ def test_pkg_dir_is_exactly_what_is_shipped_and_guarded():
     guarded = set(PKG_MODULES)
 
     checks = [
-        (on_disk - shipped - guarded,
-         "in zippie-pkg/ but NEITHER shipped nor guarded (delete, or add to BOTH)"),
-        (shipped - guarded,
-         "shipped by kustomization.yaml but absent from PKG_MODULES (drifts unseen)"),
-        (guarded - shipped,
-         "in PKG_MODULES but absent from kustomization.yaml (pod ImportErrors)"),
-        ((shipped | guarded) - on_disk,
-         "listed in kustomization.yaml or PKG_MODULES but missing from zippie-pkg/"),
+        (
+            on_disk - shipped - guarded,
+            "in zippie-pkg/ but NEITHER shipped nor guarded (delete, or add to BOTH)",
+        ),
+        (
+            shipped - guarded,
+            "shipped by kustomization.yaml but absent from PKG_MODULES (drifts unseen)",
+        ),
+        (guarded - shipped, "in PKG_MODULES but absent from kustomization.yaml (pod ImportErrors)"),
+        (
+            (shipped | guarded) - on_disk,
+            "listed in kustomization.yaml or PKG_MODULES but missing from zippie-pkg/",
+        ),
     ]
     problems = [f"  {sorted(stray)}: {label}" for stray, label in checks if stray]
 

@@ -38,10 +38,20 @@ ROUTER_STATUS = {
     "primary": "starlink",
     "active_paths": ["starlink"],
     "paths": [
-        {"name": "starlink", "interface": "wlan0", "state": "up",
-         "effective_weight": 10, "in_bond": True},
-        {"name": "tmobile", "interface": "wlan1", "state": "degraded",
-         "effective_weight": 3, "in_bond": True},
+        {
+            "name": "starlink",
+            "interface": "wlan0",
+            "state": "up",
+            "effective_weight": 10,
+            "in_bond": True,
+        },
+        {
+            "name": "tmobile",
+            "interface": "wlan1",
+            "state": "degraded",
+            "effective_weight": 3,
+            "in_bond": True,
+        },
     ],
     "uptime_s": 1234.5,
 }
@@ -74,8 +84,9 @@ class _FakeRouterHandler(BaseHTTPRequestHandler):
             since = (parse_qs(parsed.query or "").get("since") or [None])[0]
             # Echoes the cursor back so a test can prove it survived the hop
             # rather than inferring it from a byte count.
-            return self._json({"since": since,
-                               "points": [{"t": 1, "v": 2}] * (1 if since else 40)})
+            return self._json(
+                {"since": since, "points": [{"t": 1, "v": 2}] * (1 if since else 40)}
+            )
         self.send_error(404)
 
     def _json(self, payload):
@@ -105,8 +116,11 @@ class _FakeRouter(ThreadingHTTPServer):
 
     @property
     def config(self) -> dict:
-        return {"name": "travel-router", "label": "the travel router (fake)",
-                "status_url": f"http://127.0.0.1:{self.server_address[1]}/api/status"}
+        return {
+            "name": "travel-router",
+            "label": "the travel router (fake)",
+            "status_url": f"http://127.0.0.1:{self.server_address[1]}/api/status",
+        }
 
 
 @pytest.fixture
@@ -127,8 +141,7 @@ def hub_at():
 
     def start(routers, reg=None):
         reg = reg if reg is not None else hub.Registry(routers)
-        srv = ThreadingHTTPServer(("127.0.0.1", 0),
-                                  hub.make_handler(reg, routers))
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), hub.make_handler(reg, routers))
         srv.daemon_threads = True
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         started["srv"] = srv
@@ -206,12 +219,16 @@ def test_the_poller_is_what_fills_the_cache(router, hub_at):
     """
     hostport, reg = hub_at([router.config])
     stop = threading.Event()
-    poller = threading.Thread(target=hub.poll_routers,
-                              args=(reg, [router.config], stop), daemon=True)
+    poller = threading.Thread(
+        target=hub.poll_routers, args=(reg, [router.config], stop), daemon=True
+    )
     poller.start()
     try:
         deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and reg.router_sample("travel-router")[0] is None:
+        while (
+            time.monotonic() < deadline
+            and reg.router_sample("travel-router")[0] is None
+        ):
             time.sleep(0.01)
     finally:
         stop.set()
@@ -225,7 +242,8 @@ def test_the_poller_is_what_fills_the_cache(router, hub_at):
         assert _json_body(body, headers)["primary"] == "tmobile"
 
     assert len(router.hits) == after_poll, (
-        f"three requests cost {len(router.hits) - after_poll} extra fetches")
+        f"three requests cost {len(router.hits) - after_poll} extra fetches"
+    )
 
 
 def test_the_answer_says_how_old_it_is(router, hub_at):
@@ -306,9 +324,12 @@ def test_a_misconfigured_router_is_told_apart_from_a_dead_one(router, hub_at):
     """
     hostport, reg = hub_at([router.config])
     reg.note_router(
-        "travel-router", None, reachable=False,
+        "travel-router",
+        None,
+        reachable=False,
         config_error="status_url is reserved for documentation and can "
-                     "never resolve: 'http://192.0.2.30:8787/api/status'")
+        "never resolve: 'http://192.0.2.30:8787/api/status'",
+    )
 
     status, headers, body = _get(hostport, "/api/status")
 
@@ -361,6 +382,7 @@ def test_a_status_that_is_not_an_object_is_a_failed_poll(router, hub_at, monkeyp
     move the failure from the poller (where it is a logged unreachable router)
     into the request path (where it is a stack trace per client).
     """
+
     class _NotAnObject:
         @staticmethod
         def load(_fp):
@@ -370,12 +392,16 @@ def test_a_status_that_is_not_an_object_is_a_failed_poll(router, hub_at, monkeyp
     reg.note_router("travel-router", ROUTER_STATUS)
     monkeypatch.setattr(hub.json, "load", _NotAnObject.load)
     stop = threading.Event()
-    poller = threading.Thread(target=hub.poll_routers,
-                              args=(reg, [router.config], stop), daemon=True)
+    poller = threading.Thread(
+        target=hub.poll_routers, args=(reg, [router.config], stop), daemon=True
+    )
     poller.start()
     try:
         deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and reg.router_sample("travel-router")[0] is not None:
+        while (
+            time.monotonic() < deadline
+            and reg.router_sample("travel-router")[0] is not None
+        ):
             time.sleep(0.01)
     finally:
         stop.set()
@@ -478,12 +504,14 @@ def test_the_routers_gzip_is_asked_for_and_passed_through(router, hub_at):
     hostport, reg = hub_at([router.config])
     reg.note_router("travel-router", ROUTER_STATUS)
 
-    status, headers, body = _get(hostport, "/api/series",
-                                 headers={"Accept-Encoding": "gzip, deflate"})
+    status, headers, body = _get(
+        hostport, "/api/series", headers={"Accept-Encoding": "gzip, deflate"}
+    )
 
     assert status == 200
     assert router.accept_encodings == ["gzip, deflate"], (
-        f"the router was offered {router.accept_encodings}")
+        f"the router was offered {router.accept_encodings}"
+    )
     lowered = {k.lower(): v for k, v in headers.items()}
     assert lowered.get("content-encoding") == "gzip"
     assert lowered.get("vary") == "Accept-Encoding"
@@ -535,5 +563,7 @@ def test_extra_headers_may_not_restate_the_framing_headers(name):
 
 
 def test_extra_headers_pass_anything_else_through():
-    assert hub.check_extra_headers({"Vary": "Accept-Encoding"}) == {"Vary": "Accept-Encoding"}
+    assert hub.check_extra_headers({"Vary": "Accept-Encoding"}) == {
+        "Vary": "Accept-Encoding"
+    }
     assert hub.check_extra_headers(None) == {}

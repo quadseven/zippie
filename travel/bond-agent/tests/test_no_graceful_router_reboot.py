@@ -21,6 +21,7 @@ It is a text assertion over shell scripts, which is unglamorous, but the failure
 mode is a router that does not come back in a house nobody is in, and the cost of
 finding out the usual way is a drive home.
 """
+
 from __future__ import annotations
 
 import re
@@ -60,7 +61,7 @@ def test_there_are_shell_scripts_to_check():
 def test_no_script_reboots_the_router_gracefully(script: Path):
     offenders = []
     for number, line in enumerate(script.read_text().splitlines(), start=1):
-        code = line.split("#", 1)[0]          # comments may say "reboot" freely
+        code = line.split("#", 1)[0]  # comments may say "reboot" freely
         if not code.strip():
             continue
         if _PHONE.search(code) or _SYSRQ.search(code):

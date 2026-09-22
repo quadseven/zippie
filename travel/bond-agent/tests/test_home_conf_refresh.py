@@ -135,8 +135,9 @@ def test_force_init_starts_the_peer_list_clean(home):
     _cmd(mod, ["add-client", "travel-pi"])
     assert _conf(home).count("[Peer]") == 3
 
-    _cmd(mod, ["init", "--public-endpoint", "home.zippie.test", "--ports", "51900,51901",
-               "--force"])
+    _cmd(
+        mod, ["init", "--public-endpoint", "home.zippie.test", "--ports", "51900,51901", "--force"]
+    )
 
     after = _meta(home)
     assert after["private_key"] != before["private_key"], "--force is a rekey"
@@ -193,7 +194,7 @@ def test_up_keeps_every_provisioned_peer_while_refreshing(home):
     _cmd(mod, ["add-client", "travel-pi"])
     _cmd(mod, ["add-path", "travel-pi", "ethernet", "--port", "51901"])
     before = _conf(home)
-    peers_before = before[before.index("# client:"):]
+    peers_before = before[before.index("# client:") :]
     assert before.count("[Peer]") == 4
 
     meta = _meta(home)
@@ -204,7 +205,7 @@ def test_up_keeps_every_provisioned_peer_while_refreshing(home):
     after = _conf(home)
     assert "ListenPort = 51999\n" in after, "the interface must actually have been refreshed"
     assert after.count("[Peer]") == 4
-    assert after[after.index("# client:"):] == peers_before, "peer section must be untouched"
+    assert after[after.index("# client:") :] == peers_before, "peer section must be untouched"
 
 
 def test_up_is_a_no_op_when_the_conf_already_matches(home, capsys):
@@ -243,8 +244,7 @@ def test_up_refuses_to_render_a_conf_without_the_key(home, capsys):
     assert "private_key" in err and "NOT refreshed" in err
 
 
-def test_up_says_the_refresh_lands_at_the_next_bring_up_when_wg_is_live(home, capsys,
-                                                                       monkeypatch):
+def test_up_says_the_refresh_lands_at_the_next_bring_up_when_wg_is_live(home, capsys, monkeypatch):
     """The interface survives a pod crash (hostNetwork), so `up` can find it
     already there. Rewriting the conf does NOT reconfigure a running interface,
     and this must never bounce it to make it so - that would drop the live bond

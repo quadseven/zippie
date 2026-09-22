@@ -26,7 +26,7 @@ class Clock:
 def test_an_announced_leg_appears():
     d = DynamicLegs(clock=Clock())
     d.announce(name="operator-iphone", host="10.99.0.151", port=51999, label="iPhone")
-    assert [l.name for l in d.live()] == ["operator-iphone"]
+    assert [leg.name for leg in d.live()] == ["operator-iphone"]
     assert d.live()[0].relay_endpoint == "10.99.0.151:51999"
 
 
@@ -40,8 +40,7 @@ def test_a_leg_that_stops_announcing_DISAPPEARS():
 
     c.t += 46
     assert d.live() == [], (
-        "a leg outlived its lease; this is how an address nothing answers "
-        "becomes permanent"
+        "a leg outlived its lease; this is how an address nothing answers becomes permanent"
     )
 
 
@@ -50,7 +49,7 @@ def test_renewing_keeps_it_alive():
     d = DynamicLegs(clock=c)
     for _ in range(10):
         d.announce(name="operator-iphone", host="10.99.0.151", port=51999, lease_s=45)
-        c.t += 20                      # announcing well inside the lease
+        c.t += 20  # announcing well inside the lease
         assert len(d.live()) == 1
 
 
@@ -87,8 +86,16 @@ def test_a_hostile_name_is_refused():
     """This name becomes a path key and a metric tag, and it arrives over the
     network."""
     d = DynamicLegs(clock=Clock())
-    for name in ["", "a", "../../etc", "Name With Caps", "has space",
-                 "x" * 40, "-leading", "trailing-"]:
+    for name in [
+        "",
+        "a",
+        "../../etc",
+        "Name With Caps",
+        "has space",
+        "x" * 40,
+        "-leading",
+        "trailing-",
+    ]:
         with pytest.raises(ValueError):
             d.announce(name=name, host="10.99.0.5", port=51999)
 
@@ -132,26 +139,41 @@ def test_expiry_happens_on_read_not_on_a_timer():
 
 # ------------------------------------------------- wired into the agent --
 
+
 def _agent(tmp_path, static_paths=None):
     from zippie.agent import BondAgent
     from zippie.config import parse_config
-    return BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path),
-                  "run_dir": str(tmp_path / "run")},
-        "home": {"endpoint": "h:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"datapath": "packet"},
-        "paths": static_paths if static_paths is not None
-                 else [{"name": "ethernet", "interface": "eth0"}],
-    }))
+
+    return BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path),
+                    "run_dir": str(tmp_path / "run"),
+                },
+                "home": {
+                    "endpoint": "h:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"datapath": "packet"},
+                "paths": static_paths
+                if static_paths is not None
+                else [{"name": "ethernet", "interface": "eth0"}],
+            }
+        )
+    )
 
 
 def test_an_announced_leg_joins_the_agents_paths(tmp_path):
     a = _agent(tmp_path)
     assert [p.name for p in a.paths] == ["ethernet"]
 
-    a.dynamic.announce(name="operator-iphone", host="10.99.0.151", port=51999,
-                       label="iPhone (Verizon)")
+    a.dynamic.announce(
+        name="operator-iphone", host="10.99.0.151", port=51999, label="iPhone (Verizon)"
+    )
     a.reconcile_dynamic_legs()
 
     names = [p.name for p in a.paths]
@@ -165,6 +187,7 @@ def test_an_expired_leg_is_REMOVED_not_left_as_a_down_row(tmp_path):
     """Leaving it is exactly the phantom this replaces. The config file already
     kept a permanent down row for a phone that had left, and that was the bug."""
     from zippie.dynamic import DynamicLegs
+
     c = Clock()
     a = _agent(tmp_path)
     a.dynamic = DynamicLegs(clock=c)
@@ -182,6 +205,7 @@ def test_an_expired_leg_is_REMOVED_not_left_as_a_down_row(tmp_path):
 
 def test_a_static_leg_is_never_touched_by_expiry(tmp_path):
     from zippie.dynamic import DynamicLegs
+
     c = Clock()
     a = _agent(tmp_path)
     a.dynamic = DynamicLegs(clock=c)
@@ -227,14 +251,17 @@ def _tick(agent):
     match_interfaces wants a live router.
     """
     import unittest.mock as mock
+
     # loop_once publishes status.json at the end; nothing creates run_dir until
     # the real agent starts.
     pathlib.Path(agent.config.run_dir).mkdir(parents=True, exist_ok=True)
-    with mock.patch.object(type(agent), "match_interfaces", lambda self: None), \
-         mock.patch.object(type(agent), "ensure_tunnels", lambda self: None), \
-         mock.patch.object(type(agent), "probe_paths", lambda self: None), \
-         mock.patch.object(type(agent), "sample_counters", lambda self: None), \
-         mock.patch.object(type(agent), "apply_policy", lambda self: None):
+    with (
+        mock.patch.object(type(agent), "match_interfaces", lambda self: None),
+        mock.patch.object(type(agent), "ensure_tunnels", lambda self: None),
+        mock.patch.object(type(agent), "probe_paths", lambda self: None),
+        mock.patch.object(type(agent), "sample_counters", lambda self: None),
+        mock.patch.object(type(agent), "apply_policy", lambda self: None),
+    ):
         agent.loop_once()
 
 
@@ -254,8 +281,7 @@ def test_a_rename_SURVIVES_the_next_announcement(tmp_path):
     reported once about this UI.
     """
     a = _agent(tmp_path)
-    a.dynamic.announce(name="iphone-3f9a", host="10.99.0.151", port=51999,
-                       label="iPhone")
+    a.dynamic.announce(name="iphone-3f9a", host="10.99.0.151", port=51999, label="iPhone")
     a.reconcile_dynamic_legs()
 
     _rename(a, "iphone-3f9a", "Operator Verizon")
@@ -267,8 +293,7 @@ def test_a_rename_SURVIVES_the_next_announcement(tmp_path):
     # hand here would hardcode the very ordering under test, and the test
     # would pass with the bug in place.
     for _ in range(3):
-        a.dynamic.announce(name="iphone-3f9a", host="10.99.0.151", port=51999,
-                           label="iPhone")
+        a.dynamic.announce(name="iphone-3f9a", host="10.99.0.151", port=51999, label="iPhone")
         _tick(a)
         assert leg.config.label == "Operator Verizon", (
             "the announcement overwrote the operator's rename; renaming a leg "
@@ -283,8 +308,7 @@ def test_a_rename_applies_to_a_leg_announced_for_the_FIRST_time(tmp_path):
     a = _agent(tmp_path)
     a._leg_store.update("iphone-3f9a", {"label": "Operator Verizon"})
 
-    a.dynamic.announce(name="iphone-3f9a", host="10.99.0.151", port=51999,
-                       label="iPhone")
+    a.dynamic.announce(name="iphone-3f9a", host="10.99.0.151", port=51999, label="iPhone")
     _tick(a)
 
     leg = next(p for p in a.paths if p.name == "iphone-3f9a")
@@ -296,14 +320,12 @@ def test_clearing_a_rename_gives_back_the_ANNOUNCED_label(tmp_path):
     What reconcile writes each tick is their baseline, so clearing an override
     must fall back to the name the phone sends, not strand the old override."""
     a = _agent(tmp_path)
-    a.dynamic.announce(name="iphone-3f9a", host="10.99.0.151", port=51999,
-                       label="iPhone")
+    a.dynamic.announce(name="iphone-3f9a", host="10.99.0.151", port=51999, label="iPhone")
     a.reconcile_dynamic_legs()
     _rename(a, "iphone-3f9a", "Operator Verizon")
 
     a.set_leg_fields("iphone-3f9a", {"label": None})
-    a.dynamic.announce(name="iphone-3f9a", host="10.99.0.151", port=51999,
-                       label="iPhone")
+    a.dynamic.announce(name="iphone-3f9a", host="10.99.0.151", port=51999, label="iPhone")
     _tick(a)
 
     leg = next(p for p in a.paths if p.name == "iphone-3f9a")

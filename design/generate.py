@@ -9,6 +9,7 @@ by hand - it would have to be introduced in tokens.json, once, for all three.
 Each output carries a DO NOT EDIT header naming this script, so the next
 person to reach for the generated file is told where to go instead.
 """
+
 from __future__ import annotations
 
 import json
@@ -22,21 +23,31 @@ BANNER = "GENERATED FROM design/tokens.json - DO NOT EDIT.\nRun design/generate.
 
 def hex_to_rgb(h: str) -> tuple[float, float, float]:
     h = h.lstrip("#")
-    return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    return tuple(int(h[i : i + 2], 16) / 255 for i in (0, 2, 4))
 
 
 def swift() -> str:
-    out = [f"// {l}" for l in BANNER.split("\n")]
-    out += ["", "import SwiftUI", "", "/// The zippie visual language, shared with the hub and the Android app.",
-            "enum Tok {", "    enum Color_ {}", "}", ""]
+    out = [f"// {line}" for line in BANNER.split("\n")]
+    out += [
+        "",
+        "import SwiftUI",
+        "",
+        "/// The zippie visual language, shared with the hub and the Android app.",
+        "enum Tok {",
+        "    enum Color_ {}",
+        "}",
+        "",
+    ]
     out += ["extension Ink {"]
     for name, v in TOKENS["color"].items():
         lr, lg, lb = hex_to_rgb(v["light"])
         dr, dg, db = hex_to_rgb(v["dark"])
-        out += [f"    /// {v['use']}",
-                f"    static let gen_{name} = Color(",
-                f"        light: .init(red: {lr:.4f}, green: {lg:.4f}, blue: {lb:.4f}),",
-                f"        dark: .init(red: {dr:.4f}, green: {dg:.4f}, blue: {db:.4f}))"]
+        out += [
+            f"    /// {v['use']}",
+            f"    static let gen_{name} = Color(",
+            f"        light: .init(red: {lr:.4f}, green: {lg:.4f}, blue: {lb:.4f}),",
+            f"        dark: .init(red: {dr:.4f}, green: {dg:.4f}, blue: {db:.4f}))",
+        ]
     out += ["}", "", "enum StateWord {"]
     for k, v in TOKENS["state"].items():
         if k.startswith("$"):
@@ -47,15 +58,22 @@ def swift() -> str:
 
 
 def kotlin() -> str:
-    out = [f"// {l}" for l in BANNER.split("\n")]
-    out += ["", "package app.zippie.companion.design", "",
-            "import androidx.compose.ui.graphics.Color", "",
-            "/** The zippie visual language, shared with the hub and the iOS app. */",
-            "object Tok {"]
+    out = [f"// {line}" for line in BANNER.split("\n")]
+    out += [
+        "",
+        "package app.zippie.companion.design",
+        "",
+        "import androidx.compose.ui.graphics.Color",
+        "",
+        "/** The zippie visual language, shared with the hub and the iOS app. */",
+        "object Tok {",
+    ]
     for name, v in TOKENS["color"].items():
-        out += [f"    /** {v['use']} */",
-                f'    val {name}Light = Color(0xFF{v["light"].lstrip("#")})',
-                f'    val {name}Dark = Color(0xFF{v["dark"].lstrip("#")})']
+        out += [
+            f"    /** {v['use']} */",
+            f"    val {name}Light = Color(0xFF{v['light'].lstrip('#')})",
+            f"    val {name}Dark = Color(0xFF{v['dark'].lstrip('#')})",
+        ]
     for name, v in TOKENS["space"].items():
         if name.startswith("$"):
             continue
@@ -71,7 +89,7 @@ def kotlin() -> str:
 
 
 def css() -> str:
-    out = ["/*", *[f"  {l}" for l in BANNER.split("\n")], "*/", "", ":root {"]
+    out = ["/*", *[f"  {line}" for line in BANNER.split("\n")], "*/", "", ":root {"]
     for name, v in TOKENS["color"].items():
         out.append(f"  /* {v['use']} */")
         out.append(f"  --c-{name}: {v['light']};")

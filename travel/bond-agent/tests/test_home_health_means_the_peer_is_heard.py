@@ -15,6 +15,7 @@ So `healthy` is judged on receive age, never on client idle time, and
 
 Fixtures mirror tests/test_keepalive_loss_pct.py exactly.
 """
+
 from __future__ import annotations
 
 from zippie.datapath import FLAG_KEEPALIVE, FLAG_KEEPALIVE_REPLY, Frame
@@ -36,48 +37,73 @@ class FakeSocket:
             raise BlockingIOError()
         return self._inbox.pop(0)
 
-    def setblocking(self, _): pass
-    def setsockopt(self, *_a): pass
-    def close(self): pass
-    def fileno(self): return -1
-    def getsockname(self): return self.bind or ("127.0.0.1", 0)
+    def setblocking(self, _):
+        pass
+
+    def setsockopt(self, *_a):
+        pass
+
+    def close(self):
+        pass
+
+    def fileno(self):
+        return -1
+
+    def getsockname(self):
+        return self.bind or ("127.0.0.1", 0)
 
 
 class _Key:
-    def __init__(self, fileobj, data): self.fileobj, self.data = fileobj, data
+    def __init__(self, fileobj, data):
+        self.fileobj, self.data = fileobj, data
 
 
 class _FakeSelector:
-    def __init__(self): self.registered = {}
-    def register(self, fileobj, _events, data): self.registered[id(fileobj)] = (fileobj, data)
-    def unregister(self, fileobj): self.registered.pop(id(fileobj), None)
+    def __init__(self):
+        self.registered = {}
+
+    def register(self, fileobj, _events, data):
+        self.registered[id(fileobj)] = (fileobj, data)
+
+    def unregister(self, fileobj):
+        self.registered.pop(id(fileobj), None)
+
     def select(self, _timeout=0):
-        return [(_Key(f, d), 1) for f, d in list(self.registered.values())
-                if getattr(f, "_inbox", None)]
-    def close(self): pass
+        return [
+            (_Key(f, d), 1) for f, d in list(self.registered.values()) if getattr(f, "_inbox", None)
+        ]
+
+    def close(self):
+        pass
 
 
 class _Clock:
-    def __init__(self): self.t = 100.0
-    def __call__(self): return self.t
-    def advance(self, s): self.t += s
+    def __init__(self):
+        self.t = 100.0
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, s):
+        self.t += s
 
 
 def _home_with_one_leg():
     clock = _Clock()
-    t = Transport(("10.0.0.9", 51900), socket_factory=FakeSocket,
-                  selector_factory=_FakeSelector, _clock=clock)
-    t.add_link(LinkEndpoint(path_id=0, name="wan", device=None,
-                            remote=("10.0.0.9", 51900)))
+    t = Transport(
+        ("10.0.0.9", 51900), socket_factory=FakeSocket, selector_factory=_FakeSelector, _clock=clock
+    )
+    t.add_link(LinkEndpoint(path_id=0, name="wan", device=None, remote=("10.0.0.9", 51900)))
     return t, clock
 
 
 def _peer_probe(t, path_id=0):
     """One keepalive PROBE from the other end - what an idle travel router
     sends every couple of seconds when nobody is browsing."""
-    t._on_link_data(Frame(seq=0, path_id=path_id, payload=b"",
-                          flags=FLAG_KEEPALIVE, epoch=t._epoch).pack(),
-                    path_id)
+    t._on_link_data(
+        Frame(seq=0, path_id=path_id, payload=b"", flags=FLAG_KEEPALIVE, epoch=t._epoch).pack(),
+        path_id,
+    )
 
 
 def _stats(t):
@@ -123,7 +149,7 @@ def test_nobody_browsing_is_still_healthy_while_probes_arrive():
     """client_idle_s climbs for hours on a router full of sleeping phones.
     That is not a fault, and the probes that keep arriving prove it."""
     t, clock = _home_with_one_leg()
-    for _ in range(3600):                       # an hour of idle at 2 s probes
+    for _ in range(3600):  # an hour of idle at 2 s probes
         clock.advance(2.0)
         _peer_probe(t)
     healthy, silent, idle = _stats(t)
@@ -139,7 +165,7 @@ def test_client_activity_alone_does_not_hide_a_silent_peer():
     t, clock = _home_with_one_leg()
     _peer_probe(t)
     clock.advance(PEER_SILENT_S + 1)
-    t._last_client_payload_at = clock()         # something was just sent down
+    t._last_client_payload_at = clock()  # something was just sent down
     healthy, silent, idle = _stats(t)
     assert idle == 0.0
     assert healthy == 0
@@ -153,8 +179,9 @@ def test_peer_silent_counts_from_construction_when_never_heard():
     """A home end that has never heard its router reports how long it has
     waited, not nothing: a missing field alerts nobody."""
     clock = _Clock()
-    t = Transport(("10.0.0.9", 51900), socket_factory=FakeSocket,
-                  selector_factory=_FakeSelector, _clock=clock)
+    t = Transport(
+        ("10.0.0.9", 51900), socket_factory=FakeSocket, selector_factory=_FakeSelector, _clock=clock
+    )
     clock.advance(45.0)
     assert t.stats_dict()["peer_silent_s"] == 45.0
     assert t.stats_dict()["healthy"] == 0
@@ -175,8 +202,7 @@ def test_only_the_legs_heard_from_count():
     """Two legs, one peer reachable on just one of them: healthy is 1, and
     peer_silent_s follows the leg that IS being heard."""
     t, clock = _home_with_one_leg()
-    t.add_link(LinkEndpoint(path_id=1, name="lte", device=None,
-                            remote=("10.0.0.9", 51901)))
+    t.add_link(LinkEndpoint(path_id=1, name="lte", device=None, remote=("10.0.0.9", 51901)))
     for _ in range(40):
         clock.advance(2.0)
         _peer_probe(t, path_id=1)
@@ -192,7 +218,14 @@ def test_a_reply_counts_as_being_heard_too():
     t, clock = _home_with_one_leg()
     clock.advance(PEER_SILENT_S + 1)
     assert _stats(t)[0] == 0
-    t._on_link_data(Frame(seq=0, path_id=0, payload=b"",
-                          flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
-                          epoch=t._epoch).pack(), 0)
+    t._on_link_data(
+        Frame(
+            seq=0,
+            path_id=0,
+            payload=b"",
+            flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
+            epoch=t._epoch,
+        ).pack(),
+        0,
+    )
     assert _stats(t)[0] == 1

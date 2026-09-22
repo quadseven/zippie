@@ -105,8 +105,7 @@ def build_home_transport(
         # unreadable would look exactly like a working rollout while the
         # travel router happily signed frames nobody was checking.
         "auth_level": cfg.auth_level,
-        "identity": build_identity(
-            cfg.auth_level, cfg.auth_key_file, cfg.auth_peer_id),
+        "identity": build_identity(cfg.auth_level, cfg.auth_key_file, cfg.auth_peer_id),
     }
     if socket_factory is not None:
         kwargs["socket_factory"] = socket_factory
@@ -129,7 +128,8 @@ def build_home_transport(
     )
     log.info(
         "home transport built: listen %s -> wg server %s (roam on, one link)",
-        cfg.listen_addr, cfg.wg_server,
+        cfg.listen_addr,
+        cfg.wg_server,
     )
     return t
 
@@ -178,29 +178,54 @@ def main(argv: list[str] | None = None) -> int:
     import logging
 
     ap = argparse.ArgumentParser(prog="zippie.home_transport")
-    ap.add_argument("--listen-port", type=int, default=DEFAULT_LISTEN_PORT,
-                    help="port the transport binds; the REDIRECT target, "
-                         "NOT the public port")
-    ap.add_argument("--local-port", type=int, default=DEFAULT_LOCAL[1],
-                    help="loopback socket facing the real wg server")
-    ap.add_argument("--wg-server-port", type=int, default=DEFAULT_WG_SERVER[1],
-                    help="where decoded datagrams are delivered")
-    ap.add_argument("--wan-device", default=None,
-                    help="SO_BINDTODEVICE target for the listening link")
+    ap.add_argument(
+        "--listen-port",
+        type=int,
+        default=DEFAULT_LISTEN_PORT,
+        help="port the transport binds; the REDIRECT target, NOT the public port",
+    )
+    ap.add_argument(
+        "--local-port",
+        type=int,
+        default=DEFAULT_LOCAL[1],
+        help="loopback socket facing the real wg server",
+    )
+    ap.add_argument(
+        "--wg-server-port",
+        type=int,
+        default=DEFAULT_WG_SERVER[1],
+        help="where decoded datagrams are delivered",
+    )
+    ap.add_argument(
+        "--wan-device", default=None, help="SO_BINDTODEVICE target for the listening link"
+    )
     ap.add_argument("--reorder-deadline-ms", type=int, default=250)
-    ap.add_argument("--max-reorder-deadline-ms", type=int, default=None,
-                    help="ceiling adaptive recovery may widen "
-                         "--reorder-deadline-ms to (#62); default computes "
-                         "one from --reorder-deadline-ms itself")
-    ap.add_argument("--auth-level", default="off",
-                    help="header MAC rung: off, observe, sign or require. "
-                         "Move ONE rung at a time and home before the router; "
-                         "see zippie/auth.py")
-    ap.add_argument("--auth-key-file", default="",
-                    help="file holding the shared bond secret, mode 0600. "
-                         "Required above --auth-level=off")
-    ap.add_argument("--auth-peer-id", type=int, default=1,
-                    help="bond id on the wire; must match the travel router")
+    ap.add_argument(
+        "--max-reorder-deadline-ms",
+        type=int,
+        default=None,
+        help="ceiling adaptive recovery may widen "
+        "--reorder-deadline-ms to (#62); default computes "
+        "one from --reorder-deadline-ms itself",
+    )
+    ap.add_argument(
+        "--auth-level",
+        default="off",
+        help="header MAC rung: off, observe, sign or require. "
+        "Move ONE rung at a time and home before the router; "
+        "see zippie/auth.py",
+    )
+    ap.add_argument(
+        "--auth-key-file",
+        default="",
+        help="file holding the shared bond secret, mode 0600. Required above --auth-level=off",
+    )
+    ap.add_argument(
+        "--auth-peer-id",
+        type=int,
+        default=1,
+        help="bond id on the wire; must match the travel router",
+    )
     ap.add_argument("--log-level", default="INFO")
     args = ap.parse_args(argv)
 
@@ -224,7 +249,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     log.info(
         "home transport starting: bind %s (redirect target), wg server %s",
-        cfg.listen_addr, cfg.wg_server,
+        cfg.listen_addr,
+        cfg.wg_server,
     )
     run(cfg)
     return 0

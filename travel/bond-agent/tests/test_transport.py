@@ -40,11 +40,20 @@ class FakeSocket:
     def deliver(self, data, addr=("10.0.0.9", 51900)):
         self._inbox.append((data, addr))
 
-    def setblocking(self, _): pass
-    def setsockopt(self, *_a): pass
-    def close(self): self.closed = True
-    def fileno(self): return -1
-    def getsockname(self): return self.bind or ("127.0.0.1", 0)
+    def setblocking(self, _):
+        pass
+
+    def setsockopt(self, *_a):
+        pass
+
+    def close(self):
+        self.closed = True
+
+    def fileno(self):
+        return -1
+
+    def getsockname(self):
+        return self.bind or ("127.0.0.1", 0)
 
 
 def _factory(created):
@@ -52,33 +61,48 @@ def _factory(created):
         s = FakeSocket(device, bind)
         created.append(s)
         return s
+
     return make
 
 
 class _Clock:
-    def __init__(self): self.t = 100.0
-    def __call__(self): return self.t
-    def advance(self, s): self.t += s
+    def __init__(self):
+        self.t = 100.0
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, s):
+        self.t += s
 
 
 def _transport(created=None, **kw):
     created = created if created is not None else []
-    t = Transport(("127.0.0.1", 51820), socket_factory=_factory(created),
-                  selector_factory=_FakeSelector, **kw)
+    t = Transport(
+        ("127.0.0.1", 51820), socket_factory=_factory(created), selector_factory=_FakeSelector, **kw
+    )
     return t, created
 
 
 class _FakeSelector:
-    def __init__(self): self.registered = {}
-    def register(self, fileobj, _events, data): self.registered[id(fileobj)] = (fileobj, data)
-    def unregister(self, fileobj): self.registered.pop(id(fileobj), None)
+    def __init__(self):
+        self.registered = {}
+
+    def register(self, fileobj, _events, data):
+        self.registered[id(fileobj)] = (fileobj, data)
+
+    def unregister(self, fileobj):
+        self.registered.pop(id(fileobj), None)
+
     def select(self, _timeout=0):
         out = []
         for fileobj, data in list(self.registered.values()):
             if getattr(fileobj, "_inbox", None):
                 out.append((_Key(fileobj, data), 1))
         return out
-    def close(self): self.registered.clear()
+
+    def close(self):
+        self.registered.clear()
 
 
 class _Key:
@@ -100,12 +124,13 @@ class TestLinkMembership:
 
     def test_a_link_that_cannot_bind_is_skipped_not_fatal(self):
         """An unplugged dongle must not stop the bond from running."""
+
         def boom(device=None, bind=None):
             if device == "wwan0":
                 raise OSError(19, "No such device")
             return FakeSocket(device, bind)
-        t = Transport(("127.0.0.1", 51820), socket_factory=boom,
-                      selector_factory=_FakeSelector)
+
+        t = Transport(("127.0.0.1", 51820), socket_factory=boom, selector_factory=_FakeSelector)
         t.add_link(LinkEndpoint(0, "lte", "wwan0", ("10.0.0.9", 51901)))
         assert len(t.scheduler.healthy_paths) == 0
         t.close()
@@ -181,7 +206,7 @@ class TestSending:
         t, created = _transport()
         t.add_link(LinkEndpoint(0, "dying", None, ("10.0.0.9", 1)))
         t.add_link(LinkEndpoint(1, "good", None, ("10.0.0.9", 2)))
-        created[1].fail = True                        # index 0 is the local socket
+        created[1].fail = True  # index 0 is the local socket
 
         sent = t.send_payload(b"voice")
         assert sent == 1, "the healthy link must still carry the packet"
@@ -242,7 +267,7 @@ class TestRetransmit:
         t, _ = _transport()
         t.add_link(LinkEndpoint(0, "a", None, ("10.0.0.9", 1)))
         t._on_link_data(Frame(seq=999999, path_id=0, payload=b"", flags=FLAG_NACK).pack())
-        assert t.stats.nacks_received == 1     # counted, not crashed
+        assert t.stats.nacks_received == 1  # counted, not crashed
 
 
 class TestLoopResilience:
@@ -259,7 +284,7 @@ class TestLoopResilience:
             t.stop()
 
         t.run_once = explode
-        t.run()                    # must return rather than raise
+        t.run()  # must return rather than raise
         assert calls["n"] == 2, "the loop must continue past the exception"
 
     def test_close_releases_every_socket(self):
@@ -364,8 +389,9 @@ class TestPerLinkKeepalives:
         exchange between two routers over a metered LTE link."""
         t, created = _transport()
         socks = self._ka(t, created)
-        rep = Frame(seq=7, path_id=0, payload=b"",
-                    flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY).pack()
+        rep = Frame(
+            seq=7, path_id=0, payload=b"", flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY
+        ).pack()
         socks[0].deliver(rep)
         t.run_once()
         assert not socks[0].sent, "reply triggered a reply"
@@ -376,8 +402,14 @@ class TestPerLinkKeepalives:
         socks = self._ka(t, created)
         t.send_keepalives()
         clock.advance(0.042)
-        socks[1].deliver(Frame(seq=self._probe(socks[1]), path_id=1, payload=b"",
-                               flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY).pack())
+        socks[1].deliver(
+            Frame(
+                seq=self._probe(socks[1]),
+                path_id=1,
+                payload=b"",
+                flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
+            ).pack()
+        )
         t.run_once()
         assert t.link_rtt_ms(1) == pytest.approx(42.0, abs=0.5)
         assert t.link_rtt_ms(0) is None, "unanswered leg reported an RTT"
@@ -399,8 +431,11 @@ class TestPerLinkKeepalives:
         clock.advance(1.0)
         t.send_keepalives()
         clock.advance(1.0)
-        socks[0].deliver(Frame(seq=first, path_id=0, payload=b"",
-                               flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY).pack())
+        socks[0].deliver(
+            Frame(
+                seq=first, path_id=0, payload=b"", flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY
+            ).pack()
+        )
         t.run_once()
         assert t.link_rtt_ms(0) == pytest.approx(2000.0, abs=1.0)
 
@@ -429,8 +464,9 @@ class TestPerLinkKeepalives:
         socks = self._ka(t, created)
         local = next(s for s in created if not s.device)
         before = len(local.sent)
-        socks[0].deliver(Frame(seq=0, path_id=0, payload=b"",
-                               flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY).pack())
+        socks[0].deliver(
+            Frame(seq=0, path_id=0, payload=b"", flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY).pack()
+        )
         t.run_once()
         assert len(local.sent) == before, "a keepalive was delivered as tunnel data"
 
@@ -441,8 +477,14 @@ class TestPerLinkKeepalives:
         t, created = _transport(_clock=clock)
         socks = self._ka(t, created, count=1)
         t.send_keepalives()
-        socks[0].deliver(Frame(seq=self._probe(socks[0]), path_id=0, payload=b"",
-                               flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY).pack())
+        socks[0].deliver(
+            Frame(
+                seq=self._probe(socks[0]),
+                path_id=0,
+                payload=b"",
+                flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
+            ).pack()
+        )
         t.run_once()
         assert t.link_rtt_ms(0) is not None
         t.remove_link(0)
@@ -462,12 +504,14 @@ class TestPerLinkKeepalives:
                 t.send_keepalives()
                 for path_id, sock in enumerate(socks):
                     request = Frame.unpack(sock.sent[-1][0])
-                    sock.deliver(Frame(
-                        seq=request.seq,
-                        path_id=path_id,
-                        payload=b"",
-                        flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
-                    ).pack())
+                    sock.deliver(
+                        Frame(
+                            seq=request.seq,
+                            path_id=path_id,
+                            payload=b"",
+                            flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
+                        ).pack()
+                    )
                 t.run_once()
             if second % 25 == 0:
                 keepalive = b"\x04\x00\x00\x00" + bytes(28)
@@ -497,8 +541,9 @@ class TestReceivingRestoresHealth:
 
     def _wired(self):
         t, created = _transport(roam=True, wg_peer=("127.0.0.1", 51900))
-        t.add_link(LinkEndpoint(0, "wan", None, ("10.0.0.9", 51902), 100,
-                                listen=("0.0.0.0", 51931)))
+        t.add_link(
+            LinkEndpoint(0, "wan", None, ("10.0.0.9", 51902), 100, listen=("0.0.0.0", 51931))
+        )
         return t, next(s for s in created if s.bind == ("0.0.0.0", 51931))
 
     def test_a_send_error_demotes_the_link(self):

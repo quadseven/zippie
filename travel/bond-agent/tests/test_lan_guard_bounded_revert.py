@@ -69,11 +69,7 @@ def rig(tmp_path):
         '[ "$v" = ok ] && { echo "healthy: stub"; exit 0; }\n'
         'echo "UNHEALTHY: stub"; exit 1\n'
     )
-    snap.write_text(
-        "#!/bin/sh\n"
-        f'echo "$1" >> "{calls}"\n'
-        'echo "restored 5 files; stub"\n'
-    )
+    snap.write_text(f'#!/bin/sh\necho "$1" >> "{calls}"\necho "restored 5 files; stub"\n')
     for f in (health, snap):
         f.chmod(0o755)
 
@@ -126,12 +122,9 @@ def rig(tmp_path):
 
     def run(n: int = 1, healthy: bool = False, carrying=True):
         verdict.write_text("ok" if healthy else "fail")
-        carrying_state.write_text(
-            "dead" if carrying == "dead" else ("yes" if carrying else "no")
-        )
+        carrying_state.write_text("dead" if carrying == "dead" else ("yes" if carrying else "no"))
         for _ in range(n):
-            subprocess.run(["sh", str(guard)], check=False, capture_output=True,
-                           env=env)
+            subprocess.run(["sh", str(guard)], check=False, capture_output=True, env=env)
 
     def reverts() -> int:
         return len(calls.read_text().split()) if calls.exists() else 0
@@ -293,9 +286,7 @@ def test_the_predicate_is_shared_not_copied():
     """
     for script in (SCRIPT, SCRIPT.parent / "watchdog.sh"):
         body = script.read_text()
-        assert "any_leg_carrying() {" not in body.replace(
-            "any_leg_carrying() { return 1; }", ""
-        ), (
+        assert "any_leg_carrying() {" not in body.replace("any_leg_carrying() { return 1; }", ""), (
             f"{script.name} defines any_leg_carrying itself instead of sourcing "
             "carrying.sh - that is how the two guards drifted apart before"
         )
@@ -311,9 +302,8 @@ def test_a_carrying_bond_with_a_dead_lan_still_reverts(rig):
     """
     run, reverts, _log = rig
     needed = _constant("FAILS_NEEDED")
-    run(needed * 4, carrying=False)     # hold first, so the reset applies
+    run(needed * 4, carrying=False)  # hold first, so the reset applies
     run(needed, carrying=True)
     assert reverts() == 1, (
-        "a carrying bond with a dead LAN did not revert - the hold disarmed "
-        "the guard entirely"
+        "a carrying bond with a dead LAN did not revert - the hold disarmed the guard entirely"
     )

@@ -204,9 +204,14 @@ class NackTracker:
     # down from 101,000 to 1,800 payloads/s (#22).
     MAX_PENDING = 1024
 
-    def __init__(self, initial_delay_ms: int = 60, *,
-                 max_delay_ms: int | None = None,
-                 max_pending: int = MAX_PENDING, _clock=time.monotonic):
+    def __init__(
+        self,
+        initial_delay_ms: int = 60,
+        *,
+        max_delay_ms: int | None = None,
+        max_pending: int = MAX_PENDING,
+        _clock=time.monotonic,
+    ):
         self.initial_delay_s = initial_delay_ms / 1000.0
         # LONGEST a gap may be held waiting for a leg to prove it moved past.
         # None collapses it onto the floor, which is exactly the pre-#108
@@ -215,8 +220,11 @@ class NackTracker:
         # real value - see the wiring test in
         # tests/test_nack_waits_for_leg_progress.py, because a gate that is
         # only ever exercised by its own unit tests is not a gate.
-        self.max_delay_s = (self.initial_delay_s if max_delay_ms is None
-                            else max(self.initial_delay_s, max_delay_ms / 1000.0))
+        self.max_delay_s = (
+            self.initial_delay_s
+            if max_delay_ms is None
+            else max(self.initial_delay_s, max_delay_ms / 1000.0)
+        )
         self.max_pending = max_pending
         self._clock = _clock
         self._pending: dict[int, float] = {}
@@ -252,8 +260,7 @@ class NackTracker:
                 # leg is dumping traffic faster than the bond can ask for it
                 # back. The scan is bounded by the caller's own gap cap, so
                 # counting exactly costs nothing worth saving.
-                self.stats.dropped += sum(1 for s in missing_seqs[i:]
-                                          if s not in pending)
+                self.stats.dropped += sum(1 for s in missing_seqs[i:] if s not in pending)
                 return
             pending[seq] = now
             self._order.append(seq)
@@ -450,8 +457,12 @@ class RetransmitStats:
     refused: int = 0
 
     def as_dict(self) -> dict[str, int]:
-        return {"resent": self.resent, "expired": self.expired,
-                "unanswerable": self.unanswerable, "refused": self.refused}
+        return {
+            "resent": self.resent,
+            "expired": self.expired,
+            "unanswerable": self.unanswerable,
+            "refused": self.refused,
+        }
 
 
 @dataclass
@@ -478,6 +489,10 @@ class NackStats:
     capped: int = 0
 
     def as_dict(self) -> dict[str, int]:
-        return {"nacks_sent": self.nacks_sent, "abandoned": self.abandoned,
-                "dropped": self.dropped, "reordered": self.reordered,
-                "capped": self.capped}
+        return {
+            "nacks_sent": self.nacks_sent,
+            "abandoned": self.abandoned,
+            "dropped": self.dropped,
+            "reordered": self.reordered,
+            "capped": self.capped,
+        }

@@ -67,9 +67,7 @@ def _write_bundle(path, doc) -> str:
 
 
 def _import(bundle_path: str, dest_dir, *, force: bool = False) -> int:
-    return cli.cmd_import(
-        argparse.Namespace(bundle=bundle_path, dest=str(dest_dir), force=force)
-    )
+    return cli.cmd_import(argparse.Namespace(bundle=bundle_path, dest=str(dest_dir), force=force))
 
 
 class TestReimportIsIdempotent:
@@ -159,7 +157,7 @@ class TestHandEditsArePreserved:
         """
         bundle_file = dest / "client.json"
         toml_path = dest / "zippie.toml"
-        toml_path.write_text("[home]\nendpoint = \"stale\"\n", encoding="utf-8")
+        toml_path.write_text('[home]\nendpoint = "stale"\n', encoding="utf-8")
 
         _import(_write_bundle(bundle_file, _bundle()), dest)
 

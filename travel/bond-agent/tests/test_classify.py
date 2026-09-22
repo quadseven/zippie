@@ -18,21 +18,27 @@ def _c(**kw):
 
 
 class TestSizeSplit:
-    @pytest.mark.parametrize("size,label", [
-        (40, "bare TCP ACK"),
-        (72, "DNS query"),
-        (100, "SSH keystroke"),
-        (200, "G.711 voice frame"),
-    ])
+    @pytest.mark.parametrize(
+        "size,label",
+        [
+            (40, "bare TCP ACK"),
+            (72, "DNS query"),
+            (100, "SSH keystroke"),
+            (200, "G.711 voice frame"),
+        ],
+    )
     def test_interactive_traffic_is_duplicated(self, size, label):
         """These are what a dropped packet is actually FELT on -- and they are
         cheap enough that duplicating them costs almost nothing."""
         assert _c().mode_for(size, paths_available=2) is SendMode.DUPLICATE, label
 
-    @pytest.mark.parametrize("size,label", [
-        (900, "video payload"),
-        (1420, "full-MTU bulk transfer"),
-    ])
+    @pytest.mark.parametrize(
+        "size,label",
+        [
+            (900, "video payload"),
+            (1420, "full-MTU bulk transfer"),
+        ],
+    )
     def test_bulk_traffic_is_sprayed_not_duplicated(self, size, label):
         """Duplicating bulk would halve usable bandwidth to protect data TCP
         would have retransmitted anyway."""
@@ -91,8 +97,8 @@ class TestStats:
         a misconfigured threshold is otherwise invisible until the data cap."""
         c = _c()
         for _ in range(9):
-            c.mode_for(1400, paths_available=2)   # bulk -> spray
-        c.mode_for(40, paths_available=2)         # ack  -> duplicate
+            c.mode_for(1400, paths_available=2)  # bulk -> spray
+        c.mode_for(40, paths_available=2)  # ack  -> duplicate
         s = c.stats()
         assert s["duplicate"] == 1 and s["spray"] == 9
         assert s["duplicate_pct"] == 10

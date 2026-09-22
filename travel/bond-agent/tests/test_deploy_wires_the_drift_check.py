@@ -14,6 +14,7 @@ never deployed, and the only thing that could have caught that is the checker.
 These are text assertions over two shell scripts, which is unglamorous, but the
 failure mode is silence and silence has no other test.
 """
+
 from __future__ import annotations
 
 import re
@@ -45,7 +46,7 @@ def _shell_default(text: str, var: str) -> str:
 
 def _shell_assignment(text: str, var: str) -> str:
     """A plain `VAR=value` assignment, as written in the script."""
-    match = re.search(rf'^{var}=(\S+)$', text, re.MULTILINE)
+    match = re.search(rf"^{var}=(\S+)$", text, re.MULTILINE)
     assert match, f"{var} is not assigned at the top level"
     return match.group(1).strip('"')
 
@@ -103,9 +104,7 @@ def test_both_scripts_agree_where_the_package_lives(deploy, drift):
 def test_both_scripts_agree_where_the_config_lives(deploy, drift):
     """Same trap, one file over. #228 made the config a deployed artifact and
     the drift check now compares it, so the two paths must not diverge."""
-    assert _shell_default(drift, "CONFIG_LOCAL") == _shell_assignment(
-        deploy, "REMOTE_CONFIG"
-    )
+    assert _shell_default(drift, "CONFIG_LOCAL") == _shell_assignment(deploy, "REMOTE_CONFIG")
 
 
 def test_the_fetch_carries_a_token(drift):

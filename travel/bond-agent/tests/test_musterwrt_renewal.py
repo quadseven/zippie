@@ -14,6 +14,7 @@ project has already paid for once.
 So every test here is about the second failure. muster is a real HTTP server on
 loopback, because the thing being tested is what this router does with an answer.
 """
+
 from __future__ import annotations
 
 import json
@@ -34,18 +35,29 @@ pytestmark = pytest.mark.skipif(
 
 def _key(path: Path) -> Path:
     subprocess.run(
-        ["openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout",
-         "-out", str(path)],
-        check=True, capture_output=True,
+        ["openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", str(path)],
+        check=True,
+        capture_output=True,
     )
     return path
 
 
 def _certificate(key: Path, days: int = 90) -> str:
     return subprocess.run(
-        ["openssl", "req", "-new", "-x509", "-key", str(key),
-         "-subj", "/CN=travel-router", "-days", str(days)],
-        check=True, capture_output=True,
+        [
+            "openssl",
+            "req",
+            "-new",
+            "-x509",
+            "-key",
+            str(key),
+            "-subj",
+            "/CN=travel-router",
+            "-days",
+            str(days),
+        ],
+        check=True,
+        capture_output=True,
     ).stdout.decode()
 
 
@@ -96,8 +108,13 @@ def test_a_renewal_replaces_the_certificate_and_keeps_the_key(tmp_path):
     old = crt.read_text()
 
     fresh = _certificate(key)  # same key, different certificate
-    with _Muster({"certificate_pem": fresh, "not_after": "2027-01-01T00:00:00+00:00",
-                  "renew_after": "2026-12-01T00:00:00+00:00"}) as muster:
+    with _Muster(
+        {
+            "certificate_pem": fresh,
+            "not_after": "2027-01-01T00:00:00+00:00",
+            "renew_after": "2026-12-01T00:00:00+00:00",
+        }
+    ) as muster:
         summary = musterwrt.renew(muster.url, key, crt)
 
     assert "renewed" in summary
@@ -120,7 +137,10 @@ def test_a_certificate_for_a_different_key_is_refused_and_not_installed(tmp_path
     mine = crt.read_text()
 
     stranger = _certificate(_key(tmp_path / "stranger.key"))
-    with _Muster({"certificate_pem": stranger}) as muster, pytest.raises(musterwrt.Refused, match="DIFFERENT key"):
+    with (
+        _Muster({"certificate_pem": stranger}) as muster,
+        pytest.raises(musterwrt.Refused, match="DIFFERENT key"),
+    ):
         musterwrt.renew(muster.url, key, crt)
 
     assert crt.read_text() == mine, "a stranger's certificate was installed"
@@ -148,8 +168,12 @@ def test_garbage_where_a_certificate_should_be_changes_nothing(tmp_path):
     crt.write_text(_certificate(key))
     mine = crt.read_text()
 
-    with _Muster({"certificate_pem": "-----BEGIN CERTIFICATE-----\nnope\n"
-                                     "-----END CERTIFICATE-----\n"}) as muster, pytest.raises(musterwrt.Refused):
+    with (
+        _Muster(
+            {"certificate_pem": "-----BEGIN CERTIFICATE-----\nnope\n-----END CERTIFICATE-----\n"}
+        ) as muster,
+        pytest.raises(musterwrt.Refused),
+    ):
         musterwrt.renew(muster.url, key, crt)
 
     assert crt.read_text() == mine
@@ -167,8 +191,13 @@ def test_too_early_is_quiet_and_is_not_an_outage(tmp_path):
     crt = tmp_path / "device.crt"
     crt.write_text(_certificate(key))
 
-    with _Muster({"detail": "too early; this certificate may be renewed from "
-                            "2026-09-29T00:00:00+00:00"}, status=409) as muster, pytest.raises(musterwrt.NotYet):
+    with (
+        _Muster(
+            {"detail": "too early; this certificate may be renewed from 2026-09-29T00:00:00+00:00"},
+            status=409,
+        ) as muster,
+        pytest.raises(musterwrt.NotYet),
+    ):
         musterwrt.renew(muster.url, key, crt)
     assert issubclass(musterwrt.NotYet, musterwrt.Unreachable)
 
@@ -187,7 +216,10 @@ def test_a_revoked_device_is_told_so_loudly_and_keeps_its_key(tmp_path):
     crt.write_text(_certificate(key))
     mine = crt.read_text()
 
-    with _Muster({"detail": "this device has been revoked"}, status=403) as muster, pytest.raises(musterwrt.Revoked):
+    with (
+        _Muster({"detail": "this device has been revoked"}, status=403) as muster,
+        pytest.raises(musterwrt.Revoked),
+    ):
         musterwrt.renew(muster.url, key, crt)
 
     assert crt.read_text() == mine
@@ -213,10 +245,13 @@ def test_the_csr_carries_the_key_this_router_already_has(tmp_path):
 
     ours = subprocess.run(
         ["openssl", "pkey", "-in", str(key), "-pubout"],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     ).stdout.strip()
     theirs = subprocess.run(
         ["openssl", "req", "-noout", "-pubkey"],
-        input=sent["csr_pem"].encode(), check=True, capture_output=True,
+        input=sent["csr_pem"].encode(),
+        check=True,
+        capture_output=True,
     ).stdout.strip()
     assert theirs == ours, "the CSR asked for a different key than this router holds"

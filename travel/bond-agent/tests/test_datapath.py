@@ -38,7 +38,11 @@ class TestFrame:
         f = Frame(seq=12345, path_id=3, payload=b"wireguard bytes", flags=FLAG_DUPLICATE)
         got = Frame.unpack(f.pack())
         assert (got.seq, got.path_id, got.payload, got.flags) == (
-            12345, 3, b"wireguard bytes", FLAG_DUPLICATE)
+            12345,
+            3,
+            b"wireguard bytes",
+            FLAG_DUPLICATE,
+        )
         assert got.is_duplicate
 
     def test_empty_payload_is_legal(self):
@@ -56,14 +60,17 @@ class TestFrame:
         """
         assert HEADER_LEN <= 20
 
-    @pytest.mark.parametrize("raw", [
-        b"",                      # empty datagram
-        b"PB",                    # truncated header
-        # Full-length so these exercise the magic and version checks rather
-        # than tripping the short-frame guard first.
-        b"XX\x02\x00\x00" + b"\x00" * 12,  # wrong magic
-        b"PB\xff\x00\x00" + b"\x00" * 12,  # unsupported version
-    ])
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            b"",  # empty datagram
+            b"PB",  # truncated header
+            # Full-length so these exercise the magic and version checks rather
+            # than tripping the short-frame guard first.
+            b"XX\x02\x00\x00" + b"\x00" * 12,  # wrong magic
+            b"PB\xff\x00\x00" + b"\x00" * 12,  # unsupported version
+        ],
+    )
     def test_malformed_input_raises_rather_than_corrupting(self, raw):
         """This parses bytes straight off the internet. Malformed input is an
         expected condition -- it must be a clean raise the caller can drop on,
@@ -247,6 +254,7 @@ class TestReassembler:
 
     def test_keepalives_are_not_delivered_as_payload(self):
         from zippie.datapath import FLAG_KEEPALIVE
+
         r = Reassembler()
         assert r.push(Frame(seq=0, path_id=0, payload=b"", flags=FLAG_KEEPALIVE)) == []
         assert r.stats.delivered == 0
@@ -359,7 +367,7 @@ class TestArbitraryPathCount:
         s = self._sched(5)
         r = Reassembler()
         wire = [s.build(bytes([i]), SendMode.SPRAY)[1][0] for i in range(6)]
-        for w in wire[3:] + wire[:3]:        # 3,4,5 then 0,1,2
+        for w in wire[3:] + wire[:3]:  # 3,4,5 then 0,1,2
             r.push(Frame.unpack(w))
         assert r.stats.too_late_dropped == 3
         assert r.stats.delivered == 3
@@ -372,7 +380,7 @@ class TestArbitraryPathCount:
         wire = [s.build(bytes([i]), SendMode.SPRAY)[1][0] for i in range(6)]
 
         delivered = []
-        for w in wire[3:] + wire[:3]:        # same scrambled arrival
+        for w in wire[3:] + wire[:3]:  # same scrambled arrival
             delivered += r.push(Frame.unpack(w))
         assert delivered == [], "must hold everything while the origin settles"
 
@@ -391,7 +399,7 @@ class TestArbitraryPathCount:
         r = Reassembler()
         delivered = []
         for i in range(15):
-            if i in (3, 6, 9, 12):           # a new link joins
+            if i in (3, 6, 9, 12):  # a new link joins
                 s.add_path(PathState(i, f"joined{i}"))
             _, frames = s.build(bytes([i]), SendMode.SPRAY)
             delivered += r.push(Frame.unpack(frames[0]))
@@ -405,7 +413,7 @@ class TestArbitraryPathCount:
         r = Reassembler()
         delivered = []
         for i in range(15):
-            if i in (3, 6, 9, 12):           # links drop away
+            if i in (3, 6, 9, 12):  # links drop away
                 s.remove_path(i // 3)
             targets, frames = s.build(bytes([i]), SendMode.SPRAY)
             assert targets, "at least one link must remain usable"
@@ -431,8 +439,7 @@ class TestFrameEpoch:
     def test_a_reset_stream_accepts_sequences_it_already_delivered(self):
         """The whole point: after a reset, seq 0 is new again."""
         r = Reassembler(reorder_deadline_ms=10)
-        first = [p for s in range(6)
-                 for p in r.push(Frame(seq=s, path_id=0, payload=b"a"))]
+        first = [p for s in range(6) for p in r.push(Frame(seq=s, path_id=0, payload=b"a"))]
         assert len(first) == 6
         assert not r.push(Frame(seq=0, path_id=0, payload=b"b")), "expected a duplicate"
 

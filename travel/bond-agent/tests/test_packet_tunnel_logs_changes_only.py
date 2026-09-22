@@ -29,6 +29,7 @@ same wrong turn #80 caused, in the same week, on the same router.
 So: the identity and the nexthop are worth a line when they CHANGE, and worth
 nothing when they do not.
 """
+
 from __future__ import annotations
 
 import logging
@@ -47,24 +48,42 @@ def _agent(tmp_path, monkeypatch, *, legs=("ethernet",)):
     import zippie.agent as agent_mod
     from zippie.agent import BondAgent
 
-    agent = BondAgent(parse_config({
-        "agent": {"private_key": "", "state_dir": str(tmp_path / "s"),
-                  "run_dir": str(tmp_path / "r")},
-        "home": {"endpoint": "home.example:51900", "server_public_key": "c2VydmVy",
-                 "address_cidr": "10.66.0.10/24", "ports": [51900]},
-        "policy": {"datapath": "packet", "transport_port": 51830,
-                   "mode": "aggregate"},
-        "paths": [],
-    }))
+    agent = BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "",
+                    "state_dir": str(tmp_path / "s"),
+                    "run_dir": str(tmp_path / "r"),
+                },
+                "home": {
+                    "endpoint": "home.example:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "10.66.0.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
+                "paths": [],
+            }
+        )
+    )
     for i, name in enumerate(legs):
         cfg = PathConfig(
-            name=name, match=PathMatch(type="interface", interface=name),
-            private_key=f"key{i}", address_cidr=f"10.66.0.{20 + i}/32",
+            name=name,
+            match=PathMatch(type="interface", interface=name),
+            private_key=f"key{i}",
+            address_cidr=f"10.66.0.{20 + i}/32",
         )
-        agent.paths.append(PathRuntime(
-            name=name, config=cfg, interface=name,
-            state=PathState.UP, loss_pct=0.0, rtt_ms=50.0,
-        ))
+        agent.paths.append(
+            PathRuntime(
+                name=name,
+                config=cfg,
+                interface=name,
+                state=PathState.UP,
+                loss_pct=0.0,
+                rtt_ms=50.0,
+            )
+        )
     monkeypatch.setattr(agent_mod.net, "write_wg_config", lambda *a, **k: None)
     monkeypatch.setattr(agent_mod.net, "dry_run", lambda: True)
     monkeypatch.setattr(agent_mod.net, "run_or_dry", lambda *a, **k: None)
@@ -93,8 +112,7 @@ def test_a_steady_tunnel_does_not_log_every_pass(tmp_path, monkeypatch, caplog):
         f"this is the whole log:\n  " + "\n  ".join(identity[:3])
     )
     assert len(nexthop) <= 1, (
-        f"{len(nexthop)} nexthop lines from 20 unchanged passes:\n  "
-        + "\n  ".join(nexthop[:3])
+        f"{len(nexthop)} nexthop lines from 20 unchanged passes:\n  " + "\n  ".join(nexthop[:3])
     )
 
 
@@ -136,9 +154,7 @@ def test_a_change_of_nexthop_port_is_logged(tmp_path, monkeypatch, caplog):
         agent._ensure_packet_tunnel()
     said = _lines(caplog, "one virtual path")
     assert said, "the nexthop changed and nothing was logged"
-    assert any("51999" in m for m in said), (
-        f"the line did not name the new port: {said}"
-    )
+    assert any("51999" in m for m in said), f"the line did not name the new port: {said}"
 
 
 def test_going_quiet_then_changing_still_logs(tmp_path, monkeypatch, caplog):
@@ -175,8 +191,8 @@ def test_going_quiet_then_changing_still_logs(tmp_path, monkeypatch, caplog):
 # ---------------------------------------------------------------------------
 def _fw(monkeypatch):
     import zippie.net as net_mod
-    monkeypatch.setattr(net_mod, "_iptables",
-                        lambda *a, **k: type("R", (), {"returncode": 0})())
+
+    monkeypatch.setattr(net_mod, "_iptables", lambda *a, **k: type("R", (), {"returncode": 0})())
     monkeypatch.setattr(net_mod, "_fw_applied", set())
     return net_mod
 

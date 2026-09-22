@@ -54,12 +54,14 @@ class _FakeAgentHandler(BaseHTTPRequestHandler):
     def do_PUT(self):  # noqa: N802
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length)
-        self.server.received.append({
-            "method": "PUT",
-            "path": self.path,
-            "headers": {k.lower(): v for k, v in self.headers.items()},
-            "body": body,
-        })
+        self.server.received.append(
+            {
+                "method": "PUT",
+                "path": self.path,
+                "headers": {k.lower(): v for k, v in self.headers.items()},
+                "body": body,
+            }
+        )
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", "2")
@@ -160,10 +162,9 @@ def traced_hub(fake_agent, hub_server, monkeypatch):
 
 def _spans(received):
     """Every span the agent received, flattened out of the trace nesting."""
-    return [span
-            for req in received
-            for trace in json.loads(req["body"])
-            for span in trace]
+    return [
+        span for req in received for trace in json.loads(req["body"]) for span in trace
+    ]
 
 
 def _one_span(tracer, received):
@@ -183,8 +184,9 @@ def _one_span(tracer, received):
 
 def test_imports_this_tree():
     """The hub under test is the one in this checkout, not another one."""
-    assert Path(hub.__file__).resolve() == \
-        (Path(__file__).resolve().parents[1] / "hub.py")
+    assert Path(hub.__file__).resolve() == (
+        Path(__file__).resolve().parents[1] / "hub.py"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -238,8 +240,9 @@ def test_the_body_is_an_array_of_traces_of_spans(traced_hub):
     assert len(traces[0]) == 1
 
 
-@pytest.mark.parametrize("field", ["trace_id", "span_id", "parent_id",
-                                   "start", "duration", "error"])
+@pytest.mark.parametrize(
+    "field", ["trace_id", "span_id", "parent_id", "start", "duration", "error"]
+)
 def test_numeric_span_fields_are_integers(traced_hub, field):
     """The agent unmarshals these into Go integers.
 
@@ -271,8 +274,8 @@ def test_span_identity_and_timing(traced_hub):
 
     assert span["parent_id"] == 0, "a hub request is the root of its trace"
     # 63 bits: above 2**63-1 the agent's signed decoding stops round-tripping.
-    assert 0 < span["trace_id"] < 2 ** 63
-    assert 0 < span["span_id"] < 2 ** 63
+    assert 0 < span["trace_id"] < 2**63
+    assert 0 < span["span_id"] < 2**63
     assert before_ns <= span["start"] <= after_ns, "start is epoch nanoseconds"
     assert 0 < span["duration"] < 60_000_000_000
 
@@ -282,8 +285,9 @@ def test_meta_is_string_to_string_and_carries_the_service_tags(traced_hub):
     _get(base + "/livez")
     span = _one_span(tracer, received)
 
-    assert all(isinstance(k, str) and isinstance(v, str)
-               for k, v in span["meta"].items()), "meta is string -> string"
+    assert all(
+        isinstance(k, str) and isinstance(v, str) for k, v in span["meta"].items()
+    ), "meta is string -> string"
     assert span["meta"]["version"] == "abc123"
     assert span["meta"]["span.kind"] == "server"
 
@@ -365,8 +369,7 @@ def test_a_post_to_api_report_is_traced(traced_hub, monkeypatch):
     req = urllib.request.Request(
         base + "/api/report",
         data=json.dumps({"name": "phone-1", "paths": []}).encode(),
-        headers={"Content-Type": "application/json",
-                 "Authorization": "Bearer s3cret"},
+        headers={"Content-Type": "application/json", "Authorization": "Bearer s3cret"},
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=5) as resp:
@@ -429,7 +432,8 @@ def test_requests_keep_answering_while_the_agent_is_wedged(hub_server):
         _wait_for_accounting(tracer, 12)
         assert tracer.submitted + tracer.dropped == 12, (
             f"submitted={tracer.submitted} dropped={tracer.dropped}: "
-            "a request was neither submitted nor dropped")
+            "a request was neither submitted nor dropped"
+        )
         assert tracer.dropped > 0, "a full queue must drop, not block"
     finally:
         release.set()
@@ -463,8 +467,13 @@ def test_the_sender_thread_outlives_its_own_failures():
     tracer = hub.Tracer(flaky)
     try:
         for i in range(2):
-            tracer.submit(method="GET", path="/livez", status=200,
-                          start_ns=time.time_ns(), duration_ns=1000 + i)
+            tracer.submit(
+                method="GET",
+                path="/livez",
+                status=200,
+                start_ns=time.time_ns(),
+                duration_ns=1000 + i,
+            )
             assert tracer.flush(timeout=5)
         assert tracer.failed == 1
         assert tracer.sent >= 1
@@ -477,8 +486,9 @@ def test_submit_on_a_disabled_tracer_is_a_no_op_and_starts_no_thread():
     before = {t.name for t in threading.enumerate()}
     tracer = hub.Tracer(None)
     assert tracer.enabled is False
-    tracer.submit(method="GET", path="/livez", status=200,
-                  start_ns=time.time_ns(), duration_ns=1)
+    tracer.submit(
+        method="GET", path="/livez", status=200, start_ns=time.time_ns(), duration_ns=1
+    )
     tracer.close()
     assert "zippie-hub-apm" not in ({t.name for t in threading.enumerate()} - before)
 
@@ -501,17 +511,20 @@ def test_a_handler_serves_normally_with_no_tracer_at_all(hub_server):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("path,expected", [
-    ("/api/nodes", "/api/nodes"),
-    ("/api/nodes?since=12", "/api/nodes"),
-    ("/api/series?since=99", "/api/series"),
-    ("/livez", "/livez"),
-    ("/readyz", "/readyz"),
-    ("/", "/static/*"),
-    ("/hub.js", "/static/*"),
-    ("/%2e%2e%2f%2e%2e%2fetc%2fpasswd", "/static/*"),
-    ("/anything-a-caller-invents", "/static/*"),
-])
+@pytest.mark.parametrize(
+    "path,expected",
+    [
+        ("/api/nodes", "/api/nodes"),
+        ("/api/nodes?since=12", "/api/nodes"),
+        ("/api/series?since=99", "/api/series"),
+        ("/livez", "/livez"),
+        ("/readyz", "/readyz"),
+        ("/", "/static/*"),
+        ("/hub.js", "/static/*"),
+        ("/%2e%2e%2f%2e%2e%2fetc%2fpasswd", "/static/*"),
+        ("/anything-a-caller-invents", "/static/*"),
+    ],
+)
 def test_resource_names_are_bounded(path, expected):
     """The static handler serves arbitrary names; APM resources must not.
 
@@ -584,12 +597,15 @@ def test_an_unusable_agent_url_disables_rather_than_pretends(monkeypatch, caplog
     assert any(r.levelname == "WARNING" for r in caplog.records)
 
 
-@pytest.mark.parametrize("url", [
-    "unix://",
-    "http://",
-    "ftp://nope",
-    "",
-])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "unix://",
+        "http://",
+        "ftp://nope",
+        "",
+    ],
+)
 def test_sender_rejects_urls_it_cannot_use(url):
     with pytest.raises(ValueError):
         hub.AgentTraceSender(url)
@@ -601,9 +617,12 @@ def test_the_unix_connection_really_speaks_af_unix(fake_agent):
     conn = hub._UnixHTTPConnection(sock_path, timeout=5)
     conn.connect()
     assert conn.sock.family == socket.AF_UNIX
-    conn.request("PUT", "/v0.3/traces", body=b"[]",
-                 headers={"Content-Type": "application/json",
-                          "Content-Length": "2"})
+    conn.request(
+        "PUT",
+        "/v0.3/traces",
+        body=b"[]",
+        headers={"Content-Type": "application/json", "Content-Length": "2"},
+    )
     resp = conn.getresponse()
     assert resp.status == 200
     resp.read()
@@ -620,8 +639,13 @@ def test_batches_are_one_put_with_a_matching_trace_count(fake_agent):
         # Stall the worker briefly so the spans pile up into one batch rather
         # than each racing out on its own.
         for i in range(5):
-            tracer.submit(method="GET", path="/livez", status=200,
-                          start_ns=time.time_ns(), duration_ns=100 + i)
+            tracer.submit(
+                method="GET",
+                path="/livez",
+                status=200,
+                start_ns=time.time_ns(),
+                duration_ns=100 + i,
+            )
         assert tracer.flush(timeout=5)
     finally:
         tracer.close()

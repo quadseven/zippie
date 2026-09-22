@@ -22,6 +22,7 @@ leg dropping 30% of its frames as fine, because the bond's whole job is
 making that loss invisible to the payload; wire loss is the number a shed
 decision needs, because it is the number that says which leg is failing.
 """
+
 from __future__ import annotations
 
 from zippie.datapath import FLAG_KEEPALIVE, FLAG_KEEPALIVE_REPLY, Frame
@@ -63,39 +64,63 @@ class FakeSocket:
     def deliver(self, data, addr=("10.0.0.9", 51900)):
         self._inbox.append((data, addr))
 
-    def setblocking(self, _): pass
-    def setsockopt(self, *_a): pass
-    def close(self): pass
-    def fileno(self): return -1
-    def getsockname(self): return self.bind or ("127.0.0.1", 0)
+    def setblocking(self, _):
+        pass
+
+    def setsockopt(self, *_a):
+        pass
+
+    def close(self):
+        pass
+
+    def fileno(self):
+        return -1
+
+    def getsockname(self):
+        return self.bind or ("127.0.0.1", 0)
 
 
 class _Key:
-    def __init__(self, fileobj, data): self.fileobj, self.data = fileobj, data
+    def __init__(self, fileobj, data):
+        self.fileobj, self.data = fileobj, data
 
 
 class _FakeSelector:
-    def __init__(self): self.registered = {}
-    def register(self, fileobj, _events, data): self.registered[id(fileobj)] = (fileobj, data)
-    def unregister(self, fileobj): self.registered.pop(id(fileobj), None)
+    def __init__(self):
+        self.registered = {}
+
+    def register(self, fileobj, _events, data):
+        self.registered[id(fileobj)] = (fileobj, data)
+
+    def unregister(self, fileobj):
+        self.registered.pop(id(fileobj), None)
+
     def select(self, _timeout=0):
-        return [(_Key(f, d), 1) for f, d in list(self.registered.values())
-                if getattr(f, "_inbox", None)]
-    def close(self): pass
+        return [
+            (_Key(f, d), 1) for f, d in list(self.registered.values()) if getattr(f, "_inbox", None)
+        ]
+
+    def close(self):
+        pass
 
 
 class _Clock:
-    def __init__(self): self.t = 100.0
-    def __call__(self): return self.t
-    def advance(self, s): self.t += s
+    def __init__(self):
+        self.t = 100.0
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, s):
+        self.t += s
 
 
 def _one_leg():
     clock = _Clock()
-    t = Transport(("10.0.0.9", 51900), socket_factory=FakeSocket,
-                  selector_factory=_FakeSelector, _clock=clock)
-    t.add_link(LinkEndpoint(path_id=0, name="wan", device=None,
-                            remote=("10.0.0.9", 51900)))
+    t = Transport(
+        ("10.0.0.9", 51900), socket_factory=FakeSocket, selector_factory=_FakeSelector, _clock=clock
+    )
+    t.add_link(LinkEndpoint(path_id=0, name="wan", device=None, remote=("10.0.0.9", 51900)))
     return t, t._socks[0], clock
 
 
@@ -106,9 +131,16 @@ def _probe_seq(sock, nth=-1):
 
 
 def _reply(t, seq):
-    t._on_link_data(Frame(seq=seq, path_id=0, payload=b"",
-                          flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
-                          epoch=t._epoch).pack(), 0)
+    t._on_link_data(
+        Frame(
+            seq=seq,
+            path_id=0,
+            payload=b"",
+            flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
+            epoch=t._epoch,
+        ).pack(),
+        0,
+    )
 
 
 # ------------------------------------------------------------- no evidence --
@@ -150,15 +182,13 @@ def test_a_probe_superseded_by_a_later_answer_counts_as_lost():
     logic in _on_link_data treats probe 1 as lost the moment probe 2's reply
     arrives - this is that exact event, counted."""
     t, sock, clock = _one_leg()
-    t.send_keepalives()                      # probe 1 - never answered
+    t.send_keepalives()  # probe 1 - never answered
     clock.advance(0.500)
-    t.send_keepalives()                      # probe 2
+    t.send_keepalives()  # probe 2
     clock.advance(0.004)
     _reply(t, _probe_seq(sock))
 
-    assert t.link_loss_pct(0) == 50.0, (
-        "one lost out of two resolved probes must read 50%, not 0%"
-    )
+    assert t.link_loss_pct(0) == 50.0, "one lost out of two resolved probes must read 50%, not 0%"
 
 
 def test_half_the_probes_lost_reads_near_fifty_percent():
@@ -166,9 +196,9 @@ def test_half_the_probes_lost_reads_near_fifty_percent():
     reading must not be diluted by history outside it."""
     t, sock, clock = _one_leg()
     for _ in range(_KA_LOSS_WINDOW // 2):
-        t.send_keepalives()                  # lost
+        t.send_keepalives()  # lost
         clock.advance(0.010)
-        t.send_keepalives()                  # answered
+        t.send_keepalives()  # answered
         clock.advance(0.010)
         _reply(t, _probe_seq(sock))
 
@@ -200,10 +230,10 @@ def test_a_burst_of_loss_then_recovery_is_visible_within_the_window():
     answered_n = _KA_LOSS_WINDOW - lost_n
     t, sock, clock = _one_leg()
     for _ in range(lost_n):
-        t.send_keepalives()                  # lost
+        t.send_keepalives()  # lost
         clock.advance(0.010)
     for _ in range(answered_n):
-        t.send_keepalives()                  # answered
+        t.send_keepalives()  # answered
         clock.advance(0.010)
         _reply(t, _probe_seq(sock))
 
@@ -227,15 +257,15 @@ def test_old_history_falls_out_of_the_window():
     very next probe. It empties out over the following window's worth of
     clean answers instead, which is what this asserts."""
     t, sock, clock = _one_leg()
-    for _ in range(_KA_LOSS_WINDOW):          # a bad past: every probe lost
+    for _ in range(_KA_LOSS_WINDOW):  # a bad past: every probe lost
         t.send_keepalives()
         clock.advance(0.5)
     assert t.link_loss_pct(0) == 100.0
 
-    for _ in range(2 * _KA_LOSS_WINDOW):      # fully recovered since, and
-        t.send_keepalives()                  # then some - comfortably more
-        clock.advance(0.003)                 # than one loss-window's worth
-        _reply(t, _probe_seq(sock))          # of clean answers
+    for _ in range(2 * _KA_LOSS_WINDOW):  # fully recovered since, and
+        t.send_keepalives()  # then some - comfortably more
+        clock.advance(0.003)  # than one loss-window's worth
+        _reply(t, _probe_seq(sock))  # of clean answers
 
     assert t.link_loss_pct(0) == 0.0, (
         "sustained clean answers never fully displaced the old 100% reading"
@@ -249,12 +279,11 @@ def test_two_legs_do_not_share_a_loss_window():
     """One leg's drops must never bleed onto another's reading - the same
     isolation _ka_sent already gives RTT, just for loss."""
     clock = _Clock()
-    t = Transport(("10.0.0.9", 51900), socket_factory=FakeSocket,
-                  selector_factory=_FakeSelector, _clock=clock)
-    t.add_link(LinkEndpoint(path_id=0, name="wan0", device=None,
-                            remote=("10.0.0.9", 51900)))
-    t.add_link(LinkEndpoint(path_id=1, name="wan1", device=None,
-                            remote=("10.0.0.9", 51901)))
+    t = Transport(
+        ("10.0.0.9", 51900), socket_factory=FakeSocket, selector_factory=_FakeSelector, _clock=clock
+    )
+    t.add_link(LinkEndpoint(path_id=0, name="wan0", device=None, remote=("10.0.0.9", 51900)))
+    t.add_link(LinkEndpoint(path_id=1, name="wan1", device=None, remote=("10.0.0.9", 51901)))
     sock0, sock1 = t._socks[0], t._socks[1]
 
     for _ in range(6):
@@ -302,8 +331,7 @@ def test_removing_a_leg_KEEPS_its_loss_history():
     assert 0 not in t._ka_sent, "in-flight probes must still be dropped"
     assert 0 not in t._link_rx, "rx-age must still be dropped"
 
-    t.add_link(LinkEndpoint(path_id=0, name="wan", device=None,
-                            remote=("10.0.0.9", 51900)))
+    t.add_link(LinkEndpoint(path_id=0, name="wan", device=None, remote=("10.0.0.9", 51900)))
     assert t.link_loss_pct(0) == 100.0, (
         "a leg's loss history was erased by a brief withdrawal, hiding "
         "exactly the leg the thresholds exist to catch"

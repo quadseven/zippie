@@ -33,7 +33,9 @@ class _Clock:
         self.t += s
 
 
-def _make(baseline_ms=250, hold_margin_ms=150, nack_delay_ms=60, **kw) -> tuple[AdaptiveRecovery, _Clock]:
+def _make(
+    baseline_ms=250, hold_margin_ms=150, nack_delay_ms=60, **kw
+) -> tuple[AdaptiveRecovery, _Clock]:
     clock = _Clock()
     ar = AdaptiveRecovery(
         baseline_deadline_ms=baseline_ms,
@@ -59,8 +61,7 @@ class _Driver:
         self.capped_total = 0
         self.abandoned_total = 0
         self.clock.advance(1.5)
-        primed = self.ar.maybe_adapt(capped_total=0, abandoned_total=0,
-                                     worst_rtt_ms=1.0)
+        primed = self.ar.maybe_adapt(capped_total=0, abandoned_total=0, worst_rtt_ms=1.0)
         assert not primed, "the priming call itself must never report a change"
 
     def healthy(self, *, n: int = 1) -> bool:
@@ -89,8 +90,9 @@ class _Driver:
 
 
 def _driven(baseline_ms=250, hold_margin_ms=150, nack_delay_ms=60, **kw) -> _Driver:
-    ar, clock = _make(baseline_ms=baseline_ms, hold_margin_ms=hold_margin_ms,
-                      nack_delay_ms=nack_delay_ms, **kw)
+    ar, clock = _make(
+        baseline_ms=baseline_ms, hold_margin_ms=hold_margin_ms, nack_delay_ms=nack_delay_ms, **kw
+    )
     return _Driver(ar, clock)
 
 
@@ -116,8 +118,7 @@ class TestHealthyPathIsUntouched:
         constructor exercises for every other test in this file."""
         ar, clock = _make()
         clock.advance(1.5)
-        changed = ar.maybe_adapt(capped_total=9999, abandoned_total=500,
-                                 worst_rtt_ms=1.0)
+        changed = ar.maybe_adapt(capped_total=9999, abandoned_total=500, worst_rtt_ms=1.0)
         assert not changed
         assert ar.deadline_ms == 250
 
@@ -143,13 +144,15 @@ class TestWidening:
         actually abandoned, not only after."""
         d = _driven(baseline_ms=100)
         changed = d.ar.maybe_adapt(
-            capped_total=0, abandoned_total=0,
+            capped_total=0,
+            abandoned_total=0,
             worst_rtt_ms=100 * ADAPT_RTT_HEADROOM + 1,
         )
         assert not changed, "rate-limited: this call is inside the first window"
         d.clock.advance(1.5)
         changed = d.ar.maybe_adapt(
-            capped_total=0, abandoned_total=0,
+            capped_total=0,
+            abandoned_total=0,
             worst_rtt_ms=100 * ADAPT_RTT_HEADROOM + 1,
         )
         assert changed
@@ -248,7 +251,8 @@ class TestRateLimiting:
         # clock: must not evaluate again until the next interval, so a burst
         # within one window is one step, not one step per call.
         again = d.ar.maybe_adapt(
-            capped_total=d.capped_total + 5, abandoned_total=d.abandoned_total,
+            capped_total=d.capped_total + 5,
+            abandoned_total=d.abandoned_total,
             worst_rtt_ms=1.0,
         )
         assert not again

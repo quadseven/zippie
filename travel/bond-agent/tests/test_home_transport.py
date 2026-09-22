@@ -59,8 +59,11 @@ def test_full_round_trip_through_the_home_entrypoint():
     home = build_home_transport(cfg)
 
     travel = Transport(("127.0.0.1", travel_local), reorder_deadline_ms=50)
-    travel.add_link(LinkEndpoint(path_id=0, name="loop", device=None,
-                                 remote=("127.0.0.1", home_listen), weight=100))
+    travel.add_link(
+        LinkEndpoint(
+            path_id=0, name="loop", device=None, remote=("127.0.0.1", home_listen), weight=100
+        )
+    )
 
     threading.Thread(target=home.run, daemon=True).start()
     threading.Thread(target=travel.run, daemon=True).start()

@@ -120,13 +120,23 @@ def test_adaptive_recovery_delivers_what_a_fixed_deadline_would_abandon():
         reorder_deadline_ms=_BASELINE_DEADLINE_MS,
         socket_factory=factory,
     )
-    travel.add_link(LinkEndpoint(path_id=0, name="leg0", device="leg0",
-                                 remote=("127.0.0.1", home_listen), weight=100))
-    travel.add_link(LinkEndpoint(path_id=1, name="leg1", device="leg1",
-                                 remote=("127.0.0.1", home_listen), weight=100))
+    travel.add_link(
+        LinkEndpoint(
+            path_id=0, name="leg0", device="leg0", remote=("127.0.0.1", home_listen), weight=100
+        )
+    )
+    travel.add_link(
+        LinkEndpoint(
+            path_id=1, name="leg1", device="leg1", remote=("127.0.0.1", home_listen), weight=100
+        )
+    )
 
-    home = Transport(("127.0.0.1", home_local), reorder_deadline_ms=_BASELINE_DEADLINE_MS,
-                     roam=True, wg_peer=("127.0.0.1", collector_port))
+    home = Transport(
+        ("127.0.0.1", home_local),
+        reorder_deadline_ms=_BASELINE_DEADLINE_MS,
+        roam=True,
+        wg_peer=("127.0.0.1", collector_port),
+    )
     # SHORTENED RATE LIMITS, TEST-ONLY, on the RECEIVING end - AdaptiveRecovery
     # lives on whichever end reassembles, which is home here. Its own
     # hysteresis timing is proven against a hand-cranked clock in
@@ -145,9 +155,16 @@ def test_adaptive_recovery_delivers_what_a_fixed_deadline_would_abandon():
     # real, reproducible drops on phase B's own tail - the exact failure
     # this test exists to guard against.
     home._adaptive._sustained_healthy_evals = 10
-    home.add_link(LinkEndpoint(path_id=0, name="wan", device=None,
-                               remote=("127.0.0.1", 1), weight=100,
-                               listen=("127.0.0.1", home_listen)))
+    home.add_link(
+        LinkEndpoint(
+            path_id=0,
+            name="wan",
+            device=None,
+            remote=("127.0.0.1", 1),
+            weight=100,
+            listen=("127.0.0.1", home_listen),
+        )
+    )
     assert 0 in home._links, "home's listening link failed to bind"
 
     threading.Thread(target=travel.run, daemon=True).start()
@@ -170,8 +187,7 @@ def test_adaptive_recovery_delivers_what_a_fixed_deadline_would_abandon():
             timeout_s=5.0,
         )
         assert widened, (
-            f"reorder deadline never widened past baseline: "
-            f"{home.stats_dict()['recovery']}"
+            f"reorder deadline never widened past baseline: {home.stats_dict()['recovery']}"
         )
 
         # PHASE B: sent AFTER the deadline has widened. This is the actual
@@ -234,19 +250,35 @@ def test_a_healthy_two_leg_bond_never_widens_the_deadline():
     isolated controller."""
     travel_local, home_listen, home_local, collector_port = _free_ports(4)
 
-    travel = Transport(("127.0.0.1", travel_local),
-                       reorder_deadline_ms=_BASELINE_DEADLINE_MS)
-    travel.add_link(LinkEndpoint(path_id=0, name="leg0", device=None,
-                                 remote=("127.0.0.1", home_listen), weight=100))
-    travel.add_link(LinkEndpoint(path_id=1, name="leg1", device=None,
-                                 remote=("127.0.0.1", home_listen), weight=100))
+    travel = Transport(("127.0.0.1", travel_local), reorder_deadline_ms=_BASELINE_DEADLINE_MS)
+    travel.add_link(
+        LinkEndpoint(
+            path_id=0, name="leg0", device=None, remote=("127.0.0.1", home_listen), weight=100
+        )
+    )
+    travel.add_link(
+        LinkEndpoint(
+            path_id=1, name="leg1", device=None, remote=("127.0.0.1", home_listen), weight=100
+        )
+    )
 
-    home = Transport(("127.0.0.1", home_local), reorder_deadline_ms=_BASELINE_DEADLINE_MS,
-                     roam=True, wg_peer=("127.0.0.1", collector_port))
+    home = Transport(
+        ("127.0.0.1", home_local),
+        reorder_deadline_ms=_BASELINE_DEADLINE_MS,
+        roam=True,
+        wg_peer=("127.0.0.1", collector_port),
+    )
     home._adaptive._eval_interval_s = 0.05
-    home.add_link(LinkEndpoint(path_id=0, name="wan", device=None,
-                               remote=("127.0.0.1", 1), weight=100,
-                               listen=("127.0.0.1", home_listen)))
+    home.add_link(
+        LinkEndpoint(
+            path_id=0,
+            name="wan",
+            device=None,
+            remote=("127.0.0.1", 1),
+            weight=100,
+            listen=("127.0.0.1", home_listen),
+        )
+    )
     assert 0 in home._links, "home's listening link failed to bind"
 
     threading.Thread(target=travel.run, daemon=True).start()

@@ -32,6 +32,7 @@ it reports about adb is worthless.
 
 Stdlib only - the router's python3.9 has no third-party packages.
 """
+
 import socket
 import struct
 import sys
@@ -39,7 +40,7 @@ import time
 
 MCAST, PORT = "224.0.0.251", 5353
 SERVICES = [
-    "_services._dns-sd._udp.local",   # the sanity query, see module docstring
+    "_services._dns-sd._udp.local",  # the sanity query, see module docstring
     "_adb-tls-connect._tcp.local",
     "_adb-tls-pairing._tcp.local",
     "_adb._tcp.local",
@@ -69,11 +70,11 @@ def read_name(buf, off, depth=0):
         if ln == 0:
             return ".".join(parts), off + 1
         if ln & 0xC0 == 0xC0:
-            ptr = struct.unpack("!H", buf[off:off + 2])[0] & 0x3FFF
+            ptr = struct.unpack("!H", buf[off : off + 2])[0] & 0x3FFF
             tail, _ = read_name(buf, ptr, depth + 1)
             parts.append(tail)
             return ".".join(parts), off + 2
-        parts.append(buf[off + 1:off + 1 + ln].decode("utf-8", "replace"))
+        parts.append(buf[off + 1 : off + 1 + ln].decode("utf-8", "replace"))
         off += 1 + ln
 
 
@@ -90,14 +91,14 @@ def records(buf):
         name, off = read_name(buf, off)
         if off + 10 > len(buf):
             return
-        rtype, _cls, _ttl, rdlen = struct.unpack("!2HIH", buf[off:off + 10])
+        rtype, _cls, _ttl, rdlen = struct.unpack("!2HIH", buf[off : off + 10])
         off += 10
-        if rtype == 33 and rdlen >= 6:                       # SRV
-            port = struct.unpack("!3H", buf[off:off + 6])[2]
+        if rtype == 33 and rdlen >= 6:  # SRV
+            port = struct.unpack("!3H", buf[off : off + 6])[2]
             target, _ = read_name(buf, off + 6)
             yield ("SRV", name, (target, port))
-        elif rtype == 1 and rdlen == 4:                      # A
-            yield ("A", name, socket.inet_ntoa(buf[off:off + 4]))
+        elif rtype == 1 and rdlen == 4:  # A
+            yield ("A", name, socket.inet_ntoa(buf[off : off + 4]))
         off += rdlen
 
 
@@ -107,10 +108,11 @@ def main():
     # socket API. The caller knows the address - and on the router it is one
     # command away - so ask for it rather than guessing on its behalf.
     if len(sys.argv) < 2:
-        print("usage: adb-port.py <this host's address on the phones' LAN> "
-              "[seconds]")
-        print("on the router:  python3 - \"$(ip -4 -o addr show br-lan "
-              "| awk '{print $4}' | cut -d/ -f1)\" 8")
+        print("usage: adb-port.py <this host's address on the phones' LAN> [seconds]")
+        print(
+            'on the router:  python3 - "$(ip -4 -o addr show br-lan '
+            "| awk '{print $4}' | cut -d/ -f1)\" 8"
+        )
         return 2
     lan = sys.argv[1]
     seconds = int(sys.argv[2]) if len(sys.argv) > 2 else 8
@@ -124,8 +126,11 @@ def main():
     s.bind(("", PORT))
     # THE LINE THAT MATTERS. Without the group join this socket never receives a
     # single reply and every answer below is a false negative.
-    s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
-                 socket.inet_aton(MCAST) + socket.inet_aton(lan))
+    s.setsockopt(
+        socket.IPPROTO_IP,
+        socket.IP_ADD_MEMBERSHIP,
+        socket.inet_aton(MCAST) + socket.inet_aton(lan),
+    )
     s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(lan))
     s.settimeout(1.0)
 
@@ -148,21 +153,32 @@ def main():
 
     if not responders:
         print("NOTHING answered mDNS at all - the prober is deaf, not the phone.")
-        print("Check the LAN address passed in (got %r) and that this host is on"
-              " the phone's network." % lan)
+        print(
+            "Check the LAN address passed in (got %r) and that this host is on"
+            " the phone's network." % lan
+        )
         return 2
 
     adb = {n: v for n, v in srv.items() if "adb" in n}
     if not adb:
-        print("mDNS is working (%d responders) but no adb service is advertised."
-              % len(responders))
-        print("That is a real negative: wireless debugging is off, or the screen"
-              " is asleep.")
+        print(
+            "mDNS is working (%d responders) but no adb service is advertised."
+            % len(responders)
+        )
+        print(
+            "That is a real negative: wireless debugging is off, or the screen"
+            " is asleep."
+        )
         return 1
 
     for name, (target, port) in sorted(adb.items()):
-        kind = ("connect" if "connect" in name else
-                "pairing" if "pairing" in name else "legacy")
+        kind = (
+            "connect"
+            if "connect" in name
+            else "pairing"
+            if "pairing" in name
+            else "legacy"
+        )
         print("%-8s %s port %d   (%s)" % (kind, addr.get(target, target), port, name))
     return 0
 

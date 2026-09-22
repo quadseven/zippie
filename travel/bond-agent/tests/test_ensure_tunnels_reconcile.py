@@ -23,8 +23,16 @@ from zippie.config import parse_config
 from zippie.models import PathState
 
 
-def _cfg(tmp_path, *, endpoint="home.example:51900", legs=2, datapath="route",
-         leg_keys=True, ports=(51900, 51901), agent_key="cGtleQ=="):
+def _cfg(
+    tmp_path,
+    *,
+    endpoint="home.example:51900",
+    legs=2,
+    datapath="route",
+    leg_keys=True,
+    ports=(51900, 51901),
+    agent_key="cGtleQ==",
+):
     paths = []
     for i in range(legs):
         raw = {"name": f"leg{i}", "interface": f"eth{i}", "mtu": 1280 + i}
@@ -56,13 +64,13 @@ class _World:
     """What the agent did to the network this pass."""
 
     def __init__(self):
-        self.confs = {}          # iface -> write_wg_config kwargs
-        self.ups = []            # (iface, address, mtu)
-        self.torn = []           # ifaces handed to wg_quick_down
-        self.pinned = []         # (host, path name, idx)
-        self.live = set()        # ifaces that exist AND are up
-        self.wrecked = set()     # ifaces that exist but are DOWN
-        self.up_raises = {}      # iface -> NetError to raise on bring-up
+        self.confs = {}  # iface -> write_wg_config kwargs
+        self.ups = []  # (iface, address, mtu)
+        self.torn = []  # ifaces handed to wg_quick_down
+        self.pinned = []  # (host, path name, idx)
+        self.live = set()  # ifaces that exist AND are up
+        self.wrecked = set()  # ifaces that exist but are DOWN
+        self.up_raises = {}  # iface -> NetError to raise on bring-up
 
 
 def _install(monkeypatch, agent, world, *, dry_run=False, resolves="203.0.113.7"):
@@ -91,14 +99,14 @@ def _install(monkeypatch, agent, world, *, dry_run=False, resolves="203.0.113.7"
 
     monkeypatch.setattr(net, "write_wg_config", write_wg_config)
     monkeypatch.setattr(net, "wg_quick_up", wg_quick_up)
-    monkeypatch.setattr(net, "wg_quick_down",
-                        lambda conf, iface=None: world.torn.append(iface))
+    monkeypatch.setattr(net, "wg_quick_down", lambda conf, iface=None: world.torn.append(iface))
     monkeypatch.setattr(net, "link_is_up", lambda iface: iface in world.live)
     monkeypatch.setattr(net, "resolve_host", resolve_host)
     monkeypatch.setattr(net, "dry_run", lambda: dry_run)
     monkeypatch.setattr(Path, "exists", fake_exists)
     monkeypatch.setattr(
-        agent, "_pin_endpoint_route",
+        agent,
+        "_pin_endpoint_route",
         lambda host, path, idx: world.pinned.append((host, path.name, idx)),
     )
 
@@ -137,17 +145,14 @@ def test_packet_mode_returns_before_the_per_leg_loop(tmp_path, monkeypatch):
     a = _agent(tmp_path, monkeypatch, world, datapath="packet", dry_run=True)
     a.ensure_tunnels()
     assert set(world.confs) == {PACKET_IFACE}
-    assert [p.wg_iface for p in a.paths] == [None, None], (
-        "the per-leg loop ran in packet mode"
-    )
+    assert [p.wg_iface for p in a.paths] == [None, None], "the per-leg loop ran in packet mode"
     assert world.pinned == [], "packet mode must not install per-leg fwmark pins"
 
 
 # --------------------------------------------------------- endpoint choice --
 
 
-def test_the_configured_port_is_stripped_before_the_leg_port_is_appended(
-        tmp_path, monkeypatch):
+def test_the_configured_port_is_stripped_before_the_leg_port_is_appended(tmp_path, monkeypatch):
     """home.endpoint carries a port for humans; each leg dials its OWN port.
     Left in place it would produce host:51900:51901, which resolves to nothing."""
     world = _World()
@@ -168,8 +173,7 @@ def test_the_resolved_address_is_dialled_never_the_hostname(tmp_path, monkeypatc
     assert world.pinned[0][0] == "203.0.113.7", "the pin must use the same host"
 
 
-def test_the_hostname_is_used_only_when_resolution_has_never_succeeded(
-        tmp_path, monkeypatch):
+def test_the_hostname_is_used_only_when_resolution_has_never_succeeded(tmp_path, monkeypatch):
     """A first boot with DNS down loses nothing by handing wg the hostname; a
     tunnel that cannot be built at all is strictly worse than a slow one."""
     world = _World()
@@ -181,8 +185,7 @@ def test_the_hostname_is_used_only_when_resolution_has_never_succeeded(
 # ------------------------------------------------------- per-leg decisions --
 
 
-def test_a_leg_with_no_key_or_address_is_marked_down_and_skipped(
-        tmp_path, monkeypatch):
+def test_a_leg_with_no_key_or_address_is_marked_down_and_skipped(tmp_path, monkeypatch):
     """Writing a conf with no key produces an interface that exists and never
     handshakes, which every later pass reads as a live tunnel."""
     world = _World()
@@ -197,15 +200,19 @@ def test_a_leg_with_no_key_or_address_is_marked_down_and_skipped(
 
 
 @pytest.mark.parametrize("missing", ["address", "key"])
-def test_half_an_identity_is_refused_just_like_none_of_one(
-        tmp_path, monkeypatch, missing):
+def test_half_an_identity_is_refused_just_like_none_of_one(tmp_path, monkeypatch, missing):
     """AN IDENTITY IS A PAIR, NEVER TWO HALVES. Backfilling the halves
     independently once paired one peer's key with another's inner address, and
     home's cryptokey routing drops every such packet while the handshake still
     looks fine - a tunnel that is established and moves nothing."""
     world = _World()
-    a = _agent(tmp_path, monkeypatch, world, leg_keys=False,
-               agent_key="cGtleQ==" if missing == "address" else "")
+    a = _agent(
+        tmp_path,
+        monkeypatch,
+        world,
+        leg_keys=False,
+        agent_key="cGtleQ==" if missing == "address" else "",
+    )
     if missing == "address":
         a.config.home.address_cidr = ""
     a.ensure_tunnels()
@@ -230,8 +237,7 @@ def test_a_leg_with_no_uplink_is_torn_down_and_skipped(tmp_path, monkeypatch):
     assert [pin[1] for pin in world.pinned] == ["leg1"]
 
 
-def test_the_missing_key_check_runs_before_the_missing_uplink_check(
-        tmp_path, monkeypatch):
+def test_the_missing_key_check_runs_before_the_missing_uplink_check(tmp_path, monkeypatch):
     """Order is load-bearing: a keyless leg reports the bundle problem rather
     than being torn down and reported as merely unmatched."""
     world = _World()
@@ -276,8 +282,7 @@ def test_each_leg_gets_its_own_fwmark(tmp_path, monkeypatch):
     assert world.confs["pb1"]["fwmark"] == base + 1
 
 
-def test_a_leg_dials_its_assigned_port_and_otherwise_the_first_home_port(
-        tmp_path, monkeypatch):
+def test_a_leg_dials_its_assigned_port_and_otherwise_the_first_home_port(tmp_path, monkeypatch):
     """Ports are handed out per leg so home can tell them apart; a leg with none
     yet assigned still has to dial something."""
     world = _World()
@@ -337,8 +342,7 @@ def test_a_live_tunnel_is_left_alone(tmp_path, monkeypatch):
     )
 
 
-def test_bring_up_passes_the_legs_own_address_not_the_home_fallback(
-        tmp_path, monkeypatch):
+def test_bring_up_passes_the_legs_own_address_not_the_home_fallback(tmp_path, monkeypatch):
     """The conf may fall back to the shared home address, but bring-up must not
     invent one: `address=None` tells the native path to leave the interface's
     address to the conf rather than applying a borrowed one with `ip`."""
@@ -358,8 +362,7 @@ def test_bring_up_passes_the_legs_own_mtu(tmp_path, monkeypatch):
     assert [u[2] for u in world.ups] == [1280, 1281]
 
 
-def test_a_failed_bring_up_downs_only_that_leg_and_skips_its_route(
-        tmp_path, monkeypatch):
+def test_a_failed_bring_up_downs_only_that_leg_and_skips_its_route(tmp_path, monkeypatch):
     """One leg failing must not end the pass. Before NetError wrapping, a hung
     `wg setconf` raised TimeoutExpired straight past this handler and killed the
     whole reconcile, taking the healthy legs with it."""

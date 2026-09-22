@@ -58,26 +58,29 @@ def test_first_matching_pairing_wins_so_order_is_the_operator_s():
 
 
 def test_config_parses_lan_endpoints():
-    cfg = parse_config({
-        "home": {
-            "endpoint": "dns-e.example-home.invalid",
-            "lan_endpoints": [
-                {"network": "192.0.2.0/24", "address": "192.0.2.141",
-                 "port": 51931},
-            ],
-        },
-        "policy": {"mode": "aggregate"},
-        "paths": [],
-    })
+    cfg = parse_config(
+        {
+            "home": {
+                "endpoint": "dns-e.example-home.invalid",
+                "lan_endpoints": [
+                    {"network": "192.0.2.0/24", "address": "192.0.2.141", "port": 51931},
+                ],
+            },
+            "policy": {"mode": "aggregate"},
+            "paths": [],
+        }
+    )
     assert cfg.home.lan_endpoints == HOUSE
 
 
 def test_config_without_lan_endpoints_is_unchanged():
-    cfg = parse_config({
-        "home": {"endpoint": "dns-e.example-home.invalid"},
-        "policy": {"mode": "aggregate"},
-        "paths": [],
-    })
+    cfg = parse_config(
+        {
+            "home": {"endpoint": "dns-e.example-home.invalid"},
+            "policy": {"mode": "aggregate"},
+            "paths": [],
+        }
+    )
     assert cfg.home.lan_endpoints == []
 
 
@@ -98,22 +101,33 @@ def _agent(tmp_path: Path, *, lan_endpoints: list | None = None) -> BondAgent:
     }
     if lan_endpoints is not None:
         home["lan_endpoints"] = lan_endpoints
-    return BondAgent(parse_config({
-        "agent": {"private_key": "cGtleQ==", "state_dir": str(tmp_path / "s"),
-                  "run_dir": str(tmp_path / "r")},
-        "home": home,
-        "policy": {"datapath": "packet", "transport_port": 51830,
-                   "mode": "aggregate", "home_port": 51902},
-        "paths": [{"name": "ethernet", "interface": "eth0"}],
-    }))
+    return BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path / "s"),
+                    "run_dir": str(tmp_path / "r"),
+                },
+                "home": home,
+                "policy": {
+                    "datapath": "packet",
+                    "transport_port": 51830,
+                    "mode": "aggregate",
+                    "home_port": 51902,
+                },
+                "paths": [{"name": "ethernet", "interface": "eth0"}],
+            }
+        )
+    )
 
 
 def _path(name: str, *, local_ip: str | None, relay: str = "") -> PathRuntime:
     return PathRuntime(
         name=name,
-        config=PathConfig(name=name, match=PathMatch(type="interface",
-                                                     interface="eth0"),
-                          relay_endpoint=relay),
+        config=PathConfig(
+            name=name, match=PathMatch(type="interface", interface="eth0"), relay_endpoint=relay
+        ),
         interface="eth0",
         local_ip=local_ip,
     )
@@ -125,15 +139,13 @@ PAIR = [{"network": "192.0.2.0/24", "address": "192.0.2.141", "port": 51931}]
 def test_a_leg_on_the_house_lan_dials_the_lan_address(tmp_path):
     agent = _agent(tmp_path, lan_endpoints=PAIR)
     path = _path("ethernet", local_ip="192.0.2.55")
-    assert agent._leg_remote(path, ("203.0.113.33", 51902)) == \
-        ("192.0.2.141", 51931)
+    assert agent._leg_remote(path, ("203.0.113.33", 51902)) == ("192.0.2.141", 51931)
 
 
 def test_the_same_leg_away_from_home_still_dials_the_public_endpoint(tmp_path):
     agent = _agent(tmp_path, lan_endpoints=PAIR)
-    path = _path("ethernet", local_ip="192.168.8.14")   # hotel ethernet
-    assert agent._leg_remote(path, ("203.0.113.33", 51902)) == \
-        ("203.0.113.33", 51902)
+    path = _path("ethernet", local_ip="192.168.8.14")  # hotel ethernet
+    assert agent._leg_remote(path, ("203.0.113.33", 51902)) == ("203.0.113.33", 51902)
 
 
 def test_a_companion_relay_endpoint_still_wins_over_a_lan_pairing(tmp_path):
@@ -141,15 +153,13 @@ def test_a_companion_relay_endpoint_still_wins_over_a_lan_pairing(tmp_path):
     it to home would be this router's own uplink under another name."""
     agent = _agent(tmp_path, lan_endpoints=PAIR)
     path = _path("pixel", local_ip="192.0.2.55", relay="10.99.0.174:51999")
-    assert agent._leg_remote(path, ("203.0.113.33", 51902)) == \
-        ("10.99.0.174", 51999)
+    assert agent._leg_remote(path, ("203.0.113.33", 51902)) == ("10.99.0.174", 51999)
 
 
 def test_no_pairing_configured_leaves_every_leg_unchanged(tmp_path):
     agent = _agent(tmp_path)
     path = _path("ethernet", local_ip="192.0.2.55")
-    assert agent._leg_remote(path, ("203.0.113.33", 51902)) == \
-        ("203.0.113.33", 51902)
+    assert agent._leg_remote(path, ("203.0.113.33", 51902)) == ("203.0.113.33", 51902)
 
 
 def test_match_interfaces_records_the_address_and_clears_it_on_loss(tmp_path, monkeypatch):
@@ -163,7 +173,8 @@ def test_match_interfaces_records_the_address_and_clears_it_on_loss(tmp_path, mo
 
     agent = _agent(tmp_path, lan_endpoints=PAIR)
     link = net_mod.LinkInfo(
-        ifname="eth0", operstate="UP",
+        ifname="eth0",
+        operstate="UP",
         addr_info=[{"family": "inet", "local": "192.0.2.55", "prefixlen": 24}],
     )
     monkeypatch.setattr(net_mod, "list_links", lambda: [link])
@@ -172,26 +183,26 @@ def test_match_interfaces_records_the_address_and_clears_it_on_loss(tmp_path, mo
     agent.match_interfaces()
     path = next(p for p in agent.paths if p.name == "ethernet")
     assert path.local_ip == "192.0.2.55"
-    assert agent._leg_remote(path, ("203.0.113.33", 51902)) == \
-        ("192.0.2.141", 51931)
+    assert agent._leg_remote(path, ("203.0.113.33", 51902)) == ("192.0.2.141", 51931)
 
     # Cable pulled: the address must not outlive the interface.
     monkeypatch.setattr(net_mod, "list_links", list)
     monkeypatch.setattr(net_mod, "wan_gateways", dict)
     agent.match_interfaces()
     assert path.local_ip is None
-    assert agent._leg_remote(path, ("203.0.113.33", 51902)) == \
-        ("203.0.113.33", 51902)
+    assert agent._leg_remote(path, ("203.0.113.33", 51902)) == ("203.0.113.33", 51902)
 
 
 def test_a_pairing_without_a_port_keeps_the_legs_existing_port(tmp_path):
     """No forward involved: the LAN port is the same as the public one."""
-    agent = _agent(tmp_path, lan_endpoints=[
-        {"network": "192.0.2.0/24", "address": "192.0.2.141"},
-    ])
+    agent = _agent(
+        tmp_path,
+        lan_endpoints=[
+            {"network": "192.0.2.0/24", "address": "192.0.2.141"},
+        ],
+    )
     path = _path("ethernet", local_ip="192.0.2.55")
-    assert agent._leg_remote(path, ("203.0.113.33", 51902)) == \
-        ("192.0.2.141", 51902)
+    assert agent._leg_remote(path, ("203.0.113.33", 51902)) == ("192.0.2.141", 51902)
 
 
 def test_the_paired_port_is_used_because_the_public_one_is_a_forward(tmp_path):
@@ -211,7 +222,8 @@ def test_the_console_says_which_home_a_leg_dials_and_why(tmp_path, monkeypatch):
 
     agent = _agent(tmp_path, lan_endpoints=PAIR)
     link = net_mod.LinkInfo(
-        ifname="eth0", operstate="UP",
+        ifname="eth0",
+        operstate="UP",
         addr_info=[{"family": "inet", "local": "192.0.2.55", "prefixlen": 24}],
     )
     monkeypatch.setattr(net_mod, "list_links", lambda: [link])
@@ -228,7 +240,8 @@ def test_a_leg_not_on_the_paired_network_reports_no_lan_home(tmp_path, monkeypat
 
     agent = _agent(tmp_path, lan_endpoints=PAIR)
     link = net_mod.LinkInfo(
-        ifname="eth0", operstate="UP",
+        ifname="eth0",
+        operstate="UP",
         addr_info=[{"family": "inet", "local": "192.168.8.14", "prefixlen": 24}],
     )
     monkeypatch.setattr(net_mod, "list_links", lambda: [link])
@@ -264,19 +277,20 @@ def test_the_console_never_claims_a_companion_leg_dials_home_via_lan(tmp_path):
 
 def test_a_typo_in_a_network_is_rejected_at_parse_time_not_every_pass():
     """Left to use-time this warns on every reconcile, forever, on a router."""
-    cfg = parse_config({
-        "home": {
-            "endpoint": "home.example",
-            "lan_endpoints": [
-                {"network": "192.0.2.0/24", "address": "192.0.2.141"},
-                {"network": "not-a-network", "address": "192.0.2.141"},
-                {"network": "192.0.2.0/24", "address": "192.0.2.141",
-                 "port": "not-a-port"},
-            ],
-        },
-        "policy": {"mode": "aggregate"},
-        "paths": [],
-    })
+    cfg = parse_config(
+        {
+            "home": {
+                "endpoint": "home.example",
+                "lan_endpoints": [
+                    {"network": "192.0.2.0/24", "address": "192.0.2.141"},
+                    {"network": "not-a-network", "address": "192.0.2.141"},
+                    {"network": "192.0.2.0/24", "address": "192.0.2.141", "port": "not-a-port"},
+                ],
+            },
+            "policy": {"mode": "aggregate"},
+            "paths": [],
+        }
+    )
     assert cfg.home.lan_endpoints == [
         LanEndpoint(network="192.0.2.0/24", address="192.0.2.141"),
     ]

@@ -16,6 +16,7 @@ on disk is untouched and stays in force. A control plane that can hand a router
 a bad key is a control plane that can island it by typo, and this router is
 sometimes its own only uplink.
 """
+
 from __future__ import annotations
 
 import json
@@ -96,17 +97,13 @@ def test_a_placeholder_is_refused():
     off the network. Refused by SHAPE, not by name, so the next scrubbed value
     is caught too."""
     with pytest.raises(musterwrt.Refused, match="placeholder"):
-        musterwrt.datapath_keys(
-            app_config(datapath_line("key.current", "<server-public-key>"))
-        )
+        musterwrt.datapath_keys(app_config(datapath_line("key.current", "<server-public-key>")))
 
 
 def test_a_different_placeholder_is_refused_too():
     """Not special-cased to the one that bit us."""
     with pytest.raises(musterwrt.Refused, match="placeholder"):
-        musterwrt.datapath_keys(
-            app_config(datapath_line("key.current", "<datapath-key>"))
-        )
+        musterwrt.datapath_keys(app_config(datapath_line("key.current", "<datapath-key>")))
 
 
 @pytest.mark.parametrize(
@@ -156,9 +153,7 @@ def test_an_app_config_for_somebody_else_changes_nothing():
     """A policy file that configures only the companion app is not an
     instruction to clear the datapath key."""
     with pytest.raises(musterwrt.Refused, match="nothing here for the datapath"):
-        musterwrt.datapath_keys(
-            app_config("set app.zippie.companion announceToken abc123")
-        )
+        musterwrt.datapath_keys(app_config("set app.zippie.companion announceToken abc123"))
 
 
 def test_a_key_this_router_does_not_know_is_refused_not_ignored():
@@ -229,7 +224,9 @@ def test_the_merge_preserves_every_other_key(tmp_path):
         "private_key": "legacy",
         "paths": {"hotspot": {"private_key": "p1", "port": 51830}},
     }
-    merged = musterwrt.merge_into_keys(existing, {"key.current": GOOD}, "rev1", "/etc/zippie/bond.key")
+    merged = musterwrt.merge_into_keys(
+        existing, {"key.current": GOOD}, "rev1", "/etc/zippie/bond.key"
+    )
     assert merged["private_key"] == "legacy"
     assert merged["paths"]["hotspot"]["private_key"] == "p1"
     assert merged[musterwrt.KEYS_SECTION]["current_digest"] == musterwrt._digest(GOOD)
@@ -271,9 +268,7 @@ def test_a_missing_keys_file_is_simply_empty(tmp_path):
 
 
 def _fake_muster(monkeypatch, files, revision="rev1"):
-    monkeypatch.setattr(
-        musterwrt, "fetch_configuration", lambda *a, **k: (files, revision)
-    )
+    monkeypatch.setattr(musterwrt, "fetch_configuration", lambda *a, **k: (files, revision))
 
 
 def test_a_refused_answer_leaves_keys_json_byte_identical(tmp_path, monkeypatch):
@@ -286,7 +281,9 @@ def test_a_refused_answer_leaves_keys_json_byte_identical(tmp_path, monkeypatch)
 
     _fake_muster(monkeypatch, app_config(datapath_line("key.current", "<placeholder>")))
     with pytest.raises(musterwrt.Refused):
-        musterwrt.refresh("https://muster.invalid", tmp_path / "k.pem", "cert", target, tmp_path / "bond.key")
+        musterwrt.refresh(
+            "https://muster.invalid", tmp_path / "k.pem", "cert", target, tmp_path / "bond.key"
+        )
     assert target.read_bytes() == before
 
 
@@ -302,7 +299,9 @@ def test_an_unreachable_muster_leaves_keys_json_byte_identical(tmp_path, monkeyp
 
     monkeypatch.setattr(musterwrt, "fetch_configuration", down)
     with pytest.raises(musterwrt.Unreachable):
-        musterwrt.refresh("https://muster.invalid", tmp_path / "k.pem", "cert", target, tmp_path / "bond.key")
+        musterwrt.refresh(
+            "https://muster.invalid", tmp_path / "k.pem", "cert", target, tmp_path / "bond.key"
+        )
     assert target.read_bytes() == before
 
 
@@ -312,11 +311,15 @@ def test_an_unchanged_key_is_not_rewritten(tmp_path, monkeypatch):
     makes for not rewriting an unchanged zippie.toml."""
     target = tmp_path / "keys.json"
     _fake_muster(monkeypatch, app_config(datapath_line("key.current", GOOD)))
-    musterwrt.refresh("https://m.invalid", tmp_path / "k.pem", "cert", target, tmp_path / "bond.key")
+    musterwrt.refresh(
+        "https://m.invalid", tmp_path / "k.pem", "cert", target, tmp_path / "bond.key"
+    )
     stamp = target.stat().st_mtime_ns
     before = target.read_bytes()
 
-    outcome = musterwrt.refresh("https://m.invalid", tmp_path / "k.pem", "cert", target, tmp_path / "bond.key")
+    outcome = musterwrt.refresh(
+        "https://m.invalid", tmp_path / "k.pem", "cert", target, tmp_path / "bond.key"
+    )
     assert "unchanged" in outcome
     assert target.stat().st_mtime_ns == stamp
     assert target.read_bytes() == before
@@ -328,7 +331,9 @@ def test_a_good_answer_does_update_the_cache(tmp_path, monkeypatch):
     target = tmp_path / "keys.json"
     target.write_text(json.dumps({"paths": {"hotspot": {"private_key": "keepme"}}}))
     _fake_muster(monkeypatch, app_config(datapath_line("key.current", GOOD)), "rev9")
-    outcome = musterwrt.refresh("https://m.invalid", tmp_path / "k.pem", "cert", target, tmp_path / "bond.key")
+    outcome = musterwrt.refresh(
+        "https://m.invalid", tmp_path / "k.pem", "cert", target, tmp_path / "bond.key"
+    )
     assert "updated" in outcome
     written = json.loads(target.read_text())
     assert written[musterwrt.KEYS_SECTION]["current_digest"] == musterwrt._digest(GOOD)
@@ -343,11 +348,11 @@ def test_no_key_material_reaches_the_summary_line(tmp_path, monkeypatch):
     target = tmp_path / "keys.json"
     _fake_muster(
         monkeypatch,
-        app_config(
-            datapath_line("key.current", GOOD), datapath_line("key.previous", OTHER)
-        ),
+        app_config(datapath_line("key.current", GOOD), datapath_line("key.previous", OTHER)),
     )
-    outcome = musterwrt.refresh("https://m.invalid", tmp_path / "k.pem", "cert", target, tmp_path / "bond.key")
+    outcome = musterwrt.refresh(
+        "https://m.invalid", tmp_path / "k.pem", "cert", target, tmp_path / "bond.key"
+    )
     assert GOOD not in outcome and OTHER not in outcome
 
 
@@ -366,27 +371,38 @@ def test_the_signature_verifies_and_signs_the_nonce_with_nothing_appended(tmp_pa
     """
     key = tmp_path / "device.key"
     subprocess.run(
-        ["openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout",
-         "-out", str(key)],
-        check=True, capture_output=True,
+        ["openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", str(key)],
+        check=True,
+        capture_output=True,
     )
     pub = tmp_path / "device.pub"
     subprocess.run(
         ["openssl", "ec", "-in", str(key), "-pubout", "-out", str(pub)],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
     nonce = "zvAyPY5ejVd_sifTDPBMi_kxKi0LJsjdIuZRO3Li1hw"
     signature = tmp_path / "sig.bin"
     import base64 as b64
+
     signature.write_bytes(b64.b64decode(musterwrt.sign_nonce(nonce, key)))
 
     # Verified against the EXACT nonce bytes - no trailing newline anywhere.
     message = tmp_path / "nonce.bin"
     message.write_bytes(nonce.encode())
     done = subprocess.run(
-        ["openssl", "dgst", "-sha256", "-verify", str(pub),
-         "-signature", str(signature), str(message)],
-        capture_output=True, check=False,
+        [
+            "openssl",
+            "dgst",
+            "-sha256",
+            "-verify",
+            str(pub),
+            "-signature",
+            str(signature),
+            str(message),
+        ],
+        capture_output=True,
+        check=False,
     )
     assert done.returncode == 0, done.stderr
 
@@ -394,11 +410,23 @@ def test_the_signature_verifies_and_signs_the_nonce_with_nothing_appended(tmp_pa
     # proves the assertion above is actually load-bearing.
     with_newline = tmp_path / "nonce-nl.bin"
     with_newline.write_bytes(nonce.encode() + b"\n")
-    assert subprocess.run(
-        ["openssl", "dgst", "-sha256", "-verify", str(pub),
-         "-signature", str(signature), str(with_newline)],
-        capture_output=True, check=False,
-    ).returncode != 0
+    assert (
+        subprocess.run(
+            [
+                "openssl",
+                "dgst",
+                "-sha256",
+                "-verify",
+                str(pub),
+                "-signature",
+                str(signature),
+                str(with_newline),
+            ],
+            capture_output=True,
+            check=False,
+        ).returncode
+        != 0
+    )
 
 
 def test_the_request_never_carries_the_default_user_agent():
@@ -556,9 +584,7 @@ def test_the_secret_lands_in_the_file_auth_reads(tmp_path, monkeypatch):
     shape this estate keeps rediscovering."""
     bond = tmp_path / "bond.key"
     _fake_muster(monkeypatch, app_config(datapath_line("key.current", GOOD)))
-    musterwrt.refresh(
-        "https://m.invalid", tmp_path / "k.pem", "cert", tmp_path / "keys.json", bond
-    )
+    musterwrt.refresh("https://m.invalid", tmp_path / "k.pem", "cert", tmp_path / "keys.json", bond)
     assert bond.read_text() == GOOD
 
 
@@ -567,9 +593,7 @@ def test_the_secret_file_is_mode_600(tmp_path, monkeypatch):
     key written at 0644 is an agent that will not start."""
     bond = tmp_path / "bond.key"
     _fake_muster(monkeypatch, app_config(datapath_line("key.current", GOOD)))
-    musterwrt.refresh(
-        "https://m.invalid", tmp_path / "k.pem", "cert", tmp_path / "keys.json", bond
-    )
+    musterwrt.refresh("https://m.invalid", tmp_path / "k.pem", "cert", tmp_path / "keys.json", bond)
     assert stat.S_IMODE(bond.stat().st_mode) == 0o600
 
 
@@ -579,9 +603,7 @@ def test_the_secret_is_written_with_nothing_appended(tmp_path, monkeypatch):
     presents as "the MAC never verifies"."""
     bond = tmp_path / "bond.key"
     _fake_muster(monkeypatch, app_config(datapath_line("key.current", GOOD)))
-    musterwrt.refresh(
-        "https://m.invalid", tmp_path / "k.pem", "cert", tmp_path / "keys.json", bond
-    )
+    musterwrt.refresh("https://m.invalid", tmp_path / "k.pem", "cert", tmp_path / "keys.json", bond)
     assert bond.read_bytes() == GOOD.encode()
 
 
@@ -600,13 +622,9 @@ def test_keys_json_never_holds_the_secret(tmp_path, monkeypatch):
     keys = tmp_path / "keys.json"
     _fake_muster(
         monkeypatch,
-        app_config(
-            datapath_line("key.current", GOOD), datapath_line("key.previous", OTHER)
-        ),
+        app_config(datapath_line("key.current", GOOD), datapath_line("key.previous", OTHER)),
     )
-    musterwrt.refresh(
-        "https://m.invalid", tmp_path / "k.pem", "cert", keys, tmp_path / "bond.key"
-    )
+    musterwrt.refresh("https://m.invalid", tmp_path / "k.pem", "cert", keys, tmp_path / "bond.key")
     text = keys.read_text()
     assert GOOD not in text and OTHER not in text
     assert musterwrt._digest(GOOD) in text
@@ -619,13 +637,9 @@ def test_the_previous_key_lands_beside_the_current_one(tmp_path, monkeypatch):
     bond = tmp_path / "bond.key"
     _fake_muster(
         monkeypatch,
-        app_config(
-            datapath_line("key.current", GOOD), datapath_line("key.previous", OTHER)
-        ),
+        app_config(datapath_line("key.current", GOOD), datapath_line("key.previous", OTHER)),
     )
-    musterwrt.refresh(
-        "https://m.invalid", tmp_path / "k.pem", "cert", tmp_path / "keys.json", bond
-    )
+    musterwrt.refresh("https://m.invalid", tmp_path / "k.pem", "cert", tmp_path / "keys.json", bond)
     previous = tmp_path / ("bond.key" + musterwrt.PREVIOUS_SUFFIX)
     assert previous.read_text() == OTHER
     assert stat.S_IMODE(previous.stat().st_mode) == 0o600
@@ -644,13 +658,9 @@ def test_the_previous_key_this_writes_is_the_one_auth_reads(tmp_path, monkeypatc
     bond = tmp_path / "bond.key"
     _fake_muster(
         monkeypatch,
-        app_config(
-            datapath_line("key.current", GOOD), datapath_line("key.previous", OTHER)
-        ),
+        app_config(datapath_line("key.current", GOOD), datapath_line("key.previous", OTHER)),
     )
-    musterwrt.refresh(
-        "https://m.invalid", tmp_path / "k.pem", "cert", tmp_path / "keys.json", bond
-    )
+    musterwrt.refresh("https://m.invalid", tmp_path / "k.pem", "cert", tmp_path / "keys.json", bond)
     assert auth.PREVIOUS_KEY_SUFFIX == musterwrt.PREVIOUS_SUFFIX
     assert auth.load_previous_bond_secret(str(bond)) == OTHER.encode()
     identity = auth.build_identity(auth.AuthLevel.REQUIRE, str(bond), 7)
