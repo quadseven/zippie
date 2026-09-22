@@ -1,0 +1,35 @@
+# MANAGED BY PULUMI - do not edit by hand. Single source: infra#995.
+# A change here is overwritten by the next provisioning PR; change the
+# standard at its source instead.
+#
+# Run locally:    pre-commit run --all-files
+# ruff is pinned to RUFF_VERSION (0.15.10) - the SAME version CI runs
+# via infra-public check.python.yml `ruff-version` (uvx ruff@0.15.10),
+# so local hooks and CI lint identically.
+default_install_hook_types: [pre-commit]
+fail_fast: false
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.10
+    hooks:
+      - id: ruff
+        files: '^.*\.py$'
+        args: [--fix]
+      - id: ruff-format
+        files: '^.*\.py$'
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '^(.*/uv\.lock|.*/poetry\.lock|.*/package-lock\.json|.*\.(patch|diff)|.*/src/test/resources/.*|.*/tests/fixtures/.*|docs/chaos/.*\.log)$'
+      - id: end-of-file-fixer
+        exclude: '^(.*/uv\.lock|.*/poetry\.lock|.*/package-lock\.json|.*\.(patch|diff)|.*/src/test/resources/.*|.*/tests/fixtures/.*|docs/chaos/.*\.log)$'
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: detect-private-key
+        exclude: '^travel/bond-agent/tests/fixtures/console-test\.key$'
