@@ -557,6 +557,14 @@ def _post(url: str, payload: dict, timeout: float = 20.0) -> dict:
         raise Unreachable(f"muster could not be reached: {down}") from down
 
 
+# HOW OFTEN THIS ROUTER ASKS MUSTER, in seconds, reported on every
+# configuration fetch (quadseven/muster#77, zippie#113). muster's console uses it
+# to judge whether the router is inside its own check-in cycle rather than a
+# phone's fifteen minutes. It describes the cron line scripts/deploy-openwrt.sh
+# installs for muster-refresh.sh (hourly, at :23); a test holds the two together.
+CHECK_IN_INTERVAL_S = 3600
+
+
 def fetch_configuration(
     base_url: str, key_path: Path, certificate_pem: str
 ) -> tuple[dict[str, str], str]:
@@ -577,6 +585,7 @@ def fetch_configuration(
             "nonce": nonce,
             "signature_b64": sign_nonce(nonce, key_path),
             "certificate_pem": certificate_pem,
+            "check_in_interval_s": CHECK_IN_INTERVAL_S,
         },
     )
     files = answer.get("files")
