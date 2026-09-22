@@ -2289,11 +2289,14 @@ class BondAgent:
             self.activity.observe(path.wg_iface, rx_now)
             still_moving = self.activity.is_advancing(path.wg_iface)
 
-            # Consecutive misses, not a single one. A weak LTE link drops the
-            # odd probe at ~900ms RTT; evicting on one would flap it out of the
-            # bond constantly. Three in a row is ~6s -- three times faster than
-            # waiting for the keepalive counter to go stale, and it is the
-            # signal that actually catches a link going away.
+            # Consecutive probe misses, counted for DIAGNOSIS only: the count
+            # goes into last_error when the path is marked DOWN. It does not
+            # decide liveness (zippie#111): the receive counter does. A live
+            # tunnel's counter moves with every WireGuard keepalive (3s while
+            # active, zippie.toml), and TunnelActivity calls it frozen after
+            # 7s - as fast as three ~2s probes, and not fooled by a carrier
+            # that filters ICMP. So a weak LTE link dropping the odd probe at
+            # ~900ms RTT never flaps out of the bond on misses alone.
             if rtt is None:
                 self._probe_misses[path.wg_iface] = self._probe_misses.get(path.wg_iface, 0) + 1
             else:
