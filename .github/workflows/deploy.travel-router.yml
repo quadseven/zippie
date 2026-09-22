@@ -18,6 +18,8 @@ on:
     branches: [main]
     paths:
       - 'travel/**'
+      # Docs never ship to the router, and every deploy restarts the bond.
+      - '!travel/**/*.md'
       - 'scripts/deploy-openwrt.sh'
   workflow_dispatch:
 

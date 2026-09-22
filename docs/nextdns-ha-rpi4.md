@@ -1,6 +1,6 @@
 # Freeing `srv-rpi4-01` — use **homedns**
 
-Implemented as a full project: **[`/Users/operator/dev/homedns`](../../homedns)**  
+Implemented as a full project: **[`/Users/operator/dev/homedns`](../../homedns)**
 Private repo target: `quadseven/homedns`.
 
 ## What you get
