@@ -1,0 +1,20 @@
+name: sync.public-repo-docs
+
+# Thin caller for the reusable public-repo AGENTS.md/CLAUDE.md sync. Keeps
+# the part of this repo's AGENTS.md and CLAUDE.md above the
+# `<!-- repo-specific below -->` marker identical to the canonical copies in
+# quadseven/infra-public/templates/public-repo/, and opens a PR when they
+# drift. Everything below the marker is this repo's own and is never touched.
+# Tracked in infra#4472.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch: {}
+
+jobs:
+  sync:
+    uses: quadseven/infra-public/.github/workflows/sync.public-repo-docs.yml@c9bd945704f0d33f1fa576eb4a5d469910c483df
+    permissions:
+      contents: write
+      pull-requests: write
