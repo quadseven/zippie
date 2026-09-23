@@ -36,17 +36,16 @@ on:
       # that tooling change without a single test running.
       - 'deploy/oke/**'
       - '.github/workflows/check.agent-tests.yml'
+  # EVERY pull request, no path filter, on purpose (#120, infra#2182).
+  # `zippie datapath go test` is a REQUIRED check on main, and a required
+  # check whose workflow never starts stays "pending" forever, blocking every
+  # PR that touches none of the paths above. So the workflow always runs, and
+  # the `changes` job below decides which suites a PR actually needs. The
+  # push filter above stays: main only re-runs when something relevant landed.
+  #
+  # If you add a path to the push filter, add it to AGENT_RE in the `changes`
+  # job too, or PRs touching it will stop running the suites.
   pull_request:
-    paths:
-      - 'travel/**'
-      - 'home/**'
-      - 'hub/**'
-      # The whole directory, not just the two manifest dirs it used to name:
-      # deploy/oke now holds executable operator tooling with its own suite
-      # (see the deploytest job), and a path filter that misses it would let
-      # that tooling change without a single test running.
-      - 'deploy/oke/**'
-      - '.github/workflows/check.agent-tests.yml'
 
 permissions:
   contents: read
@@ -69,8 +68,61 @@ jobs:
           echo "::error::PR validation restricted to repo collaborators."
           exit 1
 
-  pytest:
+  # Replaces the pull_request path filter (see `on:`). Two answers:
+  #   agent    - the PR touches any path the old filter named. Gates every job
+  #              except gotest, so they keep exactly the scope they had.
+  #   datapath - the PR touches the Go datapath (or this workflow). gotest
+  #              reads it and runs, or reports success with a skip line.
+  # A push to main already passed the push path filter, so both are true.
+  # Fails closed: if the diff cannot be computed the job fails, and gotest
+  # (which requires this job to succeed) fails with it, rather than skipping.
+  changes:
     needs: guard
+    name: changed paths
+    runs-on: arc-zippie
+    timeout-minutes: 3
+    outputs:
+      agent: ${{ steps.scope.outputs.agent }}
+      datapath: ${{ steps.scope.outputs.datapath }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          # Full history so both the PR head and its merge base with the base
+          # branch are present for the three-dot diff below.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: classify changed files
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "event is $EVENT, not a pull request: running every suite"
+            echo "agent=true" >> "$GITHUB_OUTPUT"
+            echo "datapath=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Three dots: what the PR changed since it left the base branch,
+          # not what the base branch has gained since.
+          CHANGED=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
+          echo "files changed by this PR:"
+          printf '%s\n' "$CHANGED" | sed 's/^/  /'
+          AGENT_RE='^(travel/|home/|hub/|deploy/oke/|\.github/workflows/check\.agent-tests\.yml$)'
+          DATAPATH_RE='^(travel/datapath-go/|\.github/workflows/check\.agent-tests\.yml$)'
+          agent=false; datapath=false
+          if printf '%s\n' "$CHANGED" | grep -Eq "$AGENT_RE"; then agent=true; fi
+          if printf '%s\n' "$CHANGED" | grep -Eq "$DATAPATH_RE"; then datapath=true; fi
+          echo "agent=$agent datapath=$datapath"
+          echo "agent=$agent" >> "$GITHUB_OUTPUT"
+          echo "datapath=$datapath" >> "$GITHUB_OUTPUT"
+
+  pytest:
+    needs: changes
+    if: ${{ needs.changes.outputs.agent == 'true' }}
     name: zippie agent pytest
     uses: quadseven/infra-public/.github/workflows/check.python.yml@cd83e5727c0a7b904f780960664a51b3a3a0c685
     with:
@@ -95,7 +147,8 @@ jobs:
       timeout-minutes: 6
 
   hubtest:
-    needs: guard
+    needs: changes
+    if: ${{ needs.changes.outputs.agent == 'true' }}
     name: zippie hub pytest
     uses: quadseven/infra-public/.github/workflows/check.python.yml@cd83e5727c0a7b904f780960664a51b3a3a0c685
     with:
@@ -132,7 +185,8 @@ jobs:
   # execute JS actions, but it is not on PATH, so relying on it would be a
   # coin flip that reads as a passing job when it lands wrong.
   hubjs:
-    needs: guard
+    needs: changes
+    if: ${{ needs.changes.outputs.agent == 'true' }}
     name: zippie hub js
     runs-on: arc-zippie
     timeout-minutes: 5
@@ -158,7 +212,8 @@ jobs:
   # caught by running it against production - it would just quietly move a
   # live ConfigMap into the "referenced by NOTHING" list.
   deploytest:
-    needs: guard
+    needs: changes
+    if: ${{ needs.changes.outputs.agent == 'true' }}
     name: zippie deploy tooling pytest
     uses: quadseven/infra-public/.github/workflows/check.python.yml@cd83e5727c0a7b904f780960664a51b3a3a0c685
     with:
@@ -184,8 +239,17 @@ jobs:
   # Kept as an inline job rather than a reusable for now; abstracting a
   # check.go.yml into infra-public alongside check.rust.yml is tracked
   # separately.
+  #
+  # REQUIRED CHECK on main (#120). So this job must REPORT on every PR, and
+  # report the truth. It always starts (`!cancelled()`), fails outright unless
+  # the trust gate and the change detection both succeeded, and when the PR
+  # touches no datapath file it succeeds in seconds with a log line saying the
+  # tests were skipped and why. It deliberately does NOT use a job-level `if:`
+  # on the datapath answer: a skipped job counts as passing a required check,
+  # and so would one skipped because `guard` or `changes` failed.
   gotest:
-    needs: guard
+    needs: [guard, changes]
+    if: ${{ !cancelled() }}
     name: zippie datapath go test
     runs-on: arc-zippie
     timeout-minutes: 10
@@ -201,8 +265,36 @@ jobs:
     env:
       CGO_ENABLED: 1
     steps:
+      # These two run before checkout, so they cannot use the job's default
+      # working directory, which does not exist yet.
+      - name: require the trust gate and change detection
+        working-directory: ${{ runner.temp }}
+        env:
+          GUARD: ${{ needs.guard.result }}
+          CHANGES: ${{ needs.changes.result }}
+        run: |
+          if [ "$GUARD" != "success" ] || [ "$CHANGES" != "success" ]; then
+            echo "::error::trust gate is '$GUARD' and change detection is '$CHANGES'; both must succeed before this check can pass."
+            exit 1
+          fi
+      - name: decide whether the datapath changed
+        id: scope
+        working-directory: ${{ runner.temp }}
+        env:
+          DATAPATH: ${{ needs.changes.outputs.datapath }}
+        run: |
+          case "$DATAPATH" in
+            true) echo "datapath files changed: running go vet, the -race suites and the fuzz seeds"
+                  echo "run=true" >> "$GITHUB_OUTPUT" ;;
+            false) echo "::notice::zippie datapath go test SKIPPED: no datapath files changed (travel/datapath-go/ or this workflow)."
+                   echo "run=false" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::change detection returned '$DATAPATH', expected true or false"
+               exit 1 ;;
+          esac
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        if: ${{ steps.scope.outputs.run == 'true' }}
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        if: ${{ steps.scope.outputs.run == 'true' }}
         with:
           go-version-file: travel/datapath-go/go.mod
           # The module is stdlib-only: no require block, and therefore no
@@ -211,8 +303,10 @@ jobs:
           # that does not exist. Add it back if a dependency is ever taken on.
           cache: false
       - name: go vet
+        if: ${{ steps.scope.outputs.run == 'true' }}
         run: go vet ./...
       - name: go test
+        if: ${{ steps.scope.outputs.run == 'true' }}
         run: go test ./... -race -count=1
       # THE MOBILE BIND LAYER IS A NESTED MODULE, and `./...` does not descend
       # into one. `travel/datapath-go/mobile` has its own go.mod, so the step
@@ -231,12 +325,14 @@ jobs:
       # toolchain, and gating every PR should not depend on the one mac mini
       # that also holds the signing keychain.
       - name: go test (mobile bind module)
+        if: ${{ steps.scope.outputs.run == 'true' }}
         working-directory: travel/datapath-go/mobile
         run: go test ./... -race -count=1
       # The fuzz SEED corpus only - a timed fuzz run does not belong on a PR
       # gate, but the seeds encode inputs that already found real bugs (an
       # unbounded stream origin, a nextSeq overflow) and must never regress.
       - name: fuzz seed corpus
+        if: ${{ steps.scope.outputs.run == 'true' }}
         run: go test ./zippie/ -run 'Fuzz' -count=1
 
   gomobile:
@@ -245,7 +341,9 @@ jobs:
     # mac mini - the machine holding the Apple Distribution identity and the CI
     # signing keychain. It is the WORST runner in the fleet to leave ungated,
     # and it was, until a commit security review caught it.
-    needs: guard
+    # Transitively on guard: `changes` needs it, so a blocked PR never gets here.
+    needs: changes
+    if: ${{ needs.changes.outputs.agent == 'true' }}
     name: zippie datapath mobile bind (xcframework + aar)
     # The mac mini: the ONLY machine with both Xcode and the Android SDK/NDK.
     # A hosted runner cannot do this and there are none in this org anyway.
