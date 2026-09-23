@@ -1,0 +1,40 @@
+name: check.leak-scan
+
+# Thin caller for the shared public-repo leak scan (infra#2997). This repo is
+# public: every PR's diff AND its title/body are scanned for private
+# infrastructure identifiers (hostnames, private-range IPs, device
+# identifiers, local user paths, refs that may name a private repo). The
+# scanner and its patterns live in quadseven/infra-public; see
+# _reusable.leak-scan.yml there for the mechanism and exit-code contract.
+#
+# WARN MODE (enforce: false), on purpose, for the first rollout. This repo is
+# a network bonding project: private-range addresses appear in its tests,
+# configs and docs by design (tunnel endpoints, lab subnets, placeholder
+# LANs), and scripts/check-no-operator-hosts.sh already polices which of
+# those ranges are permitted. Enforcing the generic rfc1918 shape here would
+# fail most PRs that touch the datapath. A finding is a warning annotation
+# on the run; it does not fail the check. Flip to enforce once the
+# remaining hits are either scrubbed or marked `leak-guard-allow`.
+#
+# Warn mode softens FINDINGS only. A scan that could not run (missing
+# scanner, unresolvable diff, empty diff on a PR with changes) is still a
+# red check.
+#
+# `edited` is in the trigger list on purpose: a PR body can leak long after
+# the last push.
+#
+# allowed-repo-refs: repos this one cites by `<name>#123` as a matter of
+# course. This repo's own refs are always exempt and need no entry.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  leak-scan:
+    uses: quadseven/infra-public/.github/workflows/_reusable.leak-scan.yml@c9bd945704f0d33f1fa576eb4a5d469910c483df
+    permissions:
+      contents: read
+    with:
+      allowed-repo-refs: infra, infra-public, muster
+      enforce: false
