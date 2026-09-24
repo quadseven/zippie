@@ -1702,11 +1702,11 @@ def serve_static(handler: BaseHTTPRequestHandler, path: str) -> None:
     string that was asked for.
     """
     name = "index.html" if path in ("/", "") else path.lstrip("/")
-    # Block TESTKEY APKs
-    if name.lower().endswith(".apk"):
-        decoded_name = unquote(name)
-        if "testkey" in decoded_name.lower():
-            return handler._send(403, b"TESTKEY builds are not servable", "text/plain")
+    # Block TESTKEY APKs. Decoded BEFORE the extension check, or ".ap%6b"
+    # walks past a check that only sees the encoded form.
+    decoded_name = unquote(name).lower()
+    if decoded_name.endswith(".apk") and "testkey" in decoded_name:
+        return handler._send(403, b"TESTKEY builds are not servable", "text/plain")
     root = STATIC.resolve()
     try:
         target = (root / unquote(name)).resolve()
