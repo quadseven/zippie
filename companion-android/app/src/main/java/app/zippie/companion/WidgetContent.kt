@@ -114,6 +114,9 @@ data class WidgetContent(
             // reads - the phone's counters are moving, which is exactly what
             // made the claim look true for hours.
             RelayVerdict.RouterSeesNothing -> Tone.DOWN
+            // DOWN, not IDLE. Android may freeze this relay with the screen
+            // off, so any "carrying" the counters suggest cannot be trusted.
+            is RelayVerdict.BatteryOptimizationRestricted -> Tone.DOWN
         }
 
         /**
