@@ -66,6 +66,10 @@ sealed class RelayVerdict {
     /** The router sent before and has been silent since. */
     data class RouterQuiet(val silentForMs: Long) : RelayVerdict()
 
+    /** Android battery optimization is preventing the relay from running properly.
+     *  The relay may be announcing but not actually carrying traffic. */
+    data class BatteryOptimizationRestricted(val reason: String) : RelayVerdict()
+
     /**
      * This phone is sending, and the ROUTER says nothing has ever arrived from
      * it.
@@ -110,6 +114,7 @@ sealed class RelayVerdict {
             // from this phone, which is a different and more actionable thing.
             RouterSeesNothing -> "Not arriving"
             Carrying -> "Carrying"
+            is BatteryOptimizationRestricted -> "Battery optimization restricted"
         }
 
     /** The sentence under it, naming which router when a name is known.
@@ -167,6 +172,7 @@ sealed class RelayVerdict {
                 "$who has never had anything arrive from this phone. The " +
                     "counters here are real - they count what left, not what " +
                     "landed."
+            is BatteryOptimizationRestricted -> reason
             Carrying -> "This phone's cellular is part of the bond."
         }
     }
@@ -218,6 +224,7 @@ sealed class RelayVerdict {
             stats.budgetExhausted?.let { return Paused(it) }
             if (!stats.cellularReady) return NoCellular(stats.lastError)
             if (!stats.listening) return NotListening(stats.lastError)
+            (stats.batteryExemption as? BatteryExemption.AtRisk)?.let { return BatteryOptimizationRestricted(it.reason) }
 
             val inbound = stats.lastRouterInboundAtMs
             if (inbound == null) {
@@ -272,6 +279,7 @@ sealed class RelayVerdict {
             NotForwarding(null),
             NotForwarding("up: no route to host"),
             RouterQuiet(40_000),
+            BatteryOptimizationRestricted("Android may freeze this relay while the screen is off."),
             Carrying,
         )
     }
