@@ -26,15 +26,28 @@ name: check.leak-scan
 # allowed-repo-refs: repos this one cites by `<name>#123` as a matter of
 # course. This repo's own refs are always exempt and need no entry.
 
+# DENY-LIST LAYER. Terms with no generic shape (people, products, projects)
+# are read at run time from the SSM parameter below, through the role in the
+# LEAK_SCAN_ROLE_ARN secret. That role can read this one parameter and
+# nothing else, and trusts only pull_request runs of the public repos that
+# share it. The terms never live in this repo, the log shows only how many
+# were loaded, and a hit is redacted. A fork PR gets no secrets, so the scan fails closed there rather
+# than running without the list.
+
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
 
 jobs:
   leak-scan:
-    uses: quadseven/infra-public/.github/workflows/_reusable.leak-scan.yml@c9bd945704f0d33f1fa576eb4a5d469910c483df
+    uses: quadseven/infra-public/.github/workflows/_reusable.leak-scan.yml@273755079c88172df39501ee6914fd878c0920bc
     permissions:
       contents: read
+      # Mint the OIDC token for the deny-list read role.
+      id-token: write
     with:
       allowed-repo-refs: infra, infra-public, muster
       enforce: false
+      deny-list-ssm-param: /infra/leak-scan/deny-list
+    secrets:
+      aws-role-arn: ${{ secrets.LEAK_SCAN_ROLE_ARN }}
