@@ -3800,8 +3800,9 @@ class BondAgent:
             # Which ruler metered_bytes was measured with (#183). A future
             # comparison against a carrier bill has to know whether the
             # IPv4+UDP headers are in the number, or it is silently off by
-            # 28 bytes per datagram.
-            "metered_bytes_definition": LINK_BYTES_DEFINITION,
+            # 28 bytes per datagram. Same name as the usage.json field, so
+            # the file and the console speak one word for one ruler.
+            "bytes_definition": LINK_BYTES_DEFINITION,
             "metered_amplification": (
                 round(metered_bytes / client_bytes, 2) if client_bytes else None
             ),

@@ -177,7 +177,7 @@ def test_console_states_which_bytes_definition_it_reports(tmp_path):
     bond._transport_ids = {"cell": 0, "wan": 1}
     bond._transport_links = {0, 1}
 
-    assert bond.status_dict()["economy"]["metered_bytes_definition"] == (LINK_BYTES_DEFINITION)
+    assert bond.status_dict()["economy"]["bytes_definition"] == (LINK_BYTES_DEFINITION)
 
 
 def test_three_metered_idle_legs_project_below_100_mb_per_day():
@@ -341,6 +341,12 @@ def _simulate_idle_day(t, probe_interval_s=_IDLE_PROBE_S):
         for pid, sock in enumerate(socks):
             for data, _addr in sock.sent:
                 probe = Frame.unpack(data)
+                # Fail loud, not weird: if send_keepalives() ever emits
+                # anything but a probe, say so here rather than letting an
+                # unpack of garbage blow up the harness somewhere obscure.
+                assert probe.flags & FLAG_KEEPALIVE, (
+                    f"send_keepalives emitted a non-probe datagram: flags={probe.flags:#x}"
+                )
                 reply = t._pack(
                     Frame(
                         seq=probe.seq,
