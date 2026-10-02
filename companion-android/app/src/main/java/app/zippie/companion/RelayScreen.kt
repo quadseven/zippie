@@ -122,6 +122,22 @@ private fun RelaySection(
         color = if (alarmed) Ink.down else Ink.secondary,
     )
 
+    // THE LAST STAND-DOWN, when the relay never started (#180 AC3). A phone
+    // that stood down at boot on an exhausted budget otherwise shows only the
+    // generic Off verdict - no reason, and no hint that it will reconsider on
+    // its own. The record is cleared when the relay starts or the user starts
+    // it by hand, so a stale one cannot outlive the state it describes.
+    if (verdict is RelayVerdict.Off) {
+        state.lastBootStanddown?.let { standdown ->
+            Spacer(Modifier.height(Space.base))
+            Text(
+                standdown.displayLine(state.nowMs),
+                style = Kind.caption,
+                color = Ink.secondary,
+            )
+        }
+    }
+
     Spacer(Modifier.height(Space.base))
     // ONE CONTROL, decided by the verdict already computed above.
     //
