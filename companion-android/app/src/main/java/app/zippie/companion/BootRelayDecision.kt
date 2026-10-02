@@ -155,5 +155,31 @@ sealed class BootRelayDecision {
             attempt <= 9 -> 300_000L     // 8.5m, 13.5m, 18.5m
             else -> 900_000L             // every 15 minutes, indefinitely
         }
+
+        /**
+         * The durable line BootReceiver records for each outcome of the boot
+         * decision (#181, legacy no. 257).
+         *
+         * KEPT HERE, Android-free, for the same reason the decision itself
+         * is: the on-disk boot log is the only account of a cold boot that
+         * survives the reboot being diagnosed, so the wording that makes
+         * "asked and started" distinguishable from "asked and skipped" is
+         * pinned by unit test rather than left to inspection.
+         *
+         * The line names the source broadcast, and for a stand-down the
+         * reason plus whether a retry was armed - so a permanent stand-down
+         * reads differently on disk from one that will re-ask. It never
+         * carries a credential: the only inputs are the source, the outcome
+         * and the proximity, and none of them can be one.
+         */
+        fun outcomeLogLine(
+            source: String,
+            outcome: BootRelayDecision,
+            proximity: RouterProximity,
+        ): String = when (outcome) {
+            is Start -> "$source: started (proximity=$proximity)"
+            is Skip -> "$source: stood down - ${outcome.reason} " +
+                "(retry ${if (outcome.retryable) "armed" else "NOT armed"})"
+        }
     }
 }
