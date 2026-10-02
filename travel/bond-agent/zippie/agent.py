@@ -3762,6 +3762,8 @@ class BondAgent:
 
     def _economy_status(self) -> dict[str, Any] | None:
         """Client work versus bytes bought from metered transport legs."""
+        from zippie.transport import LINK_BYTES_DEFINITION
+
         transport = getattr(self, "_transport", None)
         if transport is None:
             return None
@@ -3795,6 +3797,11 @@ class BondAgent:
             # this layer; name the limitation instead of implying decryption.
             "client_payload_estimated": True,
             "metered_bytes": metered_bytes,
+            # Which ruler metered_bytes was measured with (#183). A future
+            # comparison against a carrier bill has to know whether the
+            # IPv4+UDP headers are in the number, or it is silently off by
+            # 28 bytes per datagram.
+            "metered_bytes_definition": LINK_BYTES_DEFINITION,
             "metered_amplification": (
                 round(metered_bytes / client_bytes, 2) if client_bytes else None
             ),

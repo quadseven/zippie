@@ -387,3 +387,48 @@ def test_a_zero_length_tick_does_not_produce_an_infinite_rate(tmp_path):
     p = a.paths[0]
     if p.tx_bps is not None:
         assert p.tx_bps < 1e12, "a near-zero span produced a spike"
+
+
+# ---------------------------------------------------------------------------
+# #183 AC3: the usage counter's definition is recorded, not silent.
+#
+# link_bytes() changed what it counts mid-month (legacy no. 261 added the
+# IPv4+UDP headers). usage.json must say which ruler a month was measured
+# with, and a file written under the old ruler must be adopted loudly rather
+# than mixed in silently.
+
+
+def test_usage_file_records_which_bytes_definition_it_uses(tmp_path):
+    from zippie.transport import LINK_BYTES_DEFINITION
+
+    s = UsageStore(tmp_path, clock=FakeClock())
+    s.mark_dirty()
+    assert s.maybe_flush({"hotspot": 3.25}, force=True) is True
+    raw = json.loads((tmp_path / "usage.json").read_text())
+    assert raw["bytes_definition"] == LINK_BYTES_DEFINITION
+
+
+def test_a_definition_changeover_is_adopted_loudly_not_silently(tmp_path, caplog):
+    """#183: a file accumulated under the old counting is adopted (the bytes
+    were really measured) but the changeover is logged, so the mixed month
+    is explainable."""
+    (tmp_path / "usage.json").write_text(
+        json.dumps({"version": 2, "legs": {"hotspot": {"usage_gb": 3.25}}})
+    )
+    with caplog.at_level("WARNING", logger="zippie.store"):
+        loaded = UsageStore(tmp_path).load()
+    assert loaded == {"hotspot": 3.25}, "counters must be adopted, not zeroed"
+    assert any("byte-counting definition" in r.message for r in caplog.records), (
+        "changeover was not logged loudly"
+    )
+
+
+def test_matching_definition_loads_quietly(tmp_path, caplog):
+    s = UsageStore(tmp_path, clock=FakeClock())
+    s.mark_dirty()
+    assert s.maybe_flush({"hotspot": 3.25}, force=True) is True
+    with caplog.at_level("WARNING", logger="zippie.store"):
+        assert UsageStore(tmp_path).load() == {"hotspot": 3.25}
+    assert not any("byte-counting definition" in r.message for r in caplog.records), (
+        "same-definition load should not warn"
+    )
