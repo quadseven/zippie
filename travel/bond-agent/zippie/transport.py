@@ -434,6 +434,14 @@ _WG_TRANSPORT_DATA = 4
 _WG_TRANSPORT_OVERHEAD = 32
 _IPV4_UDP_HEADER_BYTES = 28
 
+# WHAT link_bytes() COUNTS, as a versioned name. Bumped whenever the counting
+# changes; the usage store records it in usage.json and the console reports
+# it, so a reader can tell which definition a month was accumulated under
+# (#183). v1, before legacy no. 261: payload bytes as handed to the socket.
+# v2, current: v1 plus the IPv4 (20) and UDP (8) headers the carrier meters
+# on every datagram, in both directions.
+LINK_BYTES_DEFINITION = "v2-includes-ipv4-udp"
+
 
 def _wireguard_client_bytes_estimate(datagram: bytes) -> int | None:
     """Estimated client bytes in a WireGuard datagram; None for overhead.
