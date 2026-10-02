@@ -36,6 +36,14 @@ data class BondUiState(
     val consoleUrl: String? = null,
     val fetchedAtMs: Long? = null,
     val relay: RelayReport? = null,
+    /**
+     * The last boot stand-down, when the relay never started. Shown on the
+     * home screen instead of the generic Off verdict, so a phone that stood
+     * down on budget says so with the reason and when it will reconsider
+     * (#180 AC3). Null when the relay is running or no stand-down was
+     * recorded.
+     */
+    val lastBootStanddown: BootStanddown? = null,
     val carrier: CarrierInfo? = null,
     val localIp: String? = null,
     val listenPort: Int = RelayConfiguration().listenPort,
@@ -126,6 +134,12 @@ class BondViewModel(app: Application) : AndroidViewModel(app) {
             val legName = withContext(Dispatchers.IO) {
                 RelayConfiguration.prefs(context).getString(LegName.KEY, null)
             }
+            // Tiny file, device-protected so it exists even for a stand-down
+            // recorded before first unlock. Read here rather than in the
+            // screen: the screen must stay a pure function of its state.
+            val standdown = withContext(Dispatchers.IO) {
+                runCatching { BootStanddownStore.load(context) }.getOrNull()
+            }
             val (result, proximity) = BondStatusClient.probe(
                 config.consoleCandidates,
                 wifi = SystemWifiRoute(context),
@@ -160,6 +174,7 @@ class BondViewModel(app: Application) : AndroidViewModel(app) {
                         legName = legName,
                         hasAnnounceToken = config.announceToken.isNotEmpty(),
                         throughput = history.chart(),
+                        lastBootStanddown = standdown,
                         nowMs = now,
                     )
                 }
@@ -201,6 +216,7 @@ class BondViewModel(app: Application) : AndroidViewModel(app) {
                         listenPort = config.listenPort,
                         legName = legName,
                         hasAnnounceToken = config.announceToken.isNotEmpty(),
+                        lastBootStanddown = standdown,
                         nowMs = now,
                     )
                 }

@@ -325,6 +325,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startRelayService() {
+        // A hand-started relay supersedes any boot stand-down: without this,
+        // stopping it again would show a stale reason for a state the user
+        // chose.
+        runCatching { BootStanddownStore.clear(this) }
         startForegroundService(Intent(this, RelayService::class.java))
     }
 
