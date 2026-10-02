@@ -122,6 +122,18 @@ private fun RelaySection(
         color = if (alarmed) Ink.down else Ink.secondary,
     )
 
+    // THE EXEMPTION WARNING, orthogonal to the verdict (#178 AC2, #267). The
+    // decision and the data existed; nothing displayed them, so a phone one
+    // setting away from a dead leg said nothing on its own screen. Shown only
+    // for the at-risk combination - Granted and NotNeeded stay silent - and
+    // never alters the headline above it.
+    stats?.batteryExemption?.let { exemption ->
+        BatteryExemption.warningLine(exemption)?.let { warning ->
+            Spacer(Modifier.height(Space.base))
+            Text(warning, style = Kind.caption, color = Ink.down)
+        }
+    }
+
     Spacer(Modifier.height(Space.base))
     // ONE CONTROL, decided by the verdict already computed above.
     //
