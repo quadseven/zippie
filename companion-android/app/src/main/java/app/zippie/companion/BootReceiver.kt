@@ -254,7 +254,7 @@ class BootReceiver : BroadcastReceiver() {
                 // the relay is gone, start it again. A running relay makes the
                 // re-entry a no-op, since startForegroundService on a live
                 // service just delivers another onStartCommand.
-                BootLog.record(context, TAG, "$source: started (proximity=$proximity)")
+                BootLog.record(context, TAG, BootRelayDecision.outcomeLogLine(source, outcome, proximity))
                 scheduleRetry(context, source, SUPERVISION_ATTEMPT)
             }
             is BootRelayDecision.Skip -> {
@@ -268,8 +268,7 @@ class BootReceiver : BroadcastReceiver() {
                 // line: zero records, and the absence was the only evidence.
                 BootLog.record(
                     context, TAG,
-                    "$source: stood down - ${outcome.reason} " +
-                        "(retry ${if (outcome.retryable) "armed" else "NOT armed"})",
+                    BootRelayDecision.outcomeLogLine(source, outcome, proximity),
                 )
                 if (outcome.retryable) {
                     scheduleRetry(context, source, attempt, outcome.retryAfterMs)
