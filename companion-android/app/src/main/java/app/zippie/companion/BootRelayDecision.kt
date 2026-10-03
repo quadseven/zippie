@@ -147,6 +147,46 @@ sealed class BootRelayDecision {
          */
         const val BUDGET_RECHECK_MS = 3_600_000L
 
+        /**
+         * Announced-ness, not liveness (#179).
+         *
+         * Read off RelayStats.announce, which is the announceState string
+         * RelayService publishes - the durable contract between the two files.
+         * Only a successful announcement counts: "not announcing", "refused"
+         * and "unreachable" are all states in which the bond cannot see this
+         * phone, however different their fixes.
+         */
+        fun hasAnnounced(announce: String?): Boolean =
+            announce?.startsWith("Announced as ") == true
+
+        /**
+         * Whether a LIVE relay needs a real restart - stop, then start - so a
+         * freshly read console token can take effect (#179).
+         *
+         * THE TRAP THIS NAMES. A relay that half-starts on LOCKED_BOOT_COMPLETED
+         * forwards bytes but never announces: the console write token lives in
+         * credential-encrypted storage, unreadable until first unlock, and
+         * RelayService reads its configuration exactly once, at its own start.
+         * Delivering another onStartCommand to that live service changes
+         * nothing - the token stays unread. Only a genuine restart re-reads it.
+         *
+         * Deliberately narrow. An announcement the router REFUSED, or one that
+         * never reached the console, is the announcer's own retry loop to own:
+         * restarting re-announces the same thing the router just said no to,
+         * or re-attempts what is already being re-attempted, and drops the leg
+         * the relay is carrying to do it. The state this exists for is the one
+         * the receiver's class doc names: up, carrying, and invisible because
+         * the token was unreadable at its start.
+         *
+         * The caller must establish the relay is live (a null report means
+         * "never started", for which an ordinary start is correct) and, in
+         * BootReceiver, that the device is unlocked - restarting while locked
+         * cannot produce a token and would just churn the relay every 15
+         * minutes for as long as the phone sits locked.
+         */
+        fun needsTokenRecovery(announce: String?): Boolean =
+            announce == null || announce.startsWith("Not announcing")
+
         fun retryDelayMs(attempt: Int): Long? = when {
             attempt < 1 -> null          // attempt 0 is not a retry
             attempt <= 2 -> 15_000L      // 15s, 30s   - router still POSTing
