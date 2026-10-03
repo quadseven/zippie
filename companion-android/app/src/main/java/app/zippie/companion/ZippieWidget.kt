@@ -18,7 +18,6 @@ import androidx.glance.layout.Box
 import androidx.glance.layout.Column
 import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
-import androidx.glance.layout.cornerRadius
 import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.height
 import androidx.glance.layout.padding
@@ -121,14 +120,12 @@ private fun WidgetColumn(content: WidgetContent, withLegs: Boolean) {
     Column(
         modifier = GlanceModifier.fillMaxSize()
             .background(groundColor())
-            .cornerRadius(16.dp)
             .padding(16.dp),
         verticalAlignment = Alignment.Top,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = GlanceModifier.size(10.dp)
-                    .cornerRadius(5.dp)
                     .background(toneColor(content.tone)),
             ) {}
             Spacer(GlanceModifier.width(8.dp))
@@ -173,7 +170,6 @@ private fun LegRow(leg: WidgetContent.Leg) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
             modifier = GlanceModifier.size(8.dp)
-                .cornerRadius(4.dp)
                 .background(
                     toneColor(
                         when (leg.state) {
