@@ -363,9 +363,12 @@ class BootReceiver : BroadcastReceiver() {
             // so a carrying leg is left alone.
             val report = RelayStatusStore.report.value
             val liveness = RelayLiveness.evaluate(report, System.currentTimeMillis())
-            val unlocked = runCatching {
-                context.getSystemService(UserManager::class.java)?.isUserUnlocked
-            }.getOrNull() == true
+            // No runCatching around the lock-state read: the only realistic
+            // failure is a null UserManager, handled by ?. below, and this
+            // function's own try/catch logs anything truly unexpected instead
+            // of masking it. (Grug Elder: broad-except-masks-bug.)
+            val unlocked = context.getSystemService(UserManager::class.java)
+                ?.isUserUnlocked == true
             val tokenRecovery = report != null && unlocked &&
                 BootRelayDecision.needsTokenRecovery(report.stats.announce)
             if (liveness is RelayLiveness.Frozen || tokenRecovery) {
