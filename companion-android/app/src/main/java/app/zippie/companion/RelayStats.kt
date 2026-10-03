@@ -221,6 +221,7 @@ object RelayStatusStore {
         val report = RelayReport(stats, nowMs)
         _report.value = report
         file(context).publish(report)
+        ZippieWidgetRefresh.maybeRefresh(context, report, nowMs)
     }
 
     /** Called on a clean stop. See the type comment for why this is not a
@@ -228,6 +229,7 @@ object RelayStatusStore {
     fun clear(context: Context) {
         _report.value = null
         file(context).clear()
+        ZippieWidgetRefresh.maybeRefresh(context, null, System.currentTimeMillis())
     }
 
     /**

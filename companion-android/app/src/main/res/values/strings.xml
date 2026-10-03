@@ -11,6 +11,10 @@
     <string name="relay_starting">Starting</string>
     <string name="relay_stop">Stop</string>
 
+    <!-- The home-screen widget (quadseven/zippie#176): the relay verdict
+         without opening the app. -->
+    <string name="zippie_widget_description">Zippie relay status: is it working, and on what, without opening the app.</string>
+
     <!-- MDM-configurable settings. AAPT requires title/description on a
          <restriction> to be string RESOURCES, not literals - a literal fails
          resource linking with "is incompatible with attribute description". -->

@@ -189,6 +189,9 @@ dependencies {
     // router forever from a backgrounded activity.
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.4")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
+    // Home-screen widget (quadseven/zippie#176). The widget renders
+    // WidgetContent and derives nothing; see ZippieWidget.kt.
+    implementation("androidx.glance:glance-appwidget:1.1.1")
 
     // The gomobile-built datapath. Absent until #2246 produces it, which is
     // why client mode is a skeleton and the relay path is not.
