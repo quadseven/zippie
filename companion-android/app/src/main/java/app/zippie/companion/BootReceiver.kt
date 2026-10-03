@@ -125,8 +125,18 @@ class BootReceiver : BroadcastReceiver() {
             ACTION_RETRY -> runDecision(appContext, RETRY,
                 intent.getIntExtra(EXTRA_ATTEMPT, 1))
             Intent.ACTION_BOOT_COMPLETED -> {
-                if (RelayStatusStore.report.value != null) {
-                    Log.i(TAG, "$BOOT_COMPLETED: relay already running, nothing to do")
+                // ANNOUNCED-NESS, NOT LIVENESS (#179). The old check returned
+                // early whenever the relay was RUNNING - but a relay that
+                // half-started on LOCKED_BOOT_COMPLETED is running and will
+                // never announce: the console token was unreadable at its
+                // start, and nothing re-reads the config afterwards. That
+                // exact state suppressed this second chance forever. A relay
+                // that is running AND announced is left alone (AC3); anything
+                // else runs the decision, and start() below performs the
+                // restart if a token recovery is due.
+                if (BootRelayDecision.hasAnnounced(
+                        RelayStatusStore.report.value?.stats?.announce)) {
+                    Log.i(TAG, "$BOOT_COMPLETED: relay already announced, nothing to do")
                     return
                 }
                 runDecision(appContext, BOOT_COMPLETED)
@@ -339,11 +349,39 @@ class BootReceiver : BroadcastReceiver() {
             // Only when the heartbeat has genuinely stopped: restarting a
             // healthy relay would drop the bond's leg for no reason, so
             // RelayLiveness deliberately waits longer than the screen does.
-            val liveness = RelayLiveness.evaluate(
-                RelayStatusStore.report.value, System.currentTimeMillis())
-            if (liveness is RelayLiveness.Frozen) {
-                Log.w(TAG, "$source: relay has not reported for ${liveness.quietForMs}ms " +
-                    "- stopping before start, because a no-op onStartCommand cannot revive it")
+            //
+            // A RELAY THAT NEVER ANNOUNCED GETS THE SAME TREATMENT (#179). A
+            // live service that started before first unlock read its config
+            // without the console token, and no onStartCommand will make it
+            // re-read it - the leg stays invisible until a human restarts the
+            // relay. Stopping first turns this start into the restart that
+            // delivers the token. Only while unlocked: the token lives in
+            // credential-encrypted storage, so restarting while locked cannot
+            // produce it and would just churn the relay every 15 minutes for
+            // as long as the phone sits locked. And never for a relay that is
+            // running AND announced (AC3) - needsTokenRecovery is false there,
+            // so a carrying leg is left alone.
+            val report = RelayStatusStore.report.value
+            val liveness = RelayLiveness.evaluate(report, System.currentTimeMillis())
+            // No runCatching around the lock-state read: the only realistic
+            // failure is a null UserManager, handled by ?. below, and this
+            // function's own try/catch logs anything truly unexpected instead
+            // of masking it. (Grug Elder: broad-except-masks-bug.)
+            val unlocked = context.getSystemService(UserManager::class.java)
+                ?.isUserUnlocked == true
+            val tokenRecovery = report != null && unlocked &&
+                BootRelayDecision.needsTokenRecovery(report.stats.announce)
+            if (liveness is RelayLiveness.Frozen || tokenRecovery) {
+                val reason = when {
+                    tokenRecovery -> "is up but never announced - the live instance " +
+                        "started before the console token was readable, and a " +
+                        "no-op onStartCommand cannot make it re-read the config"
+                    liveness is RelayLiveness.Frozen ->
+                        "has not reported for ${liveness.quietForMs}ms"
+                    // Unreachable: the if above fired for one of the two.
+                    else -> "is in an unknown state"
+                }
+                Log.w(TAG, "$source: relay $reason - stopping before start")
                 context.startService(
                     Intent(context, RelayService::class.java)
                         .setAction(RelayService.ACTION_STOP))
