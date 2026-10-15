@@ -174,17 +174,21 @@ final class BondModel: ObservableObject {
                               report: report, now: now)
     }
 
-    /// The mode, said plainly. This is the one line that tells the reader which
-    /// of the two opposite jobs the phone is doing, so it is never inferred
-    /// from the leg list - on the router's network the bond has five legs, away
-    /// from it the phone IS the bond, and both can look similar at a glance.
+    /// The mode or released-route warning, said plainly. A client tunnel can
+    /// remain connected after releasing its routes, so the VPN badge alone
+    /// cannot tell the reader whether this phone's traffic is protected.
     ///
     /// Named when the unreachable case fires, for the same reason as
     /// `subhead` above - this is the sentence that used to sit directly under
     /// a fabricated "Connected to the router" and still say "the router",
     /// which read as a claim about the wifi router the phone was actually
     /// joined to.
-    var modeText: String { decision.summary(router: Settings.routerDisplayName) }
+    var modeText: String {
+        if ClientProtectionStore.isReleased(from: defaults) {
+            return "Not protected - the home datapath is unreachable. This phone is using its own network."
+        }
+        return decision.summary(router: Settings.routerDisplayName)
+    }
 
     /// Router name -> human label, for the chart legend. The series keys by
     /// internal name and every other surface shows the label.

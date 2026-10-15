@@ -28,6 +28,26 @@ import XCTest
 /// Written 2026-08-10 for #48.
 final class CallSiteWiringTests: XCTestCase {
 
+    func testRelayTunnelNeverCapturesPhoneTraffic() throws {
+        let provider = try source("ZippieCompanionTunnel/PacketTunnelProvider.swift")
+        let inert = provider.components(separatedBy: "static func inertNetworkSettings()").last?
+            .components(separatedBy: "return settings").first ?? ""
+        XCTAssertEqual(inert.components(separatedBy: "includedRoutes").count - 1, 1)
+        XCTAssertTrue(inert.contains("ipv4.includedRoutes = []"))
+    }
+
+    func testClientRecoveryIsConnectedToSettingsAndVisibleInApp() throws {
+        let client = try source("ZippieCompanionTunnel/ClientTunnel.swift")
+        let provider = try source("ZippieCompanionTunnel/PacketTunnelProvider.swift")
+        let model = try source("ZippieCompanionApp/Design/BondModel.swift")
+        XCTAssertTrue(client.contains("sendKeepalives()"))
+        XCTAssertTrue(client.contains("try recovery.observe(statsJSON:"))
+        XCTAssertTrue(client.contains("ipv4.includedRoutes = captureRoutes ?"))
+        XCTAssertTrue(client.contains("ipv4.excludedRoutes = [NEIPv4Route.default()]"))
+        XCTAssertTrue(provider.contains("ClientTunnel.networkSettings(config, captureRoutes:"))
+        XCTAssertTrue(model.contains("ClientProtectionStore.isReleased"))
+    }
+
     /// `companion/`, found from this file rather than from the working
     /// directory - `swift test` is run from the package directory in CI and
     /// from anywhere at all locally.

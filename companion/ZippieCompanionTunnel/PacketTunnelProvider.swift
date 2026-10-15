@@ -94,6 +94,15 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
         let tunnel = ClientTunnel(config: config, packetFlow: packetFlow)
         clientTunnel = tunnel
+        tunnel.applyRouteState = { [weak self] state, done in
+            guard let self else {
+                done(ClientTunnelError.datapathFailed("provider stopped"))
+                return
+            }
+            self.setTunnelNetworkSettings(
+                ClientTunnel.networkSettings(config, captureRoutes: state == .capturing),
+                completionHandler: done)
+        }
 
         setTunnelNetworkSettings(ClientTunnel.networkSettings(config)) { [weak self] error in
             if let error {
@@ -102,6 +111,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 return
             }
             do {
+                if let defaults = RelayConfiguration.sharedDefaults {
+                    ClientProtectionStore.clear(from: defaults)
+                }
                 try tunnel.start()
                 Self.log.log("client mode carrying")
                 completionHandler(nil)
@@ -156,6 +168,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func startContributor(_ config: RelayConfiguration,
                                   completionHandler: @escaping (Error?) -> Void) {
+        if let defaults = RelayConfiguration.sharedDefaults {
+            ClientProtectionStore.clear(from: defaults)
+        }
         Self.log.log("""
             starting relay home=\(config.homeHost, privacy: .public):\
             \(config.homePort, privacy: .public) listen=\(config.listenPort, privacy: .public)
@@ -365,6 +380,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         // nowhere near here.
         clientTunnel?.stop()
         clientTunnel = nil
+        if let defaults = RelayConfiguration.sharedDefaults {
+            ClientProtectionStore.clear(from: defaults)
+        }
         // An explicit goodbye, so a phone that stops relaying on purpose does
         // not sit in the router's leg list for the rest of its lease. Only a
         // contributor ever announced itself as a leg, so only a contributor has
