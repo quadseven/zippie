@@ -55,10 +55,19 @@ fun NextDNSSettingsScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // Read current config
-    val currentProfile = NextDNSProfile.fromDohURL(getCurrentDNSUrl(context))
-    var profileId by remember { mutableStateOf(currentProfile?.profileID ?: "") }
-    var deviceName by remember { mutableStateOf(currentProfile?.deviceName ?: "") }
+    var currentProfile by remember { mutableStateOf<NextDNSProfile?>(null) }
+    var profileId by remember { mutableStateOf("") }
+    var deviceName by remember { mutableStateOf("") }
+
+    // Load current DNS config on first composition
+    scope.launch(Dispatchers.IO) {
+        val profile = getCurrentProfile(context)
+        currentProfile = profile
+        profile?.let {
+            profileId = it.profileID
+            deviceName = it.deviceName
+        }
+    }
 
     var isProcessing by remember { mutableStateOf(false) }
 
@@ -70,7 +79,7 @@ fun NextDNSSettingsScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text("NextDNS", style = Kind.title())
+        Text("NextDNS", style = Kind.title)
         Spacer(Modifier.height(12.dp))
 
         Text(
@@ -185,6 +194,19 @@ fun NextDNSSettingsScreen(
     }
 }
 
+private fun getCurrentProfile(context: android.content.Context): NextDNSProfile? {
+    return try {
+        val manager = AndroidDNSSettingsManager(context)
+        // Use runBlocking to call suspend function in non-suspending context
+        kotlinx.coroutines.runBlocking {
+            manager.load()
+            manager.serverURL
+        }?.let { NextDNSProfile.fromDohURL(it) }
+    } catch (e: Exception) {
+        null
+    }
+}
+
 private fun saveConfig(
     context: android.content.Context,
     scope: CoroutineScope,
@@ -215,15 +237,5 @@ private fun removeConfig(
         } catch (e: Exception) {
             e.printStackTrace()
         }
-    }
-}
-
-private fun getCurrentDNSUrl(context: android.content.Context): String? {
-    return try {
-        val manager = AndroidDNSSettingsManager(context)
-        manager.load()
-        manager.serverURL
-    } catch (e: Exception) {
-        null
     }
 }

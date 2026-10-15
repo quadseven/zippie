@@ -2,23 +2,22 @@ package app.zippie.companion
 
 import android.content.Context
 import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
+import android.net.DnsService
+import android.os.Build
 import androidx.annotation.RequiresApi
 
 /**
  * The system DNS controller for Android Private DNS.
  *
  * Android 9 (API 28) introduced Private DNS mode, which uses DoT (DNS over TLS).
- * Android 10 (API 29) added setApplicationDnsService for per-app DoH.
+ * Android 11 (API 30) added setApplicationDnsService for per-app DoH.
  *
- * This uses ConnectivityManager.setApplicationDnsService (API 29+) because:
+ * This uses ConnectivityManager.setApplicationDnsService (API 30+) because:
  * - It survives VPN restarts (unlike VPN DNS config)
  * - It works on both WiFi and cellular
  * - It's per-application, not system-wide
  *
- * The fallback is SystemDNSManager which uses the older Private DNS hostname mode.
+ * The fallback is LegacyDNSSettingsManager which uses the older Private DNS hostname mode.
  */
 interface DNSSettingsManaging {
     var isEnabled: Boolean
@@ -30,12 +29,12 @@ interface DNSSettingsManaging {
 }
 
 /**
- * Android implementation using ConnectivityManager.setApplicationDnsService (API 29+).
+ * Android implementation using ConnectivityManager.setApplicationDnsService (API 30+).
  *
  * This is the primary implementation because it works on both WiFi and cellular
  * and survives VPN restarts.
  */
-@RequiresApi(29)
+@RequiresApi(30)
 class AndroidDNSSettingsManager(private val context: Context) : DNSSettingsManaging {
     private val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
@@ -45,12 +44,26 @@ class AndroidDNSSettingsManager(private val context: Context) : DNSSettingsManag
     override var serverURL: String? = null
         private set
 
+    init {
+        // Verify the API is available at runtime
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            throw UnsupportedOperationException("setApplicationDnsService requires API 30+")
+        }
+    }
+
     override suspend fun load() {
         val url = try {
-            val service = cm.applicationDnsService
-            if (service != null) {
-                service.domain?.let { "${service.protocol}://$it" }
-            } else null
+            cm.applicationDnsService?.let { service ->
+                service.hostname?.let { hostname ->
+                    service.path?.let { path ->
+                        if (path.isNotEmpty()) {
+                            "https://$hostname$path"
+                        } else {
+                            "https://$hostname"
+                        }
+                    } ?: "https://$hostname"
+                }
+            }
         } catch (e: SecurityException) {
             null
         }
@@ -59,14 +72,18 @@ class AndroidDNSSettingsManager(private val context: Context) : DNSSettingsManag
     }
 
     override suspend fun save(serverURL: String) {
-        // Parse the URL to extract hostname for DoH
         val hostname = extractHostname(serverURL)
         if (hostname != null) {
             try {
+                val service = object : DnsService {
+                    override fun getHostname(): String = hostname
+                    override fun getPort(): Int = 443
+                    override fun getPath(): String? = "/dns-query"
+                }
                 cm.allNetworks.forEach { network ->
                     cm.bindProcessToNetwork(network)
                     try {
-                        cm.setApplicationDnsService(DnsService.createDohService(hostname))
+                        cm.setApplicationDnsService(service)
                     } finally {
                         cm.bindProcessToNetwork(null)
                     }
@@ -74,7 +91,6 @@ class AndroidDNSSettingsManager(private val context: Context) : DNSSettingsManag
                 this.serverURL = serverURL
                 isEnabled = true
             } catch (e: Exception) {
-                // If we can't set the DNS service, mark as disabled
                 isEnabled = false
                 throw e
             }
@@ -122,7 +138,6 @@ class AndroidDNSSettingsManager(private val context: Context) : DNSSettingsManag
 @RequiresApi(28)
 class LegacyDNSSettingsManager(private val context: Context) : DNSSettingsManaging {
     private val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-    private val dnsManager = context.getSystemService(Context.DNS_MANAGER_SERVICE)
 
     override var isEnabled: Boolean = false
         private set
@@ -130,9 +145,18 @@ class LegacyDNSSettingsManager(private val context: Context) : DNSSettingsManagi
     override var serverURL: String? = null
         private set
 
+    init {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            throw UnsupportedOperationException("dnsNetwork requires API 28+")
+        }
+    }
+
     override suspend fun load() {
-        // For legacy, we check if Private DNS is in use
-        val hostname = dnsManager?.primaryDnsServer?.hostName
+        val hostname = try {
+            cm.dnsNetwork?.hostName
+        } catch (e: SecurityException) {
+            null
+        }
         if (hostname != null && hostname.endsWith(".dns.nextdns.io")) {
             serverURL = "https://$hostname"
             isEnabled = true
@@ -145,8 +169,14 @@ class LegacyDNSSettingsManager(private val context: Context) : DNSSettingsManagi
         val hostname = extractHostnameForDot(serverURL)
         if (hostname != null) {
             try {
-                // Set Private DNS mode to "Custom hostname"
-                dnsManager?.setPrivateDnsMode(hostname)
+                cm.dnsNetwork?.let { network ->
+                    cm.bindProcessToNetwork(network)
+                    try {
+                        cm.dnsNetwork = network
+                    } finally {
+                        cm.bindProcessToNetwork(null)
+                    }
+                }
                 this.serverURL = serverURL
                 isEnabled = true
             } catch (e: Exception) {
@@ -158,7 +188,7 @@ class LegacyDNSSettingsManager(private val context: Context) : DNSSettingsManagi
 
     override suspend fun remove() {
         try {
-            dnsManager?.setPrivateDnsMode(null)
+            cm.dnsNetwork = null
             serverURL = null
             isEnabled = false
         } catch (e: Exception) {
@@ -171,7 +201,6 @@ class LegacyDNSSettingsManager(private val context: Context) : DNSSettingsManagi
         return try {
             if (url.startsWith("https://")) {
                 val hostname = url.substring("https://".length).split("/").firstOrNull { it.isNotEmpty() }
-                // Convert doh URL to dot hostname
                 if (hostname?.startsWith("dns.nextdns.io/") == true) {
                     hostname.substring("dns.nextdns.io/".length) + ".dns.nextdns.io"
                 } else {
@@ -183,22 +212,6 @@ class LegacyDNSSettingsManager(private val context: Context) : DNSSettingsManagi
         } catch (e: Exception) {
             null
         }
-    }
-}
-
-/**
- * Helper to parse and create DNS service for DoH.
- */
-object DnsService {
-    /**
-     * Create a DoH service from a hostname.
-     */
-    fun createDohService(hostname: String): android.net.DnsService? {
-        return android.net.DnsService.Builder(hostname)
-            .setPort(443)
-            .setProtocol(android.net.DnsService.PROTOCOL_HTTPS)
-            .setPath("/dns-query")
-            .build()
     }
 }
 
