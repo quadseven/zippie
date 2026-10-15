@@ -265,3 +265,35 @@ func TestAReplayedFrameFromAnOldRunCannotLockAClientOut(t *testing.T) {
 		t.Errorf("reply target = %s; the live run did not win it back", target)
 	}
 }
+
+// Only DATA may start a client's run, as in Transport. A NACK or keepalive
+// carrying any other epoch - a replay, or a straggler from before a restart -
+// is dropped with no side effect: it cannot reset the stream, move the return
+// path, or draw a NACK answer to wherever it claims to come from.
+func TestAControlFrameFromAnotherRunHasNoEffect(t *testing.T) {
+	a := sealedID(t, 1, "aaaa-key-aaaa-key-aaaa-key-aaaa32")
+	h, _ := homeWith(t, a)
+	here := addr(t, "203.0.113.1:1")
+	h.Accept(Frame{Seq: 0, Epoch: 33, Payload: []byte("live")}.PackAs(a), here)
+	if _, _, err := h.Reply(1, []byte("for-A")); err != nil {
+		t.Fatalf("Reply: %v", err)
+	}
+
+	elsewhere := addr(t, "198.51.100.66:6")
+	if send := h.Accept(Frame{Seq: 0, Epoch: 11, Flags: FlagNack}.PackAs(a), elsewhere); len(send) != 0 {
+		t.Fatal("a NACK from another run was answered")
+	}
+	h.Accept(Frame{Seq: 5, Epoch: 11, Flags: FlagKeepalive}.PackAs(a), elsewhere)
+
+	s, _ := h.ClientStats(1)
+	if s.StreamResets != 0 || s.StaleControl != 2 {
+		t.Errorf("resets %d stale control %d, want 0 and 2", s.StreamResets, s.StaleControl)
+	}
+	if target := h.home.ReplyTarget(1); target != "203.0.113.1:1" {
+		t.Errorf("reply target = %s; a control frame from another run moved it", target)
+	}
+	// The current run's own NACK is still answered.
+	if send := h.Accept(Frame{Seq: 0, Epoch: 33, Flags: FlagNack}.PackAs(a), here); len(send) != 1 {
+		t.Errorf("the current run's NACK drew %d answers, want 1", len(send))
+	}
+}

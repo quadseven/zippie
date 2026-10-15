@@ -256,6 +256,7 @@ func perClientStatus(home *zippie.ClientHome) map[string]map[string]uint64 {
 		out[strconv.FormatUint(uint64(id), 10)] = map[string]uint64{
 			"delivered":      s.Delivered,
 			"stream_resets":  s.StreamResets,
+			"stale_control":  s.StaleControl,
 			"nacks_sent":     s.NacksSent,
 			"nacks_received": s.NacksReceived,
 			"resent":         s.Resent,

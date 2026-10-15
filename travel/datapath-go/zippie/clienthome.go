@@ -110,8 +110,9 @@ func NewClientHome(registry *ClientRegistry, reorderMS int, handler PacketHandle
 // nothing.
 //
 // The datagram is verified ONCE, and nothing about it is believed until it
-// has been - not even which client it claims to be. `from` is then recorded as
-// that client's return path before anything else: a phone changes carrier IP
+// has been - not even which client it claims to be. A control frame from
+// another of the client's runs is then dropped (see acceptControl). Otherwise
+// `from` is recorded as that client's return path: a phone changes carrier IP
 // constantly (cellular handoff, wifi to LTE), and replies must follow it
 // without waiting for a control message that may never come.
 //
@@ -123,9 +124,12 @@ func (c *ClientHome) Accept(raw []byte, from *net.UDPAddr) []Datagram {
 		c.bump(&c.stats.Refused)
 		return nil
 	}
+	out, current := c.home.receive(f, nil)
+	if !current {
+		return nil
+	}
 	c.noteReturnPath(f.ClientID, from)
 
-	out := c.home.receive(f, nil)
 	c.mu.Lock()
 	c.stats.Accepted++
 	c.stats.Delivered += uint64(len(out))
@@ -153,8 +157,9 @@ func (c *ClientHome) deliver(clientID uint32, payloads [][]byte) {
 // answerNack resends what a client asked for, from that client's own ring,
 // sealed for that client, to where it was just heard from.
 //
-// The MAC has no replay protection, so a captured NACK replayed from a spoofed
-// source draws an answer to that source. The ring bounds it: one sequence is
+// The MAC has no replay protection, so a NACK captured from the client's
+// current run and replayed from a spoofed source draws an answer to that
+// source (one from another run is dropped first; see acceptControl). The ring bounds it: one sequence is
 // answered at most MaxResendsPerSeq times, and only while it is held.
 func (c *ClientHome) answerNack(id *Identity, seq uint64) []Datagram {
 	payload, target, ok := c.home.resend(id.ClientID, seq)

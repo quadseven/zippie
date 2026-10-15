@@ -120,6 +120,8 @@ type clientState struct {
 	epoch       uint32
 	haveEpoch   bool
 	resets      uint64
+	// staleControl counts control frames dropped by acceptControl.
+	staleControl uint64
 
 	// Outbound: home's stream to the client. Numbered per client because each
 	// phone reassembles its own, and a shared counter looks like massive loss
@@ -160,7 +162,7 @@ func newClientState(reorder time.Duration, now func() time.Time) *clientState {
 // Taken immediately rather than after Transport's idle window, which would
 // cost a phone seconds of outage on every restart. A stranger cannot flip it -
 // every frame here has passed the client's MAC - but a REPLAY can: the header
-// MAC has no replay protection (AGENTS.md, datapath authentication), so a
+// MAC has no replay protection (AGENTS.md, datapath authentication), so a data
 // frame captured from an earlier run, or one still in flight on a slow leg
 // when the client restarted, resets the stream, and the next current frame
 // resets it back. That is a transient, and deliberately left one. Refusing an
@@ -182,6 +184,23 @@ func (cs *clientState) adoptEpoch(epoch uint32) {
 	cs.resets++
 }
 
+// acceptControl reports whether a NACK, keepalive or parity frame belongs to
+// the client's current run, and marks the client alive if so.
+//
+// Only DATA may start a run, as in Transport. A control frame carrying any
+// other epoch - a replay, or a straggler from before a restart - is dropped
+// with no side effect, so it cannot reset the stream, move the return path or
+// draw a NACK answer. A genuine restart loses nothing by this: its data frames
+// adopt the new epoch, and its control frames are accepted from then on.
+func (cs *clientState) acceptControl(epoch uint32, now time.Time) bool {
+	if !cs.haveEpoch || epoch != cs.epoch {
+		cs.staleControl++
+		return false
+	}
+	cs.lastSeen = now
+	return true
+}
+
 // push feeds one data frame into the client's stream, appending what became
 // deliverable to out, and notes any gap it opened.
 func (cs *clientState) push(f Frame, out [][]byte) [][]byte {
@@ -199,6 +218,7 @@ func (cs *clientState) stats() ClientStats {
 	return ClientStats{
 		Delivered:     cs.reassembler.Stats.Delivered,
 		StreamResets:  cs.resets,
+		StaleControl:  cs.staleControl,
 		NacksSent:     cs.nacks.NacksSent,
 		NacksReceived: cs.nacksReceived,
 		Resent:        cs.ring.Stats.Resent,
@@ -223,6 +243,10 @@ type ClientStats struct {
 	// Delivered counts payloads released from this client's stream in order.
 	Delivered    uint64
 	StreamResets uint64
+	// StaleControl counts NACKs and keepalives dropped for carrying an epoch
+	// other than the client's current run. A few around a restart are
+	// stragglers; a steady climb is someone replaying captured frames.
+	StaleControl uint64
 	// NacksSent counts gaps in this client's stream that home asked it to fill.
 	NacksSent uint64
 	// NacksReceived counts NACKs from this client for home's replies, and
@@ -280,25 +304,28 @@ func (h *MultiClientHome) Accept(raw []byte, out [][]byte) [][]byte {
 	if err != nil {
 		return out
 	}
-	return h.receive(f, out)
+	out, _ = h.receive(f, out)
+	return out
 }
 
 // receive routes one VERIFIED frame into its own client's state, appending any
 // payloads that became deliverable to out. f must come from
 // ClientRegistry.Verify, which is what makes f.ClientID trustworthy here.
 //
-// Every frame proves the client alive and carries its current epoch, so any
-// of them may restart its stream; only data enters it (see isStreamData).
-func (h *MultiClientHome) receive(f Frame, out [][]byte) [][]byte {
+// Only a data frame may restart the client's stream, and only data enters it
+// (see isStreamData). The bool is false for a control frame from another run
+// (see acceptControl), which must then have no other effect: no roaming, no
+// NACK answer.
+func (h *MultiClientHome) receive(f Frame, out [][]byte) ([][]byte, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	cs := h.stateLocked(f.ClientID)
-	cs.lastSeen = h.now()
-	cs.adoptEpoch(f.Epoch)
 	if !isStreamData(f) {
-		return out
+		return out, cs.acceptControl(f.Epoch, h.now())
 	}
-	return cs.push(f, out)
+	cs.adoptEpoch(f.Epoch)
+	cs.lastSeen = h.now()
+	return cs.push(f, out), true
 }
 
 // resend returns the payload a client NACKed and where to send it.
