@@ -215,3 +215,153 @@ func TestNoIdentityStillSpeaksV2(t *testing.T) {
 		t.Fatal("no frame reached the peer")
 	}
 }
+
+// TWO PHONES BOND HOME AT ONCE (#210), both directions, over real sockets.
+//
+// Both phones number their streams from zero, so with any stream state shared
+// at home one phone's frames are dropped as the other's duplicates, or one is
+// NACKed for the other's gap. Each must see its own delivered counter climb to
+// everything it sent, receive only its own replies, and nobody - home or
+// either phone - may have asked for anything.
+func TestTwoPhonesBondHomeConcurrently(t *testing.T) {
+	const n = 40
+	keys := map[uint32]string{
+		7: "aaaa-key-aaaa-key-aaaa-key-aaaa32",
+		8: "bbbb-key-bbbb-key-bbbb-key-bbbb32",
+	}
+	reg := NewClientRegistry()
+	for cid, k := range keys {
+		reg.Add(sealedID(t, cid, k))
+	}
+	homeSock := freeUDP(t)
+	defer homeSock.Close()
+	got := make(chan [2]string, 2*n)
+	ch, err := NewClientHome(reg, 250, PacketHandlerFunc(func(cid uint32, p []byte) {
+		got <- [2]string{string(rune('0' + cid)), string(p)}
+	}))
+	if err != nil {
+		t.Fatalf("NewClientHome: %v", err)
+	}
+	serveClientHome(t, ch, homeSock)
+
+	phones := map[uint32]*Transport{}
+	apps := map[uint32]*net.UDPConn{}
+	for cid, k := range keys {
+		phones[cid] = startPhone(t, sealedID(t, cid, k), homeSock.LocalAddr().(*net.UDPAddr))
+		apps[cid] = freeUDP(t)
+		defer apps[cid].Close()
+	}
+
+	// Both phones send at once.
+	for cid := range keys {
+		go func(cid uint32) {
+			for i := 0; i < n; i++ {
+				msg := []byte{byte('0' + cid), byte(i)}
+				apps[cid].WriteToUDP(msg, phones[cid].LocalAddr())
+			}
+		}(cid)
+	}
+	for i := 0; i < 2*n; i++ {
+		select {
+		case p := <-got:
+			if p[0][0] != p[1][0] {
+				t.Fatalf("client %s was handed client %c's packet", p[0], p[1][0])
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("home delivered %d of %d packets", i, 2*n)
+		}
+	}
+
+	// And home answers both at once; each phone's app must see only its own.
+	for cid := range keys {
+		for i := 0; i < n; i++ {
+			wire, to, err := ch.Reply(cid, []byte{'r', byte('0' + cid), byte(i)})
+			if err != nil {
+				t.Fatalf("Reply(%d): %v", cid, err)
+			}
+			homeSock.WriteToUDP(wire, to)
+		}
+	}
+	for cid, app := range apps {
+		buf := make([]byte, 64)
+		for i := 0; i < n; i++ {
+			app.SetReadDeadline(time.Now().Add(5 * time.Second))
+			m, _, err := app.ReadFromUDP(buf)
+			if err != nil {
+				t.Fatalf("phone %d received %d of %d replies: %v", cid, i, n, err)
+			}
+			if m != 3 || buf[1] != byte('0'+cid) {
+				t.Fatalf("phone %d received another phone's reply %q", cid, buf[:m])
+			}
+		}
+	}
+
+	for cid, phone := range phones {
+		s, ok := ch.ClientStats(cid)
+		if !ok || s.Delivered != n {
+			t.Errorf("client %d delivered = %d, want %d", cid, s.Delivered, n)
+		}
+		if s.NacksSent != 0 || s.NacksReceived != 0 {
+			t.Errorf("client %d: home sent %d NACKs and received %d on a lossless "+
+				"loopback - streams are crossing", cid, s.NacksSent, s.NacksReceived)
+		}
+		if sent := phone.StatsSnapshot()["nacks"].(map[string]uint64)["nacks_sent"]; sent != 0 {
+			t.Errorf("phone %d sent %d NACKs for home's replies", cid, sent)
+		}
+	}
+}
+
+// serveClientHome runs home the way cmd/zippie-clienthome does: a reader that
+// sends whatever Accept returns, and a ticker that sends whatever Tick does.
+func serveClientHome(t *testing.T, ch *ClientHome, sock *net.UDPConn) {
+	t.Helper()
+	send := func(ds []Datagram) {
+		for _, d := range ds {
+			sock.WriteToUDP(d.Wire, d.To)
+		}
+	}
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+	go func() {
+		tk := time.NewTicker(TickInterval)
+		defer tk.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tk.C:
+				send(ch.Tick())
+			}
+		}
+	}()
+	go func() {
+		buf := make([]byte, 65535)
+		for {
+			n, from, err := sock.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			send(ch.Accept(buf[:n], from))
+		}
+	}()
+}
+
+// startPhone is a client-mode transport with one link pointed at home.
+func startPhone(t *testing.T, id *Identity, home *net.UDPAddr) *Transport {
+	t.Helper()
+	phone, err := NewTravel(TravelConfig{
+		Local:           &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0},
+		ReorderDeadline: 100 * time.Millisecond,
+		Identity:        id,
+		Auth:            AuthRequire,
+	})
+	if err != nil {
+		t.Fatalf("NewTravel: %v", err)
+	}
+	t.Cleanup(phone.Close)
+	if err := phone.AddLink(LinkEndpoint{PathID: 1, Remote: home, Weight: 100}); err != nil {
+		t.Fatalf("AddLink: %v", err)
+	}
+	go phone.Run()
+	return phone
+}

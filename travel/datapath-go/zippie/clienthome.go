@@ -24,10 +24,11 @@ import (
 // not get to be the test subject for a new code path.
 //
 // WHAT THIS TYPE DOES AND DOES NOT DO. It owns the wire: verify, decrypt,
-// reassemble, and track where to send replies. It does NOT own the network -
-// writing packets to a TUN and NATing them out is the caller's job, injected as
-// a PacketHandler, because that part needs privileges and a real host and
-// cannot be unit tested honestly.
+// reassemble, ask for and answer retransmits, and track where to send replies -
+// all of it per client. It does NOT own the network - writing packets to a TUN
+// and NATing them out is the caller's job, injected as a PacketHandler, and so
+// is the socket: what home needs sent comes back as Datagrams. That part needs
+// privileges and a real host and cannot be unit tested honestly.
 
 // PacketHandler receives decapsulated IP packets from one client, and is how
 // they reach a TUN device.
@@ -48,16 +49,31 @@ func (f PacketHandlerFunc) HandlePacket(clientID uint32, packet []byte) { f(clie
 type ClientHomeStats struct {
 	Accepted  uint64
 	Delivered uint64
-	Refused   uint64
-	Replied   uint64
+	// Refused is every datagram that failed verification. Why each was refused
+	// is counted once, by the registry (RegistryStats).
+	Refused uint64
+	Replied uint64
 	// NoReturnPath counts replies that had nowhere to go. Non-zero means home
 	// is generating traffic for a client it has never heard from, which is
 	// either a stale NAT entry or a routing mistake - and either way it is
 	// silent unless counted.
 	NoReturnPath uint64
+	// SealFailed counts frames home built and could not seal, which happens
+	// only when the system entropy source fails. Counted because the frame is
+	// dropped rather than sent in the clear.
+	SealFailed uint64
+}
+
+// Datagram is a frame home wants sent, and where to send it. The caller owns
+// the socket; see the note on ClientHome above.
+type Datagram struct {
+	Wire []byte
+	To   *net.UDPAddr
 }
 
 // ClientHome demultiplexes authenticated, encrypted frames from phone clients.
+// Every piece of stream state, in both directions, is kept per client in
+// MultiClientHome; this layer verifies, frames, and counts.
 type ClientHome struct {
 	mu       sync.Mutex
 	registry *ClientRegistry
@@ -65,10 +81,6 @@ type ClientHome struct {
 	handler  PacketHandler
 	stats    ClientHomeStats
 
-	// seq is the per-client outbound counter for return traffic. Per client
-	// because each phone reassembles its own stream and a shared counter would
-	// look like massive loss to every one of them.
-	seq map[uint32]uint64
 	// epoch identifies THIS run of home. A restart draws a new one so clients
 	// reset their receive windows instead of discarding everything as ancient.
 	epoch uint32
@@ -89,56 +101,69 @@ func NewClientHome(registry *ClientRegistry, reorderMS int, handler PacketHandle
 		registry: registry,
 		home:     NewMultiClientHome(registry, reorderMS),
 		handler:  handler,
-		seq:      make(map[uint32]uint64),
 		epoch:    e,
 	}, nil
 }
 
-// Accept processes one datagram read from the client-facing socket.
+// Accept processes one datagram read from the client-facing socket, and
+// returns what home has to send back because of it: the answer to a NACK, or
+// nothing.
 //
-// `from` is where it arrived from, and is recorded as the return path BEFORE
-// anything else - a phone changes carrier IP constantly (cellular handoff,
-// wifi to LTE), and replies must follow it without waiting for a control
-// message that may never come.
+// The datagram is verified ONCE, and nothing about it is believed until it
+// has been - not even which client it claims to be. `from` is then recorded as
+// that client's return path before anything else: a phone changes carrier IP
+// constantly (cellular handoff, wifi to LTE), and replies must follow it
+// without waiting for a control message that may never come.
 //
-// A refused datagram is dropped silently. Malformed and hostile input is the
-// expected condition on a public UDP port, not an error worth reporting.
-func (c *ClientHome) Accept(raw []byte, from *net.UDPAddr) {
-	claimed, ok := PeekClientID(raw)
-	if !ok {
+// A refused datagram is dropped and counted. Malformed and hostile input is
+// the expected condition on a public UDP port, not an error worth reporting.
+func (c *ClientHome) Accept(raw []byte, from *net.UDPAddr) []Datagram {
+	f, id, err := c.registry.Verify(raw)
+	if err != nil {
 		c.bump(&c.stats.Refused)
-		return
+		return nil
 	}
+	c.noteReturnPath(f.ClientID, from)
 
-	var out [][]byte
-	out = c.home.Accept(raw, out[:0])
-	if len(out) == 0 {
-		// Either refused, or accepted-but-buffered awaiting a gap. Only the
-		// registry can tell those apart, so the refusal counters live there
-		// and this one counts what reached a handler.
-		if _, _, err := c.registry.Verify(raw); err != nil {
-			c.bump(&c.stats.Refused)
-			return
-		}
-		c.noteReturnPath(claimed, from)
-		c.bump(&c.stats.Accepted)
-		return
-	}
-
-	c.noteReturnPath(claimed, from)
+	out := c.home.receive(f, nil)
 	c.mu.Lock()
 	c.stats.Accepted++
 	c.stats.Delivered += uint64(len(out))
 	c.mu.Unlock()
+	c.deliver(f.ClientID, out)
 
-	for _, p := range out {
+	if f.IsNack() {
+		return c.answerNack(id, f.Seq)
+	}
+	return nil
+}
+
+// deliver hands a client's in-order payloads to the handler.
+func (c *ClientHome) deliver(clientID uint32, payloads [][]byte) {
+	for _, p := range payloads {
 		// Keepalives are liveness, not traffic. Handing one to the TUN would
 		// inject a malformed IP packet into the host's stack.
 		if len(p) == 0 {
 			continue
 		}
-		c.handler.HandlePacket(claimed, p)
+		c.handler.HandlePacket(clientID, p)
 	}
+}
+
+// answerNack resends what a client asked for, from that client's own ring,
+// sealed for that client, to where it was just heard from.
+func (c *ClientHome) answerNack(id *Identity, seq uint64) []Datagram {
+	payload, target, ok := c.home.resend(id.ClientID, seq)
+	if !ok {
+		return nil
+	}
+	// FlagRetransmit tells the client this is an ANSWER, so it does not credit
+	// the leg it arrived on with forward progress (#108).
+	d, err := c.frame(id, Frame{Seq: seq, Flags: FlagRetransmit, Payload: payload}, target)
+	if err != nil {
+		return nil
+	}
+	return []Datagram{d}
 }
 
 func (c *ClientHome) noteReturnPath(clientID uint32, from *net.UDPAddr) {
@@ -156,34 +181,80 @@ func (c *ClientHome) noteReturnPath(clientID uint32, from *net.UDPAddr) {
 // entry for a phone that has since gone away, and generating a frame with
 // nowhere to send it would be a silent leak of both memory and packets.
 func (c *ClientHome) Reply(clientID uint32, packet []byte) ([]byte, *net.UDPAddr, error) {
-	target := c.home.ReplyTarget(clientID)
-	if target == "" {
-		c.bump(&c.stats.NoReturnPath)
-		return nil, nil, ErrNoReturnPath
-	}
-	addr, err := net.ResolveUDPAddr("udp", target)
-	if err != nil {
-		c.bump(&c.stats.NoReturnPath)
-		return nil, nil, err
-	}
-
 	id, ok := c.registry.Lookup(clientID)
 	if !ok {
 		return nil, nil, ErrUnknownClient
 	}
-
-	c.mu.Lock()
-	seq := c.seq[clientID]
-	c.seq[clientID] = seq + 1
-	epoch := c.epoch
-	c.stats.Replied++
-	c.mu.Unlock()
-
-	wire := Frame{Seq: seq, Epoch: epoch, Payload: packet}.PackAs(id)
-	if len(wire) == 0 {
-		return nil, nil, ErrSealFailed
+	seq, target, ok := c.home.nextReply(clientID, packet)
+	if !ok {
+		c.bump(&c.stats.NoReturnPath)
+		return nil, nil, ErrNoReturnPath
 	}
-	return wire, addr, nil
+	d, err := c.frame(id, Frame{Seq: seq, Payload: packet}, target)
+	if err != nil {
+		return nil, nil, err
+	}
+	c.bump(&c.stats.Replied)
+	return d.Wire, d.To, nil
+}
+
+// Tick releases each client's packets stuck behind a gap that outlived the
+// reorder deadline, and returns the NACKs that came due - each one addressed
+// to, and sealed for, the client whose stream has the gap. Call it every
+// TickInterval; without it a lost packet stalls that client's stream until the
+// reorder buffer overflows.
+func (c *ClientHome) Tick() []Datagram {
+	var send []Datagram
+	for _, t := range c.home.tick() {
+		c.mu.Lock()
+		c.stats.Delivered += uint64(len(t.released))
+		c.mu.Unlock()
+		c.deliver(t.clientID, t.released)
+		send = c.appendNacks(send, t)
+	}
+	return send
+}
+
+// appendNacks frames one client's due NACKs. A client revoked since its gap
+// opened is asked nothing: its next frame is refused anyway.
+func (c *ClientHome) appendNacks(send []Datagram, t clientTick) []Datagram {
+	if len(t.due) == 0 {
+		return send
+	}
+	id, ok := c.registry.Lookup(t.clientID)
+	if !ok {
+		return send
+	}
+	for _, seq := range t.due {
+		d, err := c.frame(id, Frame{Seq: seq, Flags: FlagNack}, t.target)
+		if err != nil {
+			// Counted by frame; the gap closes by the reorder deadline anyway.
+			continue
+		}
+		send = append(send, d)
+	}
+	return send
+}
+
+// frame stamps home's epoch on f, seals it for id, and resolves where it goes.
+// Both failures are counted here, so callers only decide whether to carry on.
+func (c *ClientHome) frame(id *Identity, f Frame, target string) (Datagram, error) {
+	if target == "" {
+		c.bump(&c.stats.NoReturnPath)
+		return Datagram{}, ErrNoReturnPath
+	}
+	addr, err := net.ResolveUDPAddr("udp", target)
+	if err != nil {
+		c.bump(&c.stats.NoReturnPath)
+		return Datagram{}, err
+	}
+	f.Epoch = c.epoch
+	wire := f.PackAs(id)
+	if len(wire) == 0 {
+		c.bump(&c.stats.SealFailed)
+		return Datagram{}, ErrSealFailed
+	}
+	return Datagram{Wire: wire, To: addr}, nil
 }
 
 func (c *ClientHome) Stats() ClientHomeStats {
@@ -192,9 +263,21 @@ func (c *ClientHome) Stats() ClientHomeStats {
 	return c.stats
 }
 
+// RegistryStats says why datagrams were refused: an unknown client, a bad
+// MAC, or too short to name a client at all.
+func (c *ClientHome) RegistryStats() RegistryStats { return c.registry.Stats() }
+
+// ClientStats reports one client's counters; see MultiClientHome.ClientStats.
+func (c *ClientHome) ClientStats(clientID uint32) (ClientStats, bool) {
+	return c.home.ClientStats(clientID)
+}
+
+// AllClientStats reports every known client's counters, keyed by client id.
+func (c *ClientHome) AllClientStats() map[uint32]ClientStats { return c.home.AllClientStats() }
+
 func (c *ClientHome) ClientCount() int { return c.home.ClientCount() }
 
-// LastSeen is how a supervisor notices a client that stopped talking without
+// Seen is how a supervisor notices a client that stopped talking without
 // saying so.
 func (c *ClientHome) Seen(clientID uint32) (time.Time, bool) { return c.home.LastSeen(clientID) }
 

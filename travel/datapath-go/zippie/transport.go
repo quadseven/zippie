@@ -28,6 +28,16 @@ const epochTakeoverIdle = 5 * time.Second
 // the NACK to travel, be answered, and come back on a different leg.
 const NackMaxDelayFraction = 0.6
 
+// DefaultNackDelay is how long a gap is left to close on its own before it is
+// asked for. Shared with the client home (clients.go), so a phone's stream is
+// judged by the same clock as the travel router's.
+const DefaultNackDelay = 60 * time.Millisecond
+
+// TickInterval is how often a receiver releases gaps that have outlived the
+// reorder deadline and sends the NACKs that have come due. The client home's
+// caller ticks at the same rate (ClientHome.Tick).
+const TickInterval = 20 * time.Millisecond
+
 type LinkEndpoint struct {
 	PathID uint8
 	Name   string
@@ -200,7 +210,7 @@ func New(cfg Config) (*Transport, error) {
 		cfg.ReorderDeadline = 150 * time.Millisecond
 	}
 	if cfg.NackDelay == 0 {
-		cfg.NackDelay = 60 * time.Millisecond
+		cfg.NackDelay = DefaultNackDelay
 	}
 	local, err := net.ListenUDP("udp4", cfg.LocalBind)
 	if err != nil {
@@ -219,7 +229,7 @@ func New(cfg Config) (*Transport, error) {
 		scheduler:   NewScheduler(),
 		reassembler: NewReassembler(cfg.ReorderDeadline),
 		nacks:       NewNackTracker(cfg.NackDelay, nackMaxDelay),
-		retransmit:  NewRetransmitBuffer(2*time.Second, 4096),
+		retransmit:  NewRetransmitBuffer(DefaultRetransmitTTL, DefaultRetransmitDepth),
 		classifier:  NewClassifier(cfg.Classifier),
 		wgPeer:      cfg.WGPeer,
 		linkRX:      make(map[uint8]time.Time),
@@ -795,7 +805,7 @@ func (t *Transport) SendKeepalives() {
 // and sends NACKs that have come due.
 func (t *Transport) ticker() {
 	defer t.wg.Done()
-	tk := time.NewTicker(20 * time.Millisecond)
+	tk := time.NewTicker(TickInterval)
 	defer tk.Stop()
 	var due []uint64
 	out := make([][]byte, 0, 8)
