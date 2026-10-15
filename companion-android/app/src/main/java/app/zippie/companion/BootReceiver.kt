@@ -255,6 +255,9 @@ class BootReceiver : BroadcastReceiver() {
                 // re-entry a no-op, since startForegroundService on a live
                 // service just delivers another onStartCommand.
                 BootLog.record(context, TAG, "$source: started (proximity=$proximity)")
+                // The stand-down no longer describes anything: the relay is
+                // running, so a stale record must not outlive it on the screen.
+                runCatching { BootStanddownStore.clear(context) }
                 scheduleRetry(context, source, SUPERVISION_ATTEMPT)
             }
             is BootRelayDecision.Skip -> {
@@ -271,6 +274,21 @@ class BootReceiver : BroadcastReceiver() {
                     "$source: stood down - ${outcome.reason} " +
                         "(retry ${if (outcome.retryable) "armed" else "NOT armed"})",
                 )
+                // PERSISTED FOR THE HOME SCREEN (#180 AC3). The log line above
+                // is the durable record; this is the one the screen reads, so
+                // a phone that stood down says so with the reason and when it
+                // will reconsider, instead of the generic Off verdict.
+                runCatching {
+                    BootStanddownStore.save(
+                        context,
+                        BootStanddown(
+                            outcome.reason,
+                            outcome.retryable,
+                            outcome.retryAfterMs,
+                            System.currentTimeMillis(),
+                        ),
+                    )
+                }
                 if (outcome.retryable) {
                     scheduleRetry(context, source, attempt, outcome.retryAfterMs)
                 }
