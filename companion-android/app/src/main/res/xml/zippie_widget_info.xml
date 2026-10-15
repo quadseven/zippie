@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Home-screen widget (quadseven/zippie#176): the relay verdict without
+     opening the app. updatePeriodMillis is 0 on purpose - the system minimum
+     is 30 minutes, useless for a status surface, so the app pushes redraws
+     itself when the visible content changes (ZippieWidgetRefresh). -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="40dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen"
+    android:description="@string/zippie_widget_description" />
