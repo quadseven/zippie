@@ -48,10 +48,29 @@ name: Deploy - k8s-oke manifests
 # with no credentials, and the cluster diff runs on main in the same job as
 # the apply, immediately before it, in the log.
 #
-# NEVER ADD `kubectl delete` HERE. `kubectl apply` cannot prune, which is a
-# deliberate trade: removing a manifest from git leaves the live object alone
-# and someone has to delete it by hand. That is the safe direction for a
+# NEVER ADD generic `kubectl delete` HERE. `kubectl apply` cannot prune, which
+# is a deliberate trade: removing a manifest from git leaves the live object
+# alone and someone has to delete it by hand. That is the safe direction for a
 # namespace carrying someone's internet connection.
+#
+# RETENTION POLICY FOR GENERATOR CONFIGMAPS. The `configMapGenerator` in each
+# kustomization mints a new hash-suffixed ConfigMap on every content change,
+# and `kubectl apply` cannot prune old ones. The safe retention policy is:
+#
+#   1. BOUND THE ROLLBACK WINDOW declaratively - `revisionHistoryLimit` on the
+#      Deployment. Kubernetes garbage-collects excess ReplicaSets automatically.
+#   2. Their ConfigMaps become genuinely unreferenced after the limit is reached.
+#   3. Prune only ConfigMaps not referenced by any live ReplicaSet (or running
+#      pod). This preserves rollback targets while removing orphans.
+#
+# The `deploy/oke/unreferenced-configmaps.py` tool implements this: it reports
+# which ConfigMaps nothing references, and with `--prune` actually deletes them.
+# The tool is tested (see test_unreferenced_configmaps.py) to prove it never
+# removes a ConfigMap still referenced by a ReplicaSet or running pod.
+#
+# A prune step is added after apply to remove orphaned generator ConfigMaps.
+# It uses `--ignore-not-found` so it's safe to run even if there's nothing to
+# prune, and it fails closed if any delete returns an error.
 #
 # WHY THERE IS A SCHEDULE (#38). The push trigger plans only the targets whose
 # files changed in that push, which is right for shipping a change and useless
@@ -631,6 +650,19 @@ jobs:
             echo "::endgroup::"
           done < "$RUNNER_TEMP/plan.txt"
           exit $FAILED
+
+      - name: Prune unreferenced generator ConfigMaps
+        # Runs after Apply and before Verify rollouts, so the rollouts step
+        # sees a clean cluster with only the ConfigMaps that the new Deployments
+        # reference. The prune uses the tool that proves it never removes a
+        # ConfigMap still referenced by a ReplicaSet or running pod.
+        if: ${{ steps.apply.outcome == 'success' && inputs.preview != true }}
+        run: |
+          set -euo pipefail
+          python3 deploy/oke/unreferenced-configmaps.py --prune --namespace zippie --context k8s-oke || {
+            echo "::error::prune step failed"
+            exit 1
+          }
 
       - name: Verify rollouts
         # Runs even if Apply partially failed: whatever DID apply mutated the
