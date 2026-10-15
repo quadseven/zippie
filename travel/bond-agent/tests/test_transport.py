@@ -491,7 +491,7 @@ class TestPerLinkKeepalives:
         assert t.link_rtt_ms(0) is None
         assert t.link_rx_age_s(0) is None
 
-    def test_three_idle_metered_legs_emit_only_11_93_mb_per_day(self):
+    def test_three_idle_metered_legs_emit_only_12_18_mb_per_day(self):
         """Exercise the actual frame/scheduler paths, not the cost formula."""
         clock = _Clock()
         clock.t = 0.0
@@ -521,7 +521,7 @@ class TestPerLinkKeepalives:
         # the IPv4/UDP cost instead of requiring a second hidden adjustment.
         billed_bytes = sum(tx + rx for tx, rx in t.link_bytes().values())
         projected_mb_day = billed_bytes / 100 * 86400 / 1_000_000
-        assert round(projected_mb_day, 2) == 11.93
+        assert round(projected_mb_day, 2) == 12.18
         assert projected_mb_day < 100
 
 

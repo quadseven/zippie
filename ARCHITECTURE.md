@@ -285,6 +285,12 @@ The maximum wait is **derived** from the reorder deadline rather than being a
 second constant, because an answer that arrives after the reassembler gave up is
 a frame bought for nothing.
 
+Keepalive requests can carry the sender's last measured RTT for that leg. When
+the receiver has fresh readings from at least two legs, their spread raises the
+reorder deadline and its derived NACK ceiling together. The progress rule still
+lets a proved loss be requested after the original 60 ms floor. Peers that send
+empty keepalives retain the progress rule without the RTT hint.
+
 A retransmit is flagged on the wire, so the receiver does not read it as
 evidence that its leg made forward progress - it deliberately went out on a
 different leg and may carry a sequence far ahead of everything that leg is
