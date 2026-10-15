@@ -239,3 +239,58 @@ func TestARevokedClientsNackIsNotAnswered(t *testing.T) {
 		t.Fatal("a revoked client's NACK was answered")
 	}
 }
+
+// A frame from a client's PREVIOUS run - a straggler still in flight on a slow
+// leg when it restarted, or a replay, which the MAC cannot tell from the
+// original - must not flip the epoch back. Doing so resets the stream twice and
+// throws away what the new run had buffered.
+func TestAFrameFromAClientsOldRunIsDroppedNotAdopted(t *testing.T) {
+	a := sealedID(t, 1, "aaaa-key-aaaa-key-aaaa-key-aaaa32")
+	h, cap := homeWith(t, a)
+	here := addr(t, "203.0.113.1:1")
+
+	h.Accept(Frame{Seq: 0, Epoch: 11, Payload: []byte("old0")}.PackAs(a), here)
+	// A restarts: new epoch, sequence back to zero, and a gap at 1.
+	h.Accept(Frame{Seq: 0, Epoch: 33, Payload: []byte("new0")}.PackAs(a), here)
+	h.Accept(Frame{Seq: 2, Epoch: 33, Payload: []byte("new2")}.PackAs(a), here)
+	// The straggler, from somewhere else.
+	h.Accept(Frame{Seq: 1, Epoch: 11, Payload: []byte("old1")}.PackAs(a), addr(t, "198.51.100.66:6"))
+	h.Accept(Frame{Seq: 1, Epoch: 33, Payload: []byte("new1")}.PackAs(a), here)
+
+	var got []string
+	for _, p := range cap.packets {
+		got = append(got, string(p.data))
+	}
+	want := []string{"old0", "new0", "new1", "new2"}
+	if len(got) != len(want) {
+		t.Fatalf("handler saw %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("handler saw %q, want %q", got, want)
+		}
+	}
+	s, _ := h.ClientStats(1)
+	if s.StreamResets != 1 || s.StaleEpoch != 1 {
+		t.Errorf("resets %d stale %d, want 1 and 1", s.StreamResets, s.StaleEpoch)
+	}
+	if target := h.home.ReplyTarget(1); target != "203.0.113.1:1" {
+		t.Errorf("reply target = %s; a frame from a finished run moved it", target)
+	}
+}
+
+// Nor may a NACK from a finished run draw an answer.
+func TestANackFromAClientsOldRunIsNotAnswered(t *testing.T) {
+	a := sealedID(t, 1, "aaaa-key-aaaa-key-aaaa-key-aaaa32")
+	h, _ := homeWith(t, a)
+	here := addr(t, "203.0.113.1:1")
+	h.Accept(Frame{Seq: 0, Epoch: 11, Payload: []byte("x")}.PackAs(a), here)
+	h.Accept(Frame{Seq: 0, Epoch: 33, Payload: []byte("y")}.PackAs(a), here)
+	if _, _, err := h.Reply(1, []byte("for-A")); err != nil {
+		t.Fatalf("Reply: %v", err)
+	}
+
+	if send := h.Accept(Frame{Seq: 0, Epoch: 11, Flags: FlagNack}.PackAs(a), here); len(send) != 0 {
+		t.Fatal("a NACK carrying a retired epoch was answered")
+	}
+}
