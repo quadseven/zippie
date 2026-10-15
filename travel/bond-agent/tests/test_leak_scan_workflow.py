@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+
 import pytest
+
 
 yaml = pytest.importorskip(
     "yaml",
@@ -45,14 +47,12 @@ def test_workflow_calls_pinned_reusable_workflow():
     leak_job = data.get("jobs", {}).get("leak-scan", {})
     uses = leak_job.get("uses", "")
 
-    reusable_prefix = (
-        "quadseven/infra-public/.github/workflows/_reusable.leak-scan.yml@"
-    )
+    reusable_prefix = "quadseven/infra-public/.github/workflows/_reusable.leak-scan.yml@"
     assert uses.startswith(reusable_prefix), (
         f"Workflow must call infra-public reusable leak scan, got: {uses}"
     )
 
-    sha = uses[len(reusable_prefix):]
+    sha = uses[len(reusable_prefix) :]
     assert re.match(r"^[0-9a-f]{40}$", sha), (
         f"Workflow reference must be pinned to a 40-character commit SHA, got: {sha}"
     )
@@ -78,9 +78,7 @@ def test_allowed_repo_refs_lists_only_public_repos():
     assert "muster" in refs
 
     # Private repositories must never be listed in public repo-ref allowlists
-    assert "infra" not in refs, (
-        "private repository 'infra' must not be in allowed-repo-refs"
-    )
+    assert "infra" not in refs, "private repository 'infra' must not be in allowed-repo-refs"
 
 
 def test_deny_list_layer_is_out_of_scope():
