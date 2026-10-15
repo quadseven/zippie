@@ -50,7 +50,7 @@ def test_deploy_oke_entries_are_deployed_or_marked_parked():
     for row in rows:
         if len(row) < 4:
             continue
-        name, mode, flag, rel_path = row[0], row[1], row[2], row[3]
+        name, mode, _, rel_path = row[0], row[1], row[2], row[3]
         if mode == "none":
             continue
 
