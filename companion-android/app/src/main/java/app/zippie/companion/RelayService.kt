@@ -933,9 +933,14 @@ class RelayService : Service() {
 
     private fun saveLedger() {
         if (!::ledger.isInitialized) return
+        val verdict = ledger.verdict()
+        val encoded = BudgetLedgerCodec.encode(ledger)
         RelayConfiguration.prefs(this).edit()
-            .putString(KEY_LEDGER, BudgetLedgerCodec.encode(ledger))
+            .putString(KEY_LEDGER, encoded)
             .apply()
+        if (!verdict.isAllowed && !BootConfigStore.persistExhaustedLedger(this, encoded)) {
+            Log.e(TAG, "could not persist exhausted data budget for locked boot")
+        }
     }
 
     // ---- foreground plumbing --------------------------------------------
