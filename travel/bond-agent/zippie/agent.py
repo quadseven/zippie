@@ -289,7 +289,7 @@ def projected_idle_mb_per_day(
         return 0.0
     seconds_per_day = 86400
     framed_probe = HEADER_LEN + _IPV4_UDP_HEADER_BYTES
-    probes = metered_legs * 2 * framed_probe * seconds_per_day / max(0.2, probe_interval_s)
+    probes = metered_legs * (2 * framed_probe + 2) * seconds_per_day / max(0.2, probe_interval_s)
     keepalives = 0.0
     if keepalive_s > 0:
         keepalives = (

@@ -277,7 +277,16 @@ _TRANSPORT_COUNTERS = {
     # between legs has outgrown what the reorder deadline leaves room to wait
     # out, and it is the number that would have named the "retransmits tripled
     # in a step rather than drifting" episode on the travel router the first time.
-    "nacks": ("nacks_sent", "abandoned", "dropped", "reordered", "capped"),
+    "nacks": (
+        "nacks_sent",
+        "abandoned",
+        "dropped",
+        "reordered",
+        "capped",
+        "recovery_count",
+        "recovery_total_ms",
+        "recovery_max_ms",
+    ),
 }
 
 

@@ -166,7 +166,7 @@ def test_console_reports_client_payload_to_metered_spend_ratio(tmp_path):
 
 def test_three_metered_idle_legs_project_below_100_mb_per_day():
     achieved = projected_idle_mb_per_day(metered_legs=3, probe_interval_s=2.0, keepalive_s=25)
-    assert round(achieved, 2) == 11.93
+    assert round(achieved, 2) == 12.19
     assert achieved < 100
 
 

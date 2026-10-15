@@ -39,6 +39,7 @@ import logging
 import os
 import selectors
 import socket
+import struct
 import time
 from collections import deque
 from dataclasses import dataclass, replace
@@ -313,6 +314,7 @@ class AdaptiveRecovery:
         capped_total: int,
         abandoned_total: int,
         worst_rtt_ms: float | None,
+        peer_skew_ms: float | None = None,
     ) -> bool:
         """Call as often as you like; internally rate-limited to
         `eval_interval_s`. Returns True if the deadline moved, which is the
@@ -324,6 +326,19 @@ class AdaptiveRecovery:
         caller does not have to.
         """
         now = self._clock()
+        skew_floor_ms = self.baseline_ms
+        if peer_skew_ms is not None:
+            # Leave the same 40% of the reorder window for a NACK round trip.
+            # The extra 20 ms covers scheduling and probe rounding.
+            needed = int((peer_skew_ms + 20) / NACK_MAX_DELAY_FRACTION + 0.999)
+            target = min(self.max_deadline_ms, max(self.baseline_ms, needed))
+            skew_floor_ms = target
+            if target > self.deadline_ms:
+                self.deadline_ms = target
+                self.stats.increases += 1
+                self.stats.reorder_deadline_ms = target
+                self._healthy_streak = 0
+                return True
         if self._last_eval is not None and (now - self._last_eval) < self._eval_interval_s:
             return False
         first_eval = self._last_eval is None
@@ -349,10 +364,10 @@ class AdaptiveRecovery:
                 self.deadline_ms = min(self.max_deadline_ms, self.deadline_ms + self._step_ms)
                 self.stats.increases += 1
                 changed = True
-        elif self.deadline_ms > self.baseline_ms:
+        elif self.deadline_ms > skew_floor_ms:
             self._healthy_streak += 1
             if self._healthy_streak >= self._sustained_healthy_evals:
-                self.deadline_ms = max(self.baseline_ms, self.deadline_ms - self._step_ms)
+                self.deadline_ms = max(skew_floor_ms, self.deadline_ms - self._step_ms)
                 self.stats.decreases += 1
                 self._healthy_streak = 0
                 changed = True
@@ -776,6 +791,7 @@ class Transport:
         # waiting rather than nothing at all.
         self._started_at = self._clock()
         self._link_rtt: dict[int, float] = {}
+        self._peer_rtt: dict[int, tuple[float, float]] = {}
         # path_id -> {probe_id: sent_at}. Per PROBE, not per leg: a reply has
         # to be matched to the probe that caused it, or a DROPPED probe is
         # indistinguishable from a SLOW one and the leg reports one full probe
@@ -948,7 +964,11 @@ class Transport:
                 Frame(
                     seq=probe,
                     path_id=path_id,
-                    payload=b"",
+                    payload=(
+                        struct.pack("!H", min(65535, max(0, round(self._link_rtt[path_id]))))
+                        if path_id in self._link_rtt
+                        else b""
+                    ),
                     flags=FLAG_KEEPALIVE,
                     epoch=self._epoch,
                 )
@@ -1338,6 +1358,7 @@ class Transport:
             )
             self.reassembler.reset_stream()
             self._reset_gap_tracking()
+            self._peer_rtt.clear()
         self._peer_epoch = frame.epoch
         return True
 
@@ -1396,6 +1417,11 @@ class Transport:
             if path_id is not None:
                 self._note_keepalive_reply(frame.seq, path_id)
         elif path_id is not None:
+            if len(frame.payload) == 2:
+                self._peer_rtt[frame.path_id] = (
+                    struct.unpack("!H", frame.payload)[0],
+                    self._clock(),
+                )
             # Answer on the SAME leg it arrived on. Replying over whichever
             # link the scheduler happens to like would measure that link
             # instead, and the answer would prove nothing about the leg
@@ -1586,12 +1612,17 @@ class Transport:
         return worst
 
     def _maybe_adapt_recovery(self) -> None:
+        peer_rtts = [
+            rtt for rtt, seen in self._peer_rtt.values() if self._clock() - seen < PEER_SILENT_S
+        ]
+        peer_skew_ms = max(peer_rtts) - min(peer_rtts) if len(peer_rtts) >= 2 else None
         changed = self._adaptive.maybe_adapt(
             capped_total=self.nacks.stats.capped,
             abandoned_total=(
                 self.reassembler.stats.too_late_dropped + self.reassembler.stats.gaps_abandoned
             ),
             worst_rtt_ms=self._worst_known_rtt_ms(),
+            peer_skew_ms=peer_skew_ms,
         )
         if not changed:
             return

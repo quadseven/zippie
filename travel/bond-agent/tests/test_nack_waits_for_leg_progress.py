@@ -23,8 +23,9 @@ A missing sequence is only worth asking for once the leg that would have
 carried it has DEMONSTRABLY moved past it. Frames carry the leg they were sent
 on (`Frame.path_id`), so the receiver can keep a per-leg high-water mark and
 require that every leg still in play has delivered something newer than the
-gap. That is evidence rather than a guess, and it needs no RTT measurement, no
-clock synchronisation and no wire change.
+gap. That progress gate needs no RTT measurement or clock synchronisation.
+The sender now also reports leg RTT in keepalives so the receiver can raise
+the bounded wait when measured skew exceeds the original reorder window.
 
 WHAT THESE TESTS PIN, AND WHY EACH ONE EXISTS
 ---------------------------------------------
@@ -41,6 +42,7 @@ WHAT THESE TESTS PIN, AND WHY EACH ONE EXISTS
   BOTH halves: the bit is set on the way out and honoured on the way in
 - a peer restart drops the marks, driven from the transport rather than merely
   available on the tracker
+- sender RTT reports widen the receiving window when skew exceeds its cap
 - the two counters that make any of this visible in production actually reach
   the status dict
 
@@ -64,7 +66,10 @@ link per leg.
 from __future__ import annotations
 
 import re
+import struct
 from pathlib import Path
+
+import pytest
 
 from zippie.classify import ClassifierConfig
 from zippie.datapath import (
@@ -212,6 +217,63 @@ def _steady_skew(reorder_ms=250, skew_ms=80, warm=240, measure=240):
 
 
 class TestSkewIsNotLoss:
+    def test_keepalive_reports_the_rtt_of_its_own_leg(self):
+        r = Receiver(reorder_deadline_ms=250)
+        r.t._link_rtt[FAST] = 83.0
+        r.t.send_keepalives()
+        sent = Frame.unpack(r.link.sent[-1][0])
+        assert sent.is_keepalive
+        assert sent.payload == struct.pack("!H", 83)
+
+    @pytest.mark.parametrize("skew_ms", [40, 60, 80, 150, 300])
+    def test_reported_leg_rtt_spread_prevents_a_retransmit_cliff(self, skew_ms):
+        r = Receiver(reorder_deadline_ms=250, nack_delay_ms=60)
+        for leg, rtt_ms in ((FAST, 20), (SLOW, 20 + skew_ms)):
+            r.t._on_link_data(
+                Frame(
+                    seq=0,
+                    path_id=leg,
+                    payload=struct.pack("!H", rtt_ms),
+                    flags=FLAG_KEEPALIVE,
+                    epoch=EPOCH,
+                ).pack(),
+                path_id=0,
+            )
+        for i in range(900):
+            r.arrive(2 * i, FAST)
+            if i >= skew_ms:
+                r.arrive(2 * (i - skew_ms) + 1, SLOW)
+            r.step()
+            if i == 400:
+                r.first_nack.clear()
+        assert r.nacked() == []
+        assert r.t.reassembler.stats.too_late_dropped == 0
+
+    def test_equal_rtts_leave_genuine_loss_timing_at_the_60ms_floor(self):
+        outcomes = []
+        for reported in (False, True):
+            r = Receiver(reorder_deadline_ms=250, nack_delay_ms=60)
+            if reported:
+                for leg in (FAST, SLOW):
+                    r.t._on_link_data(
+                        Frame(
+                            seq=0,
+                            path_id=leg,
+                            payload=struct.pack("!H", 20),
+                            flags=FLAG_KEEPALIVE,
+                            epoch=EPOCH,
+                        ).pack(),
+                        path_id=0,
+                    )
+            for i in range(250):
+                r.arrive(2 * i, FAST)
+                if i % 10 >= 3:
+                    r.arrive(2 * i + 1, SLOW)
+                r.step()
+            outcomes.append(r.first_nack)
+        assert outcomes[0] == outcomes[1]
+        assert outcomes[0], "the 30% loss arm did not exercise NACK recovery"
+
     def test_a_gap_the_slow_leg_has_not_reached_yet_is_not_asked_for(self):
         """THE DEFECT. 80 ms of skew against a 60 ms deadline used to NACK every
         single frame the slow leg carried, because each one arrived 20 ms after
@@ -655,6 +717,15 @@ class TestTheGateItself:
             now[0] += s
 
         return NackTracker(60, max_delay_ms=150, _clock=clock), advance
+
+    def test_recovered_gap_reports_time_from_detection_to_arrival(self):
+        n, advance = self._tracker()
+        n.note_gap([7])
+        advance(0.061)
+        assert n.due() == [7]
+        advance(0.020)
+        n.resolve(7)
+        assert n.stats.as_dict()["recovery_max_ms"] == 81
 
     def test_every_leg_has_to_have_moved_past_it_not_just_one(self):
         """The MINIMUM over legs, not the maximum and not the newest frame. A

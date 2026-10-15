@@ -344,7 +344,16 @@ class TestDatapathObservability:
                 "stream_restarts": 1,
             },
             "retransmit": {"resent": 4, "expired": 9, "unanswerable": 0, "refused": 0},
-            "nacks": {"nacks_sent": 2, "abandoned": 0, "dropped": 0, "reordered": 11, "capped": 1},
+            "nacks": {
+                "nacks_sent": 2,
+                "abandoned": 0,
+                "dropped": 0,
+                "reordered": 11,
+                "capped": 1,
+                "recovery_count": 1,
+                "recovery_total_ms": 80,
+                "recovery_max_ms": 80,
+            },
             "links": 2,
             "healthy": 2,
         }
@@ -384,6 +393,9 @@ class TestDatapathObservability:
             # deadline left no room to keep waiting.
             "nacks.reordered",
             "nacks.capped",
+            "nacks.recovery_count",
+            "nacks.recovery_total_ms",
+            "nacks.recovery_max_ms",
             "transport.links",
             "transport.healthy",
         ):

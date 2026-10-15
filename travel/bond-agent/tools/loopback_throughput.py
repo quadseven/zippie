@@ -1059,6 +1059,9 @@ def run_impaired(
         # with capped at zero is ordinary loss recovery.
         "nacks_reordered": home["nacks"]["reordered"],
         "nacks_capped": home["nacks"]["capped"],
+        "recovery_count": home["nacks"]["recovery_count"],
+        "recovery_total_ms": home["nacks"]["recovery_total_ms"],
+        "recovery_max_ms": home["nacks"]["recovery_max_ms"],
         "lost_estimate": home["reassembly"]["lost_estimate"],
         "gaps_abandoned": home["reassembly"]["gaps_abandoned"],
         "too_late_dropped": home["reassembly"]["too_late_dropped"],
@@ -1125,6 +1128,13 @@ def _fmt_impair(row: dict) -> str:
         "    reordering absorbed {reord:,}  asked without proof {capped:,}".format(
             reord=row["nacks_reordered"],
             capped=row["nacks_capped"],
+        ),
+        "    NACKed gap resolution {count:,}  mean {mean:.1f}ms  max {maximum}ms".format(
+            count=row["recovery_count"],
+            mean=(row["recovery_total_ms"] / row["recovery_count"])
+            if row["recovery_count"]
+            else 0.0,
+            maximum=row["recovery_max_ms"],
         ),
         "    shed {shed} tails_ms {tails}".format(
             shed=row["shed"] or "none", tails=row["tails_ms"]
