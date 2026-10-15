@@ -69,13 +69,17 @@ import kotlinx.coroutines.withTimeoutOrNull
  * starting specific foreground service types outright - dataSync, camera,
  * mediaPlayback, phoneCall, mediaProjection, microphone
  * (developer.android.com/about/versions/15/behavior-changes-15#fgs-boot-
- * completed). RelayService's type, connectedDevice, is not on that list, and
- * the restriction only binds apps that TARGET API 35+. RE-CHECKED 2026-08-12
- * when targetSdk moved 34 -> 36 for Google Play (#140), which is exactly what
- * the previous version of this comment asked for: the blocked set is dataSync,
- * camera, mediaPlayback, phoneCall, mediaProjection and microphone.
- * connectedDevice is NOT among them, so this receiver may still start
- * RelayService from BOOT_COMPLETED. Re-check again if the service type changes.
+ * completed). Android 14 (API 34) already restricts starting a microphone
+ * foreground service from a boot receiver for apps targeting API 34+;
+ * Android 15 (API 35) adds dataSync, camera, mediaPlayback, phoneCall and
+ * mediaProjection for apps targeting API 35+. The current documented list
+ * still does not include connectedDevice, so it permits this service type at
+ * targetSdk 34 and 36. Android's general background-start exemption explicitly
+ * names both boot actions, including LOCKED_BOOT_COMPLETED. Re-checked
+ * 2026-10-15 against the current Android documentation. Sources:
+ * https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start
+ * https://developer.android.com/about/versions/15/behavior-changes-15
+ * Re-check if the service type changes.
  *
  * THE DECISION ITSELF LIVES IN BootRelayDecision, Android-free, so it can be
  * proven in a plain unit test. Everything in this file that reaches the

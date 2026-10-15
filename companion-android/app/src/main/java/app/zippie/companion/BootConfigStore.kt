@@ -139,6 +139,20 @@ object BootConfigStore {
     }
 
     /**
+     * Preserve a capped ledger for the next locked boot. Partial spending stays
+     * in credential-protected storage; mirroring only an exhausted ledger keeps
+     * boot from resetting a cap without expanding the locked-storage policy.
+     */
+    fun persistExhaustedLedger(context: Context, ledgerRaw: String): Boolean {
+        val snapshot = read(context)
+        val ledger = BudgetLedgerCodec.decode(ledgerRaw, snapshot.budget) ?: return false
+        if (ledger.verdict().isAllowed) return false
+        return store(context).edit()
+            .putString(KEY_LEDGER_MIRROR, ledgerRaw)
+            .commit()
+    }
+
+    /**
      * Read the mirror. Falls back to RelayConfiguration's own field defaults
      * for anything never synced - see the class doc.
      */
