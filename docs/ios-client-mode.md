@@ -252,9 +252,35 @@ attached to a profile that is now the opposite mode.
   lookup leaves over the hotel wifi in the clear while the traffic goes home.
 - **Client, split tunnel** (the default, `[.tailnet]`): `matchDomains =
   ["ts.net"]`, so captive portals and local discovery keep working.
-- **#25's `NEDNSSettingsManager`** is a separate system setting another app can
-  preempt. The interaction has NOT been tested; this is design intent, not a
-  measurement.
+- **#25's `NEDNSSettingsManager`** is a separate, system-wide setting: the
+  per-user NextDNS DoH URL `https://dns.nextdns.io/<profile>/<device>`. Apple's
+  rule for combining the two (WWDC20 "Enable encrypted DNS"): "if a VPN is
+  active, resolution within the VPN tunnel will use the VPN's DNS settings and
+  not your system-wide settings." So, per mode, with the per-user setting
+  selected:
+
+  | Mode | Who resolves | Lands in the user's own NextDNS profile? |
+  |---|---|---|
+  | No tunnel (any wifi, cellular) | per-user DoH | yes |
+  | Contribute (no `dnsSettings`) | per-user DoH | yes |
+  | Client, split tunnel | tunnel for `ts.net`, per-user DoH for the rest | yes, except tailnet names |
+  | Client, full tunnel (`matchDomains = [""]`) | tunnel's resolver | no - home's resolver sees them |
+
+  On the travel router's wifi the per-user DoH goes to NextDNS over HTTPS
+  through the bond, not to the router's own resolver, so the router's shared
+  profile never sees these queries. Full-tunnel attribution needs home to
+  forward per client (ADR 0022); until then that mode reports to home's profile.
+
+  iOS keeps one DNS configuration selected at a time and saving never selects
+  it, so `isEnabled` is false both before the user turns it on and after another
+  VPN or DNS app is selected over it. The settings screen says so, with the
+  path to fix it (`DNSSettingsController.Status.detail`).
+
+  The table is Apple's documented behaviour, not yet a measurement. To check it
+  on a phone: set a profile and device name, select Zippie under Settings >
+  General > VPN & Device Management > DNS, browse once on the travel router's
+  wifi and once on cellular with wifi off, and confirm both appear in that
+  profile's NextDNS logs under the device name.
 
 ## Two dependencies that bound what client mode can claim
 
