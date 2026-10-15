@@ -1,3 +1,12 @@
+# PARKED: this manifest is not deployed and must not be applied until a phone
+# client can reach it. Nothing here is live infrastructure.
+#
+# Why: it is the home end for phone clients, and there is no phone client yet
+# to terminate on it. The image is built and published, but it cannot run
+# (see "What is NOT done" below): no pull secret, placeholder client keys.
+# Unblocked by: legacy no. 27 (the phone client). Until then it is kept, not
+# deleted, and deploy/oke/targets.tsv holds it at dispatch-only.
+#
 # The home end for PHONE CLIENTS, deployed BESIDE the live zippie-home.
 #
 # ============================================================================
