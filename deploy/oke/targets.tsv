@@ -22,7 +22,8 @@
 #   auto      applied on push to main when its files changed, AND on every
 #             scheduled reconcile whether anything changed or not (#38).
 #   dispatch  NEVER applied by a push, and NEVER by the schedule.
-#             zippie-clienthome is dispatch-only because its committed
+#             zippie-clienthome is dispatch-only because it is PARKED
+#             behind legacy no. 27 and its committed
 #             `zippie-clienthome-clients` ConfigMap is a PLACEHOLDER
 #             (`clients.json: []`). Auto-applying it would overwrite live
 #             pairing state with an empty list the first time anyone touched

@@ -44,9 +44,10 @@ skipped:
 | `zippie-hub` | `auto` | bare `zippie-hub.yaml` | push to main when it changed, plus every scheduled reconcile (`kubectl apply -f`, client-side, matching how the live object is managed) |
 | `zippie-clienthome` | `dispatch` | bare `zippie-clienthome.yaml` | **`workflow_dispatch` only** - never a push, never the schedule |
 
-`zippie-clienthome` is deliberately not auto-applied. Its committed
-`zippie-clienthome-clients` ConfigMap is a placeholder (`clients.json: []`) and
-the manifest says so - real client keys are provisioned out of band. Applying
+`zippie-clienthome` is parked until legacy no. 27 lands and is deliberately
+not auto-applied. Its committed `zippie-clienthome-clients` ConfigMap is a
+placeholder (`clients.json: []`) and the manifest says so - real client keys
+are provisioned out of band. Applying
 it automatically would overwrite live pairing state with an empty list the
 first time anyone touched that directory. Once it has a Secret instead of a
 placeholder, move it to `auto` in the table.

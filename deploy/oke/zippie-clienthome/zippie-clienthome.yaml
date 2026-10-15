@@ -1,6 +1,14 @@
+# ============================================================================
+# PARKED: This manifest is parked behind legacy no. 40 until legacy no. 27 lands.
+#
+# It has never been deployed because there is no phone client to terminate.
+# No image build exists yet, and it must not be applied until a phone client
+# can reach it.
+# Unblocked by: legacy no. 27.
+# ============================================================================
+#
 # The home end for PHONE CLIENTS, deployed BESIDE the live zippie-home.
 #
-# ============================================================================
 # THIS HAS NEVER RUN. Read this before assuming it is idle infrastructure.
 # ============================================================================
 #
