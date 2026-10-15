@@ -18,6 +18,8 @@ HEADER_LINES = 12
 
 
 def _header() -> str:
+    # No try/except on purpose: under pytest a missing manifest already fails
+    # this test with a FileNotFoundError that names the full path.
     return "\n".join(MANIFEST.read_text().splitlines()[:HEADER_LINES])
 
 
