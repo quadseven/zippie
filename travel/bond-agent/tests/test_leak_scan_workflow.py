@@ -32,7 +32,7 @@ def test_workflow_file_exists():
 
 def test_workflow_triggers_on_all_pr_events():
     data = _load_workflow()
-    pr_config = data.get("on", {}).get("pull_request", {})
+    pr_config = (data.get("on") or data.get(True) or {}).get("pull_request", {})
     types = pr_config.get("types", [])
     expected_types = {"opened", "synchronize", "reopened", "edited"}
     assert set(types) == expected_types, (
@@ -52,7 +52,7 @@ def test_workflow_calls_pinned_reusable_workflow():
         f"Workflow must call infra-public reusable leak scan, got: {uses}"
     )
 
-    sha = uses[len(reusable_prefix) :]
+    sha = uses[len(reusable_prefix):]
     assert re.match(r"^[0-9a-f]{40}$", sha), (
         f"Workflow reference must be pinned to a 40-character commit SHA, got: {sha}"
     )
@@ -78,7 +78,9 @@ def test_allowed_repo_refs_lists_only_public_repos():
     assert "muster" in refs
 
     # Private repositories must never be listed in public repo-ref allowlists
-    assert "infra" not in refs, "private repository 'infra' must not be in allowed-repo-refs"
+    assert "infra" not in refs, (
+        "private repository 'infra' must not be in allowed-repo-refs"
+    )
 
 
 def test_deny_list_layer_is_out_of_scope():
