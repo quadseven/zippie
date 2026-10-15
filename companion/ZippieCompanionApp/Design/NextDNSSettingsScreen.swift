@@ -75,10 +75,10 @@ struct NextDNSSettingsScreen: View {
 
     private var status: some View {
         VStack(alignment: .leading, spacing: Space.snug) {
-            Text(statusHeadline)
+            Text(controller.status.headline)
                 .font(Kind.title())
                 .foregroundStyle(statusColour)
-            Text(statusDetail)
+            Text(controller.status.detail)
                 .font(Kind.body())
                 .foregroundStyle(Ink.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -86,32 +86,6 @@ struct NextDNSSettingsScreen: View {
         .padding(.top, Space.section)
         .padding(.bottom, Space.tight)
         .accessibilityElement(children: .combine)
-    }
-
-    private var statusHeadline: String {
-        switch controller.status {
-        case .notConfigured:             return "Not configured"
-        case .active:                    return "Using NextDNS"
-        case .configuredButDisabled:     return "NextDNS is disabled"
-        case .failed:                    return "Could not update DNS"
-        }
-    }
-
-    private var statusDetail: String {
-        switch controller.status {
-        case .notConfigured:
-            return "Add your profile so queries from this phone appear under your account."
-        case .active(let profile):
-            let name = profile.sanitizedDeviceName
-            return name.isEmpty
-                ? "iOS is using NextDNS profile \(profile.profileID)."
-                : "iOS is using profile \(profile.profileID) with the device name \(name)."
-        case .configuredButDisabled:
-            return "iOS has the profile, but is not using it. Check VPN, DNS & "
-                + "Device Management in Settings."
-        case .failed(let message):
-            return message
-        }
     }
 
     private var statusColour: Color {

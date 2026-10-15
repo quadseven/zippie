@@ -118,6 +118,40 @@ final class DNSSettingsControllerTests: XCTestCase {
         }
     }
 
+    /// #215: iOS reports the same `isEnabled == false` whether the user has
+    /// not selected this configuration yet or another VPN/DNS app has since
+    /// been selected over it. The status must name both causes and the one
+    /// place either is fixed, not just say "disabled".
+    func testDisabledStatusNamesPreemptionAndWhereToFixIt() {
+        let status = DNSSettingsController.Status.configuredButDisabled(
+            NextDNSProfile(profileID: "aaaa11"))
+
+        XCTAssertEqual(status.headline, "NextDNS is not in use")
+        XCTAssertTrue(status.detail.contains("another VPN or DNS app"),
+                      "preemption by another app is not named: \(status.detail)")
+        XCTAssertTrue(status.detail.contains("Settings > General > VPN & Device Management > DNS"),
+                      "the reader is not told where to turn it back on: \(status.detail)")
+    }
+
+    func testActiveStatusNamesTheInstalledProfileAndDevice() {
+        let named = DNSSettingsController.Status.active(
+            NextDNSProfile(profileID: "aaaa11", deviceName: "travel-phone"))
+        let unnamed = DNSSettingsController.Status.active(
+            NextDNSProfile(profileID: "aaaa11"))
+
+        XCTAssertEqual(named.headline, "Using NextDNS")
+        XCTAssertEqual(named.detail,
+                       "iOS is using profile aaaa11 with the device name travel-phone.")
+        XCTAssertEqual(unnamed.detail, "iOS is using NextDNS profile aaaa11.")
+    }
+
+    func testFailedStatusShowsTheSystemMessage() {
+        let status = DNSSettingsController.Status.failed("permission denied")
+
+        XCTAssertEqual(status.headline, "Could not update DNS")
+        XCTAssertEqual(status.detail, "permission denied")
+    }
+
     func testRemoveFailureKeepsTheConfigurationVisible() async {
         let manager = Manager()
         let profile = NextDNSProfile(profileID: "aaaa11")

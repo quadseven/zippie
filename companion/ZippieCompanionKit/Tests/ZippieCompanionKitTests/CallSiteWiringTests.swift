@@ -205,6 +205,8 @@ final class CallSiteWiringTests: XCTestCase {
                     "saving the fields never enables the configured resolver")
         assertCalls(settings, ".onChange(of: scenePhase)",
                     "status stays stale after the user enables DNS in iOS Settings")
+        assertCalls(settings, "controller.status.detail",
+                    "the screen words status itself, so the tested preemption text never shows")
 
         let entitlements = try source("ZippieCompanionApp/ZippieCompanion.entitlements")
         assertCalls(entitlements, "<string>dns-settings</string>",
