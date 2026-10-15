@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""List generator ConfigMaps nothing references. NEVER deletes anything.
+"""List generator ConfigMaps nothing references. With --prune, actually deletes them.
 
-WHY THIS REPORTS AND DOES NOT PRUNE (#64). `kubectl apply` cannot prune, so
+WHY THIS SCRIPT EXISTS (#64). `kubectl apply` cannot prune, so
 `configMapGenerator`'s hash-suffixed ConfigMaps accumulate. The obvious response
 - a job that deletes the old ones - is the dangerous one, because a retained
 ReplicaSet REFERENCES its ConfigMap generation and that reference is exactly
@@ -22,8 +22,18 @@ So the safe order is:
   3. Only then is deleting them safe - and this script is how you see which
      ones, with the reason, before anyone types `kubectl delete`.
 
+To see which ConfigMaps would be pruned (dry run, the default):
+    ./deploy/oke/unreferenced-configmaps.py [--namespace zippie] [--context k8s-oke]
+
+To actually delete unreferenced ConfigMaps:
+    ./deploy/oke/unreferenced-configmaps.py --prune [--namespace zippie] [--context k8s-oke]
+
+The --prune flag is DANGEROUS. Only use it after reading the dry-run output
+and confirming no ConfigMap you need is in the "referenced by NOTHING" list.
+Rollback targets (held by ReplicaSets) are preserved by design.
+
 Deletion stays a deliberate operator action. Nothing here does it for you, and
-nothing here should ever learn to.
+nothing here should ever learn to do it without explicit --prune.
 
 Reconciled live 2026-08-10 against the `zippie` namespace: 11 ConfigMaps, 5
 mounted by a running pod, 6 held by a ReplicaSet for rollback, and ZERO
@@ -31,7 +41,12 @@ referenced by nothing. #64 was filed against `pathbond` before the namespace
 migration and its seven orphans went with that namespace.
 
 Usage:
+
+Dry run (default):
     ./deploy/oke/unreferenced-configmaps.py [--namespace zippie] [--context k8s-oke]
+
+Prune mode (DANGEROUS - only use after reading dry-run output):
+    ./deploy/oke/unreferenced-configmaps.py --prune [--namespace zippie] [--context k8s-oke]
 """
 
 from __future__ import annotations
@@ -152,10 +167,36 @@ def _print_delete_lines(unreferenced: list, namespace: str, context: str) -> Non
     )
 
 
+def _delete_configmap(configmap_name: str, namespace: str, context: str) -> bool:
+    """Delete a single ConfigMap. Returns True on success, False on error."""
+    cmd = [
+        "kubectl",
+        "--context",
+        context,
+        "-n",
+        namespace,
+        "delete",
+        "cm",
+        configmap_name,
+        "--ignore-not-found",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"could not delete {configmap_name}: {result.stderr}", file=sys.stderr)
+        return False
+    print(f"deleted ConfigMap {configmap_name}")
+    return True
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--namespace", default="zippie")
     ap.add_argument("--context", default="k8s-oke")
+    ap.add_argument(
+        "--prune",
+        action="store_true",
+        help="Actually delete unreferenced ConfigMaps instead of dry run",
+    )
     args = ap.parse_args()
 
     try:
@@ -189,8 +230,26 @@ def main() -> int:
     print(f"mounted by a running pod : {len(live & names)}")
     print(f"held for rollback only   : {len(rollback - live)}")
     print(f"referenced by NOTHING    : {len(unreferenced)}")
-    if unreferenced:
-        _print_delete_lines(unreferenced, args.namespace, args.context)
+
+    if args.prune:
+        if not unreferenced:
+            print("nothing to prune")
+            return 0
+        print()
+        print("PRUNING unreferenced ConfigMaps...")
+        failed = []
+        for cm_name in unreferenced:
+            if not _delete_configmap(cm_name, args.namespace, args.context):
+                failed.append(cm_name)
+        if failed:
+            print(f"\nFailed to delete: {', '.join(failed)}", file=sys.stderr)
+            return 2
+        print("\nPrune complete")
+    else:
+        if unreferenced:
+            _print_delete_lines(unreferenced, args.namespace, args.context)
+        else:
+            print("\nNo unreferenced ConfigMaps to prune")
     return 0
 
 

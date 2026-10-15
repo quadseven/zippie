@@ -155,10 +155,28 @@ would stop this reconcile, and point 3 is exactly the state that cannot see it.
 
 ## Safety rules that are not negotiable
 
-- **No `kubectl delete`, ever.** `kubectl apply` cannot prune, which is
-  deliberate: removing a manifest from git leaves the live object alone and
-  someone removes it by hand. This namespace carries a live home exit for nine
-  provisioned peers across three clients.
+- **Retention policy for generator ConfigMaps.** The `configMapGenerator` in each
+  kustomization mints a new hash-suffixed ConfigMap on every content change, and
+  `kubectl apply` cannot prune old ones. The safe retention policy is:
+  
+  1. **Bound the rollback window declaratively** - `revisionHistoryLimit` on the
+     Deployment. Kubernetes garbage-collects excess ReplicaSets automatically.
+  2. **Their ConfigMaps become genuinely unreferenced** after the limit is
+     reached.
+  3. **Prune only ConfigMaps not referenced by any live ReplicaSet** (or running
+     pod). This preserves rollback targets while removing orphans.
+  
+  The `deploy/oke/unreferenced-configmaps.py` tool implements this: it reports
+  which ConfigMaps nothing references, and with `--prune` actually deletes them.
+  A prune step runs after each apply in the deploy workflow to remove orphans.
+  
+  See `deploy/oke/unreferenced-configmaps.py --help` for usage and
+  `deploy/oke/tests/test_unreferenced_configmaps.py` for the tests that prove it
+  never removes a ConfigMap still referenced by a ReplicaSet or running pod.
+
+- **No generic `kubectl delete`, ever.** Removing a manifest from git leaves the
+  live object alone and someone removes it by hand. This namespace carries a live
+  home exit for nine provisioned peers across three clients.
 - **The diff runs before the apply**, in the same job, in the log. On a
   dispatch you can set `preview: true` to stop after it.
 - **Rollout verification hard-fails.** A deploy is not done until the workload
