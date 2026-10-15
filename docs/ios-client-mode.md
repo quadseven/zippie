@@ -44,7 +44,7 @@ Read out of this repository, not remembered.
 | `ClientConfig` | BUILT and tested in the Kit. PRODUCER WIRED 2026-08-10 (#48): `TunnelController` installs `TunnelProfile(plan:)`, which writes the `client` key. Nothing can mint a `ClientConfig` yet - that is #31. |
 | Go datapath for the phone | BUILT, not wired (#26). |
 | Interface pinning in Go | BUILT. `dial_darwin.go` sets `IP_BOUND_IF` (25 at `IPPROTO_IP`, 125 at `IPPROTO_IPV6`) from the interface INDEX looked up by NAME. |
-| Multi-client home | BUILT IN GO, NOT DEPLOYED. `clients.go` + `clienthome.go` exist, and keep every piece of stream state per client in both directions - stream, epoch, NACK tracker, retransmit ring, reply target (#210). `deploy.oke-manifests.yml` records, verified 2026-08-07, that there is no `zippie-clienthome` workload in the `pathbond` namespace, that the target is dispatch-only, and that its `clients.json` is a committed placeholder. #24 is open. |
+| Multi-client home | BUILT IN GO, NOT DEPLOYED. `clients.go` + `clienthome.go` exist. `deploy.oke-manifests.yml` records, verified 2026-08-07, that there is no `zippie-clienthome` workload in the `pathbond` namespace, that the target is dispatch-only, and that its `clients.json` is a committed placeholder. #24 is open. |
 | Mode decision | BUILT AND ACTED ON since 2026-08-10 (#48). `BondModel` still computes one every five seconds; the Relay tab now hands it to `TunnelController.startTunnel`, which resolves it through `TunnelPlan.decide`. |
 | Pairing ceremony | NOT BUILT (#31). Nothing can mint a client id or key. |
 

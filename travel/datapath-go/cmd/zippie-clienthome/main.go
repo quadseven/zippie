@@ -28,9 +28,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
-	"time"
 
 	"github.com/quadseven/zippie-datapath/zippie"
 )
@@ -99,7 +97,6 @@ func main() {
 
 	go serveAdmin(*adminAddr, home)
 	go readTUN(tun, home, owner, sock)
-	go tickHome(home, sock)
 
 	log.Printf("zippie-clienthome listening on %s, tun %s", *listen, *tunName)
 
@@ -110,9 +107,7 @@ func main() {
 			if err != nil {
 				return
 			}
-			// A NACK from a phone is answered here, from that phone's own
-			// retransmit ring.
-			send(sock, home.Accept(buf[:n], from))
+			home.Accept(buf[:n], from)
 		}
 	}()
 
@@ -145,26 +140,6 @@ func readTUN(tun *tunDevice, home *zippie.ClientHome, owner *ownerTable, sock *n
 		}
 		if _, err := sock.WriteToUDP(wire, to); err != nil {
 			log.Printf("reply to %s: %v", to, err)
-		}
-	}
-}
-
-// tickHome releases each phone's stream past an expired gap and sends the
-// NACKs that came due, each to the phone whose stream has the gap. Without it
-// one lost packet stalls that phone until its reorder buffer overflows.
-func tickHome(home *zippie.ClientHome, sock *net.UDPConn) {
-	tk := time.NewTicker(zippie.TickInterval)
-	defer tk.Stop()
-	for range tk.C {
-		send(sock, home.Tick())
-	}
-}
-
-// send writes control frames home generated: NACKs and the answers to them.
-func send(sock *net.UDPConn, datagrams []zippie.Datagram) {
-	for _, d := range datagrams {
-		if _, err := sock.WriteToUDP(d.Wire, d.To); err != nil {
-			log.Printf("control frame to %s: %v", d.To, err)
 		}
 	}
 }
@@ -213,9 +188,8 @@ func serveAdmin(addr string, home *zippie.ClientHome) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, _ *http.Request) {
 		s := home.Stats()
-		r := home.RegistryStats()
 		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(map[string]any{
+		json.NewEncoder(w).Encode(map[string]any{
 			"role":           "clienthome",
 			"clients":        home.ClientCount(),
 			"accepted":       s.Accepted,
@@ -223,16 +197,7 @@ func serveAdmin(addr string, home *zippie.ClientHome) {
 			"refused":        s.Refused,
 			"replied":        s.Replied,
 			"no_return_path": s.NoReturnPath,
-			"seal_failed":    s.SealFailed,
-			// Why refused: unknown is an unregistered device or a probe,
-			// bad_mac is a registered id without its key - an attack.
-			"refused_unknown": r.Unknown,
-			"refused_bad_mac": r.BadMAC,
-			"refused_short":   r.Short,
-			"per_client":      perClientStatus(home),
-		}); err != nil {
-			log.Printf("status: %v", err)
-		}
+		})
 	})
 	// Liveness and readiness are separate on purpose: the process can be alive
 	// while no client has ever been heard from, and conflating those hides
@@ -246,22 +211,4 @@ func serveAdmin(addr string, home *zippie.ClientHome) {
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Printf("admin server: %v", err)
 	}
-}
-
-// perClientStatus is each phone's counters keyed by client id. Every connected
-// phone's delivered count climbing is the evidence home is keeping them apart.
-func perClientStatus(home *zippie.ClientHome) map[string]map[string]uint64 {
-	out := make(map[string]map[string]uint64)
-	for id, s := range home.AllClientStats() {
-		out[strconv.FormatUint(uint64(id), 10)] = map[string]uint64{
-			"delivered":      s.Delivered,
-			"stream_resets":  s.StreamResets,
-			"stale_control":  s.StaleControl,
-			"nacks_sent":     s.NacksSent,
-			"nacks_received": s.NacksReceived,
-			"resent":         s.Resent,
-			"replied":        s.Replied,
-		}
-	}
-	return out
 }
