@@ -78,4 +78,19 @@
         android:restrictionType="bool"
         android:defaultValue="false" />
 
+    <!-- #215: Per-user NextDNS profile ID. Empty means the user has not configured it. -->
+    <restriction
+        android:key="nextDNSProfileId"
+        android:title="@string/mc_nextdns_profile_id_title"
+        android:description="@string/mc_nextdns_profile_id_desc"
+        android:restrictionType="string" />
+
+    <!-- Per-user NextDNS device name. Empty means queries will be attributed to the profile
+         without device-level distinction. -->
+    <restriction
+        android:key="nextDNSDeviceName"
+        android:title="@string/mc_nextdns_device_name_title"
+        android:description="@string/mc_nextdns_device_name_desc"
+        android:restrictionType="string" />
+
 </restrictions>

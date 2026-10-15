@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
@@ -68,6 +69,7 @@ fun StatusScreen(
     state: BondUiState,
     onRefresh: () -> Unit,
     onOpenDiagnostics: () -> Unit = {},
+    onOpenNextDNS: () -> Unit = {},
 ) {
     Column(
         Modifier
@@ -86,6 +88,13 @@ fun StatusScreen(
                 Icon(
                     Icons.Filled.Info,
                     contentDescription = "Diagnostics",
+                    tint = Ink.live,
+                )
+            }
+            IconButton(onClick = onOpenNextDNS) {
+                Icon(
+                    Icons.Filled.Settings,
+                    contentDescription = "NextDNS Settings",
                     tint = Ink.live,
                 )
             }

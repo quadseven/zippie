@@ -39,6 +39,11 @@ object ManagedConfig {
     const val KEY_DD_TOKEN = "ddClientToken"
     const val KEY_DD_SITE = "ddSite"
 
+    /** Per-user NextDNS profile ID for per-person DNS reporting. */
+    const val KEY_NEXTDNS_PROFILE_ID = "nextDNSProfileId"
+    /** Per-user NextDNS device name for per-person DNS reporting. */
+    const val KEY_NEXTDNS_DEVICE_NAME = "nextDNSDeviceName"
+
     /** Offer this phone as a home screen (#222). Absent means no - see
      *  HomeScreenRole for why the default must be off. */
     const val KEY_HOME_SCREEN_MODE = "homeScreenMode"
@@ -48,7 +53,7 @@ object ManagedConfig {
     val KEYS = listOf(
         KEY_TOKEN, KEY_CONSOLE_LAN_HOST, KEY_CONSOLE_URL, KEY_HOME_HOST,
         KEY_HOME_PORT, KEY_LISTEN_PORT, KEY_AUTO_START, KEY_DD_TOKEN, KEY_DD_SITE,
-        KEY_HOME_SCREEN_MODE,
+        KEY_HOME_SCREEN_MODE, KEY_NEXTDNS_PROFILE_ID, KEY_NEXTDNS_DEVICE_NAME,
     )
 
     /**
@@ -89,6 +94,10 @@ object ManagedConfig {
             // it, which is a credential path that looks wired and is not.
             ddClientToken = str(KEY_DD_TOKEN) ?: stored.ddClientToken,
             ddSite = str(KEY_DD_SITE) ?: stored.ddSite,
+            // Per-user NextDNS: a blank value is not a signal to clear the config.
+            // A missing key leaves local storage alone.
+            nextDNSProfileId = str(KEY_NEXTDNS_PROFILE_ID) ?: stored.nextDNSProfileId,
+            nextDNSDeviceName = str(KEY_NEXTDNS_DEVICE_NAME) ?: stored.nextDNSDeviceName,
         )
     }
 

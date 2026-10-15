@@ -72,6 +72,10 @@ data class RelayConfiguration(
      *  provisioned. */
     val ddClientToken: String = "",
     val ddSite: String = "datadoghq.com",
+    /** Per-user NextDNS profile ID for per-person DNS reporting. */
+    val nextDNSProfileId: String = "",
+    /** Per-user NextDNS device name for per-person DNS reporting. */
+    val nextDNSDeviceName: String = "",
 ) {
     val budget: DataBudget get() = DataBudget(dailyBudgetBytes, monthlyBudgetBytes)
 
@@ -103,7 +107,8 @@ data class RelayConfiguration(
         "RelayConfiguration(listenPort=$listenPort, homeHost=$homeHost, homePort=$homePort, " +
             "consoleLanHost=$consoleLanHost, consoleUrl=$consoleUrl, " +
             "dailyBudgetBytes=$dailyBudgetBytes, monthlyBudgetBytes=$monthlyBudgetBytes, " +
-            "announceToken=${if (announceToken.isEmpty()) "<unset>" else "<redacted>"})"
+            "announceToken=${if (announceToken.isEmpty()) "<unset>" else "<redacted>"}, " +
+            "nextDNSProfileId=${if (nextDNSProfileId.isEmpty()) "<unset>" else "<redacted>"})"
 
     /**
      * Best-first console addresses. Both are needed and neither is a fallback
@@ -150,6 +155,8 @@ data class RelayConfiguration(
         private const val KEY_ANNOUNCE_TOKEN = "announceToken"
         private const val KEY_DD_TOKEN = "ddClientToken"
         private const val KEY_DD_SITE = "ddSite"
+        private const val KEY_NEXTDNS_PROFILE_ID = "nextDNSProfileId"
+        private const val KEY_NEXTDNS_DEVICE_NAME = "nextDNSDeviceName"
         /** LegName.KEY, restated so this file does not depend on that object. */
         private const val LEG_NAME_KEY = "legName"
 
@@ -241,6 +248,8 @@ data class RelayConfiguration(
                 .putString(KEY_ANNOUNCE_TOKEN, current.announceToken)
                 .putString(KEY_DD_TOKEN, current.ddClientToken)
                 .putString(KEY_DD_SITE, current.ddSite)
+                .putString(KEY_NEXTDNS_PROFILE_ID, current.nextDNSProfileId)
+                .putString(KEY_NEXTDNS_DEVICE_NAME, current.nextDNSDeviceName)
                 .apply()
             // Carry an already-minted leg name across, once, so applying this
             // fix does not itself cause one final rename.
@@ -271,6 +280,8 @@ data class RelayConfiguration(
                 announceToken = p.getString(KEY_ANNOUNCE_TOKEN, d.announceToken).orEmpty(),
                 ddClientToken = p.getString(KEY_DD_TOKEN, d.ddClientToken).orEmpty(),
                 ddSite = p.getString(KEY_DD_SITE, d.ddSite).orEmpty().ifEmpty { d.ddSite },
+                nextDNSProfileId = p.getString(KEY_NEXTDNS_PROFILE_ID, d.nextDNSProfileId).orEmpty(),
+                nextDNSDeviceName = p.getString(KEY_NEXTDNS_DEVICE_NAME, d.nextDNSDeviceName).orEmpty(),
             )
         }
 
@@ -296,6 +307,8 @@ data class RelayConfiguration(
                 .putString(KEY_ANNOUNCE_TOKEN, config.announceToken)
                 .putString(KEY_DD_TOKEN, config.ddClientToken)
                 .putString(KEY_DD_SITE, config.ddSite)
+                .putString(KEY_NEXTDNS_PROFILE_ID, config.nextDNSProfileId)
+                .putString(KEY_NEXTDNS_DEVICE_NAME, config.nextDNSDeviceName)
                 .apply()
         }
     }

@@ -223,6 +223,7 @@ class MainActivity : ComponentActivity() {
                                         state = state,
                                         onRefresh = model::refresh,
                                         onOpenDiagnostics = { showDiagnostics = true },
+                                        onOpenNextDNS = {},
                                     )
                                     Destination.RELAY -> RelayScreen(
                                         state = state,

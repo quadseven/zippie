@@ -32,4 +32,10 @@
     <string name="mc_dd_site_desc">Intake host, e.g. datadoghq.com. Leave blank for US1.</string>
     <string name="mc_home_screen_title">Use this phone as a home screen</string>
     <string name="mc_home_screen_desc">Only for a dedicated leg - a phone whose job is carrying the bond. It makes the bond status the phone\'s home screen. Leave this off for any phone somebody uses as a phone: turning it on makes Android ask which home app to use.</string>
+
+    <!-- #215: Per-user NextDNS. Empty means the user has not configured it. -->
+    <string name="mc_nextdns_profile_id_title">NextDNS profile ID</string>
+    <string name="mc_nextdns_profile_id_desc">The short string from your NextDNS dashboard URL. Each phone can use a different profile.</string>
+    <string name="mc_nextdns_device_name_title">NextDNS device name</string>
+    <string name="mc_nextdns_device_name_desc">What this phone should be called in NextDNS logs. Optional - queries still go to your profile without it.</string>
 </resources>
