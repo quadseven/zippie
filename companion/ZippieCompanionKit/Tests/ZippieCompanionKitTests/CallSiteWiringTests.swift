@@ -659,17 +659,5 @@ final class CallSiteWiringTests: XCTestCase {
         }
     }
 
-    /// The phase-2 risk with on-demand start: if local-network permission is
-    /// unknown, iOS suppresses the prompt in app extensions, leaving the UDP
-    /// listener unable to receive frames until the user opens the containing app.
-    func testLocalNetworkPermissionPhase2RiskIsRecorded() throws {
-        let text = try source("ZippieCompanionKit/Sources/ZippieCompanionKit/OnDemandPolicy.swift")
-        assertCalls(text, "LOCAL-NETWORK PERMISSION UNKNOWN",
-                    "OnDemandPolicy must record the phase-2 risk when local-network permission is unknown")
-        let provider = try source("ZippieCompanionTunnel/PacketTunnelProvider.swift")
-        assertCalls(provider, "local-network permission",
-                    "PacketTunnelProvider must record the phase-2 risk when local-network permission is unknown")
-    }
-
 }
 

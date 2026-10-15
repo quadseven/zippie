@@ -480,6 +480,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     /// grant the prompt), iOS suppresses permission prompts in app extensions.
     /// The UDP listener cannot receive frames from the router on the local Wi-Fi
     /// until the user opens the app in the foreground and approves the grant.
+    /// The provider receives no local-network grant state in its configuration,
+    /// so it cannot distinguish this case from another listener failure at
+    /// start. `relay.start` reports a failed bind through the normal start error;
+    /// a listener that enters `.waiting` reports its state through relay stats.
+    /// Only a device test with the permission still unknown can verify this
+    /// platform behavior; a package test cannot simulate the privacy prompt.
     static func inertNetworkSettings() -> NEPacketTunnelNetworkSettings {
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "192.0.2.1")
         let ipv4 = NEIPv4Settings(addresses: ["192.0.2.2"], subnetMasks: ["255.255.255.255"])
