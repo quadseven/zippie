@@ -44,6 +44,14 @@ is the part that ships working today.
 there is no datapath behind it until the gomobile build of the Go core exists
 (#2246), and the screen says so rather than hiding it behind a disabled button.
 
+**NEXTDNS** - the Status screen opens a profile editor. It saves the profile ID
+and device name locally, copies the profile's DoT hostname, and opens Android's
+Private DNS settings. When entered, the device name is prepended to the DoT
+hostname. Android requires the user to choose "Private DNS provider hostname"
+and paste the hostname there; this app does not set or confirm that system
+choice. Verify that Android reports Private DNS active on wifi and cellular. A full-tunnel VPN
+may choose its own resolver instead.
+
 ## The three things that are easy to get wrong
 
 1. **`requestNetwork(TRANSPORT_CELLULAR)` + `Network.bindSocket` is the whole

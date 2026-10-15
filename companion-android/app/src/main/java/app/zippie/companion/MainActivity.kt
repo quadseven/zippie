@@ -133,6 +133,7 @@ class MainActivity : ComponentActivity() {
                     // the second is a leaf; a navigation library here would be
                     // more moving parts than the thing it navigates.
                     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
+                    var showNextDNS by rememberSaveable { mutableStateOf(false) }
                     var destination by rememberSaveable { mutableStateOf(Destination.STATUS) }
                     var diagnostics by remember { mutableStateOf(Diagnostics()) }
                     var measuring by remember { mutableStateOf(false) }
@@ -152,7 +153,10 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    if (showDiagnostics) {
+                    if (showNextDNS) {
+                        BackHandler { showNextDNS = false }
+                        NextDNSSettingsScreen(onBack = { showNextDNS = false })
+                    } else if (showDiagnostics) {
                         // BOTH exits, and the visible one is not redundant. The
                         // gesture is the only affordance a phone on gesture
                         // navigation offers, and it is invisible - this screen
@@ -223,7 +227,7 @@ class MainActivity : ComponentActivity() {
                                         state = state,
                                         onRefresh = model::refresh,
                                         onOpenDiagnostics = { showDiagnostics = true },
-                                        onOpenNextDNS = {},
+                                        onOpenNextDNS = { showNextDNS = true },
                                     )
                                     Destination.RELAY -> RelayScreen(
                                         state = state,

@@ -8,18 +8,13 @@ package app.zippie.companion
  *
  *     https://dns.nextdns.io/<profile>/<device-name>
  *
- * That is the whole reason this works EVERYWHERE the phone goes rather than
- * only on the router's wifi: the setting rides with the device, not with the
- * network.
+ * iOS installs this URL as a device DNS setting. Android uses the DoT hostname
+ * below in its Private DNS setting.
  */
 data class NextDNSProfile(
     val profileID: String,
     val deviceName: String = "",
 ) {
-    init {
-        require(isValid) { "profileID must be 4-16 lowercase hex characters" }
-    }
-
     /**
      * A profile id is hex-ish and short. Validating here rather than at the
      * point of use means a typo is refused while the user is still looking at
@@ -27,7 +22,7 @@ data class NextDNSProfile(
      * indistinguishable from a broken network.
      */
     val isValid: Boolean
-        get() = profileID.length in 4..16 && profileID.all { it.isLetterOrDigit() && (it.isDigit() || it.isLowerCase()) }
+        get() = profileID.length in 4..16 && profileID.all { it in 'a'..'z' || it in '0'..'9' }
 
     /**
      * Device names travel in a URL path segment. Anything that would need
@@ -49,11 +44,21 @@ data class NextDNSProfile(
         } else null
 
     /**
-     * The DoT hostname, for Android Private DNS which takes a hostname rather
-     * than a URL.
+     * The DoT hostname for Android Private DNS. NextDNS uses a prefixed name;
+     * spaces become two hyphens, and the first DNS label stays within 63 bytes.
      */
     val dotHostname: String?
-        get() = if (isValid) "$profileID.dns.nextdns.io" else null
+        get() {
+            if (!isValid) return null
+            val name = deviceName.trim().flatMap { c ->
+                when {
+                    c == ' ' -> listOf('-', '-')
+                    c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9' || c == '-' -> listOf(c)
+                    else -> listOf('-')
+                }
+            }.joinToString("").trim('-').take(62 - profileID.length).trim('-')
+            return "${if (name.isNotEmpty()) "$name-" else ""}$profileID.dns.nextdns.io"
+        }
 
     companion object {
         /**

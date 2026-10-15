@@ -2,7 +2,6 @@ package app.zippie.companion
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -32,8 +31,8 @@ class NextDNSProfileTest {
     fun `an invalid profile id produces no url at all`() {
         for (bad in listOf("", "ab", "has spaces", "WAY-too-long-to-be-a-profile-id", "a/b")) {
             val p = NextDNSProfile(bad, "x")
-            assertFalse(p.isValid, "$bad was accepted")
-            assertNull(p.dohURL, "$bad produced a URL")
+            assertFalse("$bad was accepted", p.isValid)
+            assertNull("$bad produced a URL", p.dohURL)
         }
     }
 
@@ -41,9 +40,9 @@ class NextDNSProfileTest {
     fun `device names are sanitised not escaped`() {
         val p = NextDNSProfile("abc123", "Operator's iPhone 17/Pro")
         val url = p.dohURL ?: ""
-        assertFalse(url.contains("%"), "name was percent-escaped: $url")
-        assertFalse(url.contains("'"), url)
-        assertTrue(url.startsWith("https://dns.nextdns.io/abc123/"), url)
+        assertFalse("name was percent-escaped: $url", url.contains("%"))
+        assertFalse(url, url.contains("'"))
+        assertTrue(url, url.startsWith("https://dns.nextdns.io/abc123/"))
     }
 
     @Test
@@ -55,6 +54,7 @@ class NextDNSProfileTest {
     @Test
     fun `dotHostname for Android Private DNS`() {
         assertEquals("abc123.dns.nextdns.io", NextDNSProfile("abc123").dotHostname)
+        assertEquals("My--Phone-abc123.dns.nextdns.io", NextDNSProfile("abc123", "My Phone").dotHostname)
         assertNull(NextDNSProfile("!!").dotHostname)
     }
 
@@ -91,7 +91,7 @@ class NextDNSProfileTest {
     @Test
     fun `profile ID must be lowercase alphanumeric`() {
         assertFalse(NextDNSProfile("ABCD", "x").isValid)
-        assertFalse(NextDNSProfile("abcd1234", "x").isValid)
+        assertFalse(NextDNSProfile("abcd-1234", "x").isValid)
         assertTrue(NextDNSProfile("abc123", "x").isValid)
     }
 }
