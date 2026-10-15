@@ -61,6 +61,12 @@ public struct TunnelProfile: Sendable {
     /// inverse and one profile carries one rule set, so client mode runs with
     /// on-demand OFF until #30 builds the inverse - a rule that tears the
     /// tunnel down on every network it is needed on would be worse than none.
+    ///
+    /// LOCAL-NETWORK PERMISSION RISK (Phase 2). When an on-demand rule starts
+    /// the tunnel in the background before the user has granted local-network
+    /// access in the foreground app, iOS suppresses the privacy prompt in the
+    /// extension. The relay UDP listener on Wi-Fi remains unreachable by the
+    /// router until the user opens the app once to grant permission.
     public var onDemandRules: [NEOnDemandRule]? {
         guard plan.wantsRouterSSIDOnDemand,
               case let .contribute(config, _) = plan else { return nil }
