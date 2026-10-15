@@ -31,24 +31,37 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# Reboots of the PHONE are a different thing entirely and are fine: `adb reboot`
-# talks to a Pixel that nobody has to drive home to power cycle.
-_PHONE = re.compile(r"\badb\b")
-
-# The safe form. A line naming sysrq is doing the right thing by construction.
-_SYSRQ = re.compile(r"sysrq")
-
 # `reboot` as a COMMAND, not the word in prose. Anchored to a command position -
-# start of line, after a shell separator, or inside a quoted ssh payload - so
-# "survives a reboot" in a comment does not trip it.
-_REBOOT_CMD = re.compile(r"(?:^|[;&|]\s*|'\s*|\"\s*)reboot\b")
+# start of line, after a shell separator, control word, or inside a quoted ssh
+# payload. A later command on the same line must not inherit an adb exemption.
+_REBOOT_CMD = re.compile(
+    r"(?:^|[;&|()]|\bthen\b|\bdo\b)\s*"
+    r"(?:(?:sudo|exec|command|busybox)\s+)*reboot\b"
+)
+_SSH_REBOOT = re.compile(
+    r"\bssh\b(?:\s+-\S+\s+\S+)*\s+\S+\s+['\"]?"
+    r"(?:(?:sudo|exec|command|busybox)\s+)*reboot\b"
+)
 
 
 def _shell_scripts() -> list[Path]:
     found: list[Path] = []
-    for directory in ("scripts", "travel"):
-        found.extend((REPO_ROOT / directory).rglob("*.sh"))
+    found.extend(
+        p for p in REPO_ROOT.rglob("*") if p.suffix in {".sh", ".bash", ".zsh", ".init", ".wrapper"}
+    )
+    found = [
+        p for p in found if not any(part.startswith(".") for part in p.relative_to(REPO_ROOT).parts)
+    ]
     return sorted(p for p in found if p.is_file())
+
+
+def _offenders(script: Path) -> list[str]:
+    offenders = []
+    for number, line in enumerate(script.read_text().splitlines(), start=1):
+        code = line.split("#", 1)[0]
+        if _REBOOT_CMD.search(code) or _SSH_REBOOT.search(code):
+            offenders.append(f"{script.name}:{number}: {line.strip()}")
+    return offenders
 
 
 def test_there_are_shell_scripts_to_check():
@@ -57,18 +70,42 @@ def test_there_are_shell_scripts_to_check():
     assert len(_shell_scripts()) >= 5
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        "echo b > /proc/sysrq-trigger; reboot",
+        "adb reboot; reboot",
+        "if true; then reboot; fi",
+        "ssh root@router reboot",
+        "ssh -o BatchMode=yes root@router reboot",
+        "sudo reboot",
+        "exec reboot",
+    ],
+)
+def test_scan_catches_a_graceful_reboot_command(line: str, tmp_path: Path):
+    script = tmp_path / "reboot-example.sh"
+    script.write_text(line + "\n")
+    assert _offenders(script)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "adb reboot",
+        "ssh root@phone 'adb reboot'",
+        "echo b > /proc/sysrq-trigger",
+        "# reboot the router",
+    ],
+)
+def test_scan_allows_safe_reboot_forms(line: str, tmp_path: Path):
+    script = tmp_path / "reboot-example.sh"
+    script.write_text(line + "\n")
+    assert not _offenders(script)
+
+
 @pytest.mark.parametrize("script", _shell_scripts(), ids=lambda p: p.name)
 def test_no_script_reboots_the_router_gracefully(script: Path):
-    offenders = []
-    for number, line in enumerate(script.read_text().splitlines(), start=1):
-        code = line.split("#", 1)[0]  # comments may say "reboot" freely
-        if not code.strip():
-            continue
-        if _PHONE.search(code) or _SYSRQ.search(code):
-            continue
-        if _REBOOT_CMD.search(code):
-            offenders.append(f"{script.name}:{number}: {line.strip()}")
-
+    offenders = _offenders(script)
     assert not offenders, (
         "a graceful reboot of the router can hang forever with the hardware "
         "watchdog already released (zippie#175). Use sysrq:\n"
