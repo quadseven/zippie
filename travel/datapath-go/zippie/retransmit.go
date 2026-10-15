@@ -284,6 +284,14 @@ type RetransmitBuffer struct {
 // sequence forever at 82x amplification. Measured at 82.4x before the cap.
 const MaxResendsPerSeq = 2
 
+// DefaultRetransmitTTL and DefaultRetransmitDepth size a sender's retransmit
+// ring: how long a sent payload stays answerable, and how many are held. The
+// client home keeps one ring per client at the same size (clients.go).
+const (
+	DefaultRetransmitTTL   = 2 * time.Second
+	DefaultRetransmitDepth = 4096
+)
+
 func NewRetransmitBuffer(ttl time.Duration, max int) *RetransmitBuffer {
 	return &RetransmitBuffer{
 		ttl:              ttl,
