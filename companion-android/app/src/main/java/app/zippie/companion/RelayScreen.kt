@@ -1,8 +1,6 @@
 package app.zippie.companion
 
-import android.app.Activity
 import android.content.Intent
-import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -15,8 +13,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.MaterialButton
-import androidx.compose.material3.MaterialButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -25,17 +21,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import app.zippie.companion.design.Hairline as Rule
 import app.zippie.companion.design.Ink
 import app.zippie.companion.design.Kind
 import app.zippie.companion.design.Space
-import kotlinx.coroutines.launch
 
 /**
  * This phone's own half of the bond: whether it is contributing, the single
@@ -63,6 +56,7 @@ fun RelayScreen(
     onStopRelay: () -> Unit,
     onStartClient: () -> Unit,
     onSaveToken: (String) -> Unit,
+    onRequestExemption: () -> Unit,
 ) {
     Column(
         Modifier
@@ -70,7 +64,7 @@ fun RelayScreen(
             .padding(horizontal = Space.margin, vertical = Space.roomy),
     ) {
         SectionTitle("This phone")
-        RelaySection(state, onStartRelay, onStopRelay, onSaveToken)
+        RelaySection(state, onStartRelay, onStopRelay, onSaveToken, onRequestExemption)
 
         Spacer(Modifier.height(Space.section))
         SectionTitle("Client mode")
@@ -95,6 +89,7 @@ private fun RelaySection(
     onStartRelay: () -> Unit,
     onStopRelay: () -> Unit,
     onSaveToken: (String) -> Unit,
+    onRequestExemption: () -> Unit,
 ) {
     val report = state.relay
     val stats = report?.stats
@@ -135,17 +130,23 @@ private fun RelaySection(
 
     Spacer(Modifier.height(Space.base))
 
-    // BATTERY OPTIMIZATION EXEMPTION WARNING
+    // BATTERY OPTIMIZATION EXEMPTION WARNING AND PROMPT
     // Only show if the report is live and the phone is contributing but not exempt
     val batteryExemption = stats?.batteryExemption
     if (batteryExemption?.isAtRisk == true) {
         Spacer(Modifier.height(Space.base))
         Text(
-            batteryExemption.AtRiskReason,
+            BatteryExemption.AT_RISK_REASON,
             style = Kind.caption,
             color = Ink.down,
         )
-        batteryExemptionPrompt(onRequestExemption)
+        Spacer(Modifier.height(Space.base))
+        OutlinedButton(
+            onClick = onRequestExemption,
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = Ink.live),
+        ) {
+            Text("Open Battery Settings", style = Kind.label)
+        }
     }
 
     Spacer(Modifier.height(Space.base))

@@ -98,6 +98,10 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+    /** Opens Settings to request battery optimization exemption. */
+    private val batteryExemptionConsent =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {}
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // EDGE TO EDGE IS NOT OPTIONAL AT targetSdk 35+, and at 36 the opt-out
@@ -230,6 +234,7 @@ class MainActivity : ComponentActivity() {
                                         onStopRelay = ::stopContributing,
                                         onStartClient = ::startClientMode,
                                         onSaveToken = model::saveAnnounceToken,
+                                        onRequestExemption = ::requestBatteryExemption,
                                     )
                                 }
                             }
@@ -343,5 +348,12 @@ class MainActivity : ComponentActivity() {
             return
         }
         startService(Intent(this, ZippieVpnService::class.java))
+    }
+
+    fun requestBatteryExemption() {
+        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+            data = android.net.Uri.parse("package:$packageName")
+        }
+        batteryExemptionConsent.launch(intent)
     }
 }
