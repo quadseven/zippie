@@ -35,6 +35,38 @@ public final class DNSSettingsController: ObservableObject {
             case .notConfigured, .failed: return false
             }
         }
+
+        public var headline: String {
+            switch self {
+            case .notConfigured:         return "Not configured"
+            case .active:                return "Using NextDNS"
+            case .configuredButDisabled: return "NextDNS is not in use"
+            case .failed:                return "Could not update DNS"
+            }
+        }
+
+        /// iOS reports one `isEnabled == false` for two causes it does not
+        /// tell apart: a configuration nobody has selected yet (saving never
+        /// enables it) and one another VPN or DNS app was selected over. iOS
+        /// keeps one DNS configuration selected at a time, so the second is
+        /// silent. Name both, and the one place either is fixed.
+        public var detail: String {
+            switch self {
+            case .notConfigured:
+                return "Add your profile so queries from this phone appear under your account."
+            case .active(let profile):
+                let name = profile.sanitizedDeviceName
+                return name.isEmpty
+                    ? "iOS is using NextDNS profile \(profile.profileID)."
+                    : "iOS is using profile \(profile.profileID) with the device name \(name)."
+            case .configuredButDisabled:
+                return "iOS has this profile but is not using it. Either it has not been "
+                    + "turned on yet, or another VPN or DNS app has taken over. Choose Zippie "
+                    + "in Settings > General > VPN & Device Management > DNS."
+            case .failed(let message):
+                return message
+            }
+        }
     }
 
     @Published public private(set) var status: Status = .notConfigured
