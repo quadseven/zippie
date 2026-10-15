@@ -1,8 +1,8 @@
 """Guards that parked manifests in deploy/oke/ carry explicit parked notes.
 
 Acceptance criteria for T208:
-- The manifest states plainly that it is parked, why, and what unblocks it (legacy no. 27).
-- Nothing in deploy/oke/ reads as deployable without either being deployed or carrying such a note.
+- Manifest states plainly that it is parked, why, and what unblocks it.
+- Nothing in deploy/oke/ reads as deployable without being deployed or marked.
 - The Go code and manifest are retained without deletion.
 """
 
@@ -18,28 +18,24 @@ GO_CLIENTHOME = REPO / "travel" / "datapath-go" / "cmd" / "zippie-clienthome"
 
 
 def test_clienthome_manifest_states_parked_and_unblocking_issue():
-    """The manifest must state plainly at the top that it is parked, why, and what unblocks it."""
+    """Manifest must state at the top that it is parked, why, and unblock issue."""
     assert CLIENTHOME_MANIFEST.is_file(), f"missing manifest: {CLIENTHOME_MANIFEST}"
     text = CLIENTHOME_MANIFEST.read_text(encoding="utf-8")
 
     # Read the top comment block before any YAML documents
     top_comment = text.split("apiVersion:", 1)[0]
-    top_comment_lower = top_comment.lower()
+    lowered = top_comment.lower()
 
-    assert "parked" in top_comment_lower, "manifest header does not state that it is parked"
-    assert "legacy no. 27" in top_comment_lower or "legacy no. 40" in top_comment_lower, (
-        "manifest header does not cite legacy no. 27 or legacy no. 40"
-    )
-    assert "no phone client" in top_comment_lower or "phone client" in top_comment_lower, (
-        "manifest header does not explain why (phone client)"
-    )
-    assert "must not be applied" in top_comment_lower, (
-        "manifest header must warn that it must not be applied"
-    )
+    assert "parked" in lowered, "manifest header does not state that it is parked"
+    has_unblock = "legacy no. 27" in lowered or "legacy no. 40" in lowered
+    assert has_unblock, "manifest header does not cite unblocking issue"
+    has_reason = "no phone client" in lowered or "phone client" in lowered
+    assert has_reason, "manifest header does not explain why (phone client)"
+    assert "must not be applied" in lowered, "header must warn against apply"
 
 
 def test_deploy_oke_entries_are_deployed_or_marked_parked():
-    """Nothing in deploy/oke/ may read as deployable without being deployed or carrying a parked note."""
+    """Deploy targets must be deployed or carry an explicit parked note."""
     assert TARGETS_FILE.is_file(), f"missing targets file: {TARGETS_FILE}"
     rows = [
         line.split()
@@ -59,14 +55,15 @@ def test_deploy_oke_entries_are_deployed_or_marked_parked():
             # auto targets are live, continuously deployed workloads
             assert target_path.exists(), f"live target path missing: {rel_path}"
         elif mode == "dispatch":
-            # dispatch targets are not auto-applied; if un-deployed, they must carry a parked note
+            # dispatch targets are not auto-applied; un-deployed must be parked
             assert target_path.exists(), f"dispatch target path missing: {rel_path}"
-            manifest_file = target_path if target_path.is_file() else target_path / f"{name}.yaml"
+            if target_path.is_file():
+                manifest_file = target_path
+            else:
+                manifest_file = target_path / f"{name}.yaml"
             assert manifest_file.is_file(), f"manifest missing: {manifest_file}"
             content = manifest_file.read_text(encoding="utf-8")
-            assert "parked" in content.lower(), (
-                f"target {name} has mode=dispatch but carries no parked note in {manifest_file}"
-            )
+            assert "parked" in content.lower(), f"target {name} has no parked note"
 
 
 def test_clienthome_go_code_and_manifest_are_retained():
