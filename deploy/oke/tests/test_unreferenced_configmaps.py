@@ -462,7 +462,6 @@ def test_the_guard_still_catches_a_real_delete_in_prune_mode(tmp_path):
     )
 
 
-
 def test_prune_mode_takes_a_kubectl_delete_path(monkeypatch, capsys):
     """Prune mode must actually delete by running kubectl delete."""
     seen = []
@@ -474,13 +473,23 @@ def test_prune_mode_takes_a_kubectl_delete_path(monkeypatch, capsys):
                 "R",
                 (),
                 {
-                    "stdout": json.dumps({
-                        "items": [
-                            {"kind": "ConfigMap", "metadata": {"name": "orphan"}},
-                            _pod(volumes=[{"name": "v", "configMap": {"name": "other"}}]),
-                            {"kind": "ReplicaSet", "metadata": {"name": "rs"}, "spec": {"template": {"spec": {"volumes": []}}}},
-                        ]
-                    }),
+                    "stdout": json.dumps(
+                        {
+                            "items": [
+                                {"kind": "ConfigMap", "metadata": {"name": "orphan"}},
+                                _pod(
+                                    volumes=[
+                                        {"name": "v", "configMap": {"name": "other"}}
+                                    ]
+                                ),
+                                {
+                                    "kind": "ReplicaSet",
+                                    "metadata": {"name": "rs"},
+                                    "spec": {"template": {"spec": {"volumes": []}}},
+                                },
+                            ]
+                        }
+                    ),
                     "returncode": 0,
                 },
             )()
@@ -491,7 +500,7 @@ def test_prune_mode_takes_a_kubectl_delete_path(monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["x", "--prune"])
     monkeypatch.setattr(cm, "_report", lambda cms, live, rb: ["orphan"])
     monkeypatch.setattr(cm, "_print_delete_lines", lambda *a: None)
-    
+
     assert cm.main() == 0
     assert len(seen) == 2, f"expected two kubectl calls, got {seen}"
     assert "get" in seen[0] and "delete" not in seen[0], seen[0]
@@ -510,50 +519,24 @@ def test_prune_reports_failure(monkeypatch, capsys):
                 "R",
                 (),
                 {
-                    "stdout": json.dumps({
-                        "items": [
-                            {"kind": "ConfigMap", "metadata": {"name": "orphan1"}},
-                            {"kind": "ConfigMap", "metadata": {"name": "orphan2"}},
-                            _pod(volumes=[{"name": "v", "configMap": {"name": "other"}}]),
-                            {"kind": "ReplicaSet", "metadata": {"name": "rs"}, "spec": {"template": {"spec": {"volumes": []}}}},
-                        ]
-                    }),
-                    "returncode": 0,
-                },
-            )()
-        elif "delete" in cmd and call_count == 2:
-            return type("R", (), {"stdout": "", "stderr": "not found", "returncode": 1})()
-        else:
-            return type("R", (), {"stdout": "", "returncode": 0})()
-
-    monkeypatch.setattr(cm.subprocess, "run", record)
-    monkeypatch.setattr("sys.argv", ["x", "--prune"])
-    monkeypatch.setattr(cm, "_report", lambda cms, live, rb: ["orphan1", "orphan2"])
-    monkeypatch.setattr(cm, "_print_delete_lines", lambda *a: None)
-    
-    assert cm.main() == 2
-    assert "Failed to delete" in capsys.readouterr().err
-
-def test_prune_reports_failure(monkeypatch, capsys):
-    """Prune exits non-zero if any delete fails."""
-    call_count = 0
-
-    def record(cmd, *a, **k):
-        nonlocal call_count
-        call_count += 1
-        if "get" in cmd:
-            return type(
-                "R",
-                (),
-                {
-                    "stdout": json.dumps({
-                        "items": [
-                            {"kind": "ConfigMap", "metadata": {"name": "orphan1"}},
-                            {"kind": "ConfigMap", "metadata": {"name": "orphan2"}},
-                            _pod(volumes=[{"name": "v", "configMap": {"name": "other"}}]),
-                            {"kind": "ReplicaSet", "metadata": {"name": "rs"}, "spec": {"template": {"spec": {"volumes": []}}}},
-                        ]
-                    }),
+                    "stdout": json.dumps(
+                        {
+                            "items": [
+                                {"kind": "ConfigMap", "metadata": {"name": "orphan1"}},
+                                {"kind": "ConfigMap", "metadata": {"name": "orphan2"}},
+                                _pod(
+                                    volumes=[
+                                        {"name": "v", "configMap": {"name": "other"}}
+                                    ]
+                                ),
+                                {
+                                    "kind": "ReplicaSet",
+                                    "metadata": {"name": "rs"},
+                                    "spec": {"template": {"spec": {"volumes": []}}},
+                                },
+                            ]
+                        }
+                    ),
                     "returncode": 0,
                 },
             )()
@@ -568,14 +551,13 @@ def test_prune_reports_failure(monkeypatch, capsys):
 
     monkeypatch.setattr(cm.subprocess, "run", record)
     monkeypatch.setattr("sys.argv", ["x", "--prune"])
-    
+
     def mock_report(cms, live, rb):
         orphan_names = {c["metadata"]["name"] for c in cms} - live - rb
         return list(orphan_names)
-    
+
     monkeypatch.setattr(cm, "_report", mock_report)
     monkeypatch.setattr(cm, "_print_delete_lines", lambda *a: None)
-    
+
     assert cm.main() == 2
     assert "Failed to delete" in capsys.readouterr().err
-
