@@ -195,15 +195,18 @@ fun NextDNSSettingsScreen(
 }
 
 private fun getCurrentProfile(context: android.content.Context): NextDNSProfile? {
-    return try {
+    try {
         val manager = AndroidDNSSettingsManager(context)
         // Use runBlocking to call suspend function in non-suspending context
-        kotlinx.coroutines.runBlocking {
+        val serverURL = kotlinx.coroutines.runBlocking {
             manager.load()
             manager.serverURL
-        }?.let { NextDNSProfile.fromDohURL(it) }
-    } catch (e: Exception) {
-        null
+        }
+        return serverURL?.let { NextDNSProfile.fromDohURL(it) }
+    } catch (e: SecurityException) {
+        return null
+    } catch (e: UnsupportedOperationException) {
+        return null
     }
 }
 

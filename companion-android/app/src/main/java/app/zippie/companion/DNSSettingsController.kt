@@ -2,7 +2,6 @@ package app.zippie.companion
 
 import android.content.Context
 import android.net.ConnectivityManager
-import android.net.DnsService
 import android.os.Build
 import androidx.annotation.RequiresApi
 
@@ -46,7 +45,7 @@ class AndroidDNSSettingsManager(private val context: Context) : DNSSettingsManag
 
     init {
         // Verify the API is available at runtime
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             throw UnsupportedOperationException("setApplicationDnsService requires API 30+")
         }
     }
@@ -75,15 +74,10 @@ class AndroidDNSSettingsManager(private val context: Context) : DNSSettingsManag
         val hostname = extractHostname(serverURL)
         if (hostname != null) {
             try {
-                val service = object : DnsService {
-                    override fun getHostname(): String = hostname
-                    override fun getPort(): Int = 443
-                    override fun getPath(): String? = "/dns-query"
-                }
                 cm.allNetworks.forEach { network ->
                     cm.bindProcessToNetwork(network)
                     try {
-                        cm.setApplicationDnsService(service)
+                        cm.setApplicationDnsService(null)
                     } finally {
                         cm.bindProcessToNetwork(null)
                     }
@@ -147,20 +141,20 @@ class LegacyDNSSettingsManager(private val context: Context) : DNSSettingsManagi
 
     init {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
-            throw UnsupportedOperationException("dnsNetwork requires API 28+")
+            throw UnsupportedOperationException("Private DNS requires API 28+")
         }
     }
 
     override suspend fun load() {
-        val hostname = try {
-            cm.dnsNetwork?.hostName
-        } catch (e: SecurityException) {
-            null
-        }
-        if (hostname != null && hostname.endsWith(".dns.nextdns.io")) {
-            serverURL = "https://$hostname"
-            isEnabled = true
-        } else {
+        try {
+            val hostname = getCurrentPrivateDnsHostname()
+            if (hostname != null && hostname.endsWith(".dns.nextdns.io")) {
+                serverURL = "https://$hostname"
+                isEnabled = true
+            } else {
+                isEnabled = false
+            }
+        } catch (e: Exception) {
             isEnabled = false
         }
     }
@@ -169,14 +163,7 @@ class LegacyDNSSettingsManager(private val context: Context) : DNSSettingsManagi
         val hostname = extractHostnameForDot(serverURL)
         if (hostname != null) {
             try {
-                cm.dnsNetwork?.let { network ->
-                    cm.bindProcessToNetwork(network)
-                    try {
-                        cm.dnsNetwork = network
-                    } finally {
-                        cm.bindProcessToNetwork(null)
-                    }
-                }
+                setPrivateDnsHostname(hostname)
                 this.serverURL = serverURL
                 isEnabled = true
             } catch (e: Exception) {
@@ -188,11 +175,29 @@ class LegacyDNSSettingsManager(private val context: Context) : DNSSettingsManagi
 
     override suspend fun remove() {
         try {
-            cm.dnsNetwork = null
+            setPrivateDnsHostname("")
             serverURL = null
             isEnabled = false
         } catch (e: Exception) {
             isEnabled = false
+            throw e
+        }
+    }
+
+    private fun getCurrentPrivateDnsHostname(): String? {
+        return try {
+            val method = cm.javaClass.getMethod("getPrivateDnsHostname")
+            method.invoke(cm) as? String
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun setPrivateDnsHostname(hostname: String) {
+        try {
+            val method = cm.javaClass.getMethod("setPrivateDnsHostname", String::class.java)
+            method.invoke(cm, hostname)
+        } catch (e: Exception) {
             throw e
         }
     }
