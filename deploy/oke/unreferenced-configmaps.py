@@ -167,7 +167,6 @@ def _print_delete_lines(unreferenced: list, namespace: str, context: str) -> Non
     )
 
 
-
 def _delete_configmap(configmap_name: str, namespace: str, context: str) -> bool:
     """Delete a single ConfigMap. Returns True on success, False on error."""
     cmd = [
@@ -231,7 +230,7 @@ def main() -> int:
     print(f"mounted by a running pod : {len(live & names)}")
     print(f"held for rollback only   : {len(rollback - live)}")
     print(f"referenced by NOTHING    : {len(unreferenced)}")
-    
+
     if args.prune:
         if not unreferenced:
             print("nothing to prune")
