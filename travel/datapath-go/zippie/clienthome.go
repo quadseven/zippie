@@ -110,11 +110,10 @@ func NewClientHome(registry *ClientRegistry, reorderMS int, handler PacketHandle
 // nothing.
 //
 // The datagram is verified ONCE, and nothing about it is believed until it
-// has been - not even which client it claims to be. A frame from one of the
-// client's finished runs is then dropped (see adoptEpoch). Otherwise `from` is
-// recorded as that client's return path: a phone changes carrier IP constantly
-// (cellular handoff, wifi to LTE), and replies must follow it without waiting
-// for a control message that may never come.
+// has been - not even which client it claims to be. `from` is then recorded as
+// that client's return path before anything else: a phone changes carrier IP
+// constantly (cellular handoff, wifi to LTE), and replies must follow it
+// without waiting for a control message that may never come.
 //
 // A refused datagram is dropped and counted. Malformed and hostile input is
 // the expected condition on a public UDP port, not an error worth reporting.
@@ -124,12 +123,9 @@ func (c *ClientHome) Accept(raw []byte, from *net.UDPAddr) []Datagram {
 		c.bump(&c.stats.Refused)
 		return nil
 	}
-	out, current := c.home.receive(f, nil)
-	if !current {
-		return nil
-	}
 	c.noteReturnPath(f.ClientID, from)
 
+	out := c.home.receive(f, nil)
 	c.mu.Lock()
 	c.stats.Accepted++
 	c.stats.Delivered += uint64(len(out))

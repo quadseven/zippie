@@ -120,11 +120,6 @@ type clientState struct {
 	epoch       uint32
 	haveEpoch   bool
 	resets      uint64
-	// retired holds this client's previous epochs, oldest first, so a frame
-	// from a run that has already ended is dropped rather than adopted. See
-	// adoptEpoch.
-	retired    []uint32
-	staleEpoch uint64
 
 	// Outbound: home's stream to the client. Numbered per client because each
 	// phone reassembles its own, and a shared counter looks like massive loss
@@ -154,13 +149,7 @@ func newClientState(reorder time.Duration, now func() time.Time) *clientState {
 	return cs
 }
 
-// maxRetiredEpochs bounds how many of a client's finished runs are remembered.
-// A phone's packet-tunnel extension restarts often over its life; a straggler
-// only has to be caught for the few runs whose frames can still be in flight.
-const maxRetiredEpochs = 8
-
-// adoptEpoch resets this client's inbound stream when its epoch changes, and
-// reports whether a frame carrying epoch belongs to the client's current run.
+// adoptEpoch resets this client's inbound stream when its epoch changes.
 //
 // A new epoch means THIS client restarted: its sequence numbers went back to
 // zero while the receiver's only climb. The NACK tracker goes with the
@@ -169,35 +158,28 @@ const maxRetiredEpochs = 8
 // run asks the new run for a packet it never sent.
 //
 // Taken immediately rather than after Transport's idle window, which would
-// cost a phone seconds of outage on every restart. That is safe because a
-// stranger cannot pass the MAC, and a frame from a RETIRED epoch - a straggler
-// still in flight on a slow leg, or a replay of one, which the MAC cannot tell
-// apart - is refused rather than flipping the stream back and resetting it
-// twice. A replay from the CURRENT run is not caught here: the header MAC has
-// no replay protection (AGENTS.md, datapath authentication).
-func (cs *clientState) adoptEpoch(epoch uint32) bool {
+// cost a phone seconds of outage on every restart. A stranger cannot flip it -
+// every frame here has passed the client's MAC - but a REPLAY can: the header
+// MAC has no replay protection (AGENTS.md, datapath authentication), so a
+// frame captured from an earlier run, or one still in flight on a slow leg
+// when the client restarted, resets the stream, and the next current frame
+// resets it back. That is a transient, and deliberately left one. Refusing an
+// epoch home has seen retired looks like the fix and is a lockout: after a home
+// restart nothing is known retired, so one replayed frame from an older run
+// retires the live epoch and every genuine frame after it is refused. Telling
+// a replay from a restart needs freshness on the wire, not a rule here.
+func (cs *clientState) adoptEpoch(epoch uint32) {
 	if !cs.haveEpoch {
 		cs.epoch, cs.haveEpoch = epoch, true
-		return true
+		return
 	}
 	if epoch == cs.epoch {
-		return true
-	}
-	for _, old := range cs.retired {
-		if old == epoch {
-			cs.staleEpoch++
-			return false
-		}
-	}
-	cs.retired = append(cs.retired, cs.epoch)
-	if len(cs.retired) > maxRetiredEpochs {
-		cs.retired = cs.retired[1:]
+		return
 	}
 	cs.reassembler.ResetStream()
 	cs.nacks.ResetStream()
 	cs.epoch = epoch
 	cs.resets++
-	return true
 }
 
 // push feeds one data frame into the client's stream, appending what became
@@ -217,7 +199,6 @@ func (cs *clientState) stats() ClientStats {
 	return ClientStats{
 		Delivered:     cs.reassembler.Stats.Delivered,
 		StreamResets:  cs.resets,
-		StaleEpoch:    cs.staleEpoch,
 		NacksSent:     cs.nacks.NacksSent,
 		NacksReceived: cs.nacksReceived,
 		Resent:        cs.ring.Stats.Resent,
@@ -242,10 +223,6 @@ type ClientStats struct {
 	// Delivered counts payloads released from this client's stream in order.
 	Delivered    uint64
 	StreamResets uint64
-	// StaleEpoch counts frames dropped for carrying an epoch from one of this
-	// client's earlier runs. A few around a restart are stragglers; a steady
-	// climb with no restarts is someone replaying captured frames.
-	StaleEpoch uint64
 	// NacksSent counts gaps in this client's stream that home asked it to fill.
 	NacksSent uint64
 	// NacksReceived counts NACKs from this client for home's replies, and
@@ -303,30 +280,25 @@ func (h *MultiClientHome) Accept(raw []byte, out [][]byte) [][]byte {
 	if err != nil {
 		return out
 	}
-	out, _ = h.receive(f, out)
-	return out
+	return h.receive(f, out)
 }
 
 // receive routes one VERIFIED frame into its own client's state, appending any
 // payloads that became deliverable to out. f must come from
 // ClientRegistry.Verify, which is what makes f.ClientID trustworthy here.
 //
-// Every frame from the client's current run proves it alive and may carry a
-// new epoch, so any of them may restart its stream; only data enters it (see
-// isStreamData). The bool is false for a frame from a retired run, which must
-// then have no other effect: no roaming, no NACK answer.
-func (h *MultiClientHome) receive(f Frame, out [][]byte) ([][]byte, bool) {
+// Every frame proves the client alive and carries its current epoch, so any
+// of them may restart its stream; only data enters it (see isStreamData).
+func (h *MultiClientHome) receive(f Frame, out [][]byte) [][]byte {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	cs := h.stateLocked(f.ClientID)
-	if !cs.adoptEpoch(f.Epoch) {
-		return out, false
-	}
 	cs.lastSeen = h.now()
+	cs.adoptEpoch(f.Epoch)
 	if !isStreamData(f) {
-		return out, true
+		return out
 	}
-	return cs.push(f, out), true
+	return cs.push(f, out)
 }
 
 // resend returns the payload a client NACKed and where to send it.
