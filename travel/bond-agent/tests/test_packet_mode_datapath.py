@@ -49,6 +49,7 @@ def _agent(tmp_path, **kw):
         p.interface = p.config.match.interface
         p.state = PathState.UP
         p.effective_weight = 100
+        p.has_ever_answered = True
     return a
 
 

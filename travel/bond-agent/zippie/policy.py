@@ -669,14 +669,15 @@ def paths_in_active_tier(paths: list[PathRuntime]) -> list[PathRuntime]:
 
 
 def multipath_nexthops(paths: list[PathRuntime], mode: BondMode) -> list[tuple[str, int]]:
-    """Return list of (wg_iface, weight) for ip route multipath."""
-    usable = [p for p in paths if p.effective_weight > 0 and p.wg_iface]
+    """Return handshaked (wg_iface, weight) routes for ip route multipath."""
+    usable = [p for p in paths if p.effective_weight > 0 and p.wg_iface and p.has_ever_answered]
     if not usable:
         return []
     if mode in _SINGLE_PATH_MODES:
         # Restrict to the active tier first, so prefer/failover cannot select a
         # standby link while a tier-1 link is still alive.
-        primary = select_primary(paths_in_active_tier(paths) or paths, mode)
+        candidates = [p for p in paths if p in usable]
+        primary = select_primary(paths_in_active_tier(candidates) or candidates, mode)
         for p in usable:
             if p.name == primary and p.wg_iface:
                 return [(p.wg_iface, 1)]
@@ -689,7 +690,7 @@ def multipath_nexthops(paths: list[PathRuntime], mode: BondMode) -> list[tuple[s
     # above enforces it, but this branch iterates the TIER, not `usable`. A
     # tier path whose tunnel has not come up yet has wg_iface=None, and that
     # None would be interpolated straight into an `ip route` nexthop.
-    return [(p.wg_iface, p.effective_weight) for p in paths_in_active_tier(paths) if p.wg_iface]
+    return [(p.wg_iface, p.effective_weight) for p in paths_in_active_tier(usable) if p.wg_iface]
 
 
 def direct_fallback_candidates(paths: list[PathRuntime]) -> list[str]:

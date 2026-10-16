@@ -105,6 +105,7 @@ def _agent(tmp_path, **policy):
         path.rtt_tail_ms = 40.0
         path.loss_pct = 0.0
         path.effective_weight = 100
+        path.has_ever_answered = True
     return agent
 
 
@@ -396,6 +397,7 @@ def test_an_idle_reserve_legs_stale_tail_does_not_stop_the_bond_standing_down(
         path.rtt_tail_ms = 40.0
         path.loss_pct = 0.0
         path.effective_weight = 100
+        path.has_ever_answered = True
     now = _clocked(agent)
 
     ethernet = agent.paths[0]

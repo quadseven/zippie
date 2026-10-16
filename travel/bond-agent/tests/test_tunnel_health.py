@@ -938,6 +938,7 @@ match = { type = "interface", interface = "eth2" }
             r = PathRuntime(name=pc.name, config=pc, interface=pc.match.interface)
             r.wg_iface = "pb-" + pc.name
             r.effective_weight = 100
+            r.has_ever_answered = True
             runtimes.append(r)
         hops = policy.multipath_nexthops(runtimes, cfg.policy.mode)
         assert [d for d, _w in hops] == ["pb-hotspot"], "reserve leaked into the bond"

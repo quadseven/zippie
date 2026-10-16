@@ -68,6 +68,7 @@ def _agent(tmp_path, **policy):
         path.rtt_ms = 40.0
         path.loss_pct = 0.0
         path.effective_weight = 100
+        path.has_ever_answered = True
     return agent
 
 

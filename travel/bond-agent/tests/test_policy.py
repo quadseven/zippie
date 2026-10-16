@@ -48,6 +48,7 @@ def _path(
         loss_pct=loss,
         usage_gb=usage,
     )
+    p.has_ever_answered = True
     return p
 
 
@@ -141,6 +142,26 @@ def test_prefer_single_nexthop():
     recompute(paths, PolicyConfig(mode=BondMode.PREFER))
     hops = multipath_nexthops(paths, BondMode.PREFER)
     assert hops == [("pb-starlink", 1)]
+
+
+def test_route_mode_never_routes_through_a_tunnel_that_never_handshook():
+    unproven = _path("unproven", priority=1)
+    unproven.has_ever_answered = False
+    proven = _path("proven", priority=2)
+    paths = [unproven, proven]
+    recompute(paths, PolicyConfig(mode=BondMode.PREFER))
+
+    assert multipath_nexthops(paths, BondMode.PREFER) == [("pb-proven", 1)]
+
+
+def test_aggregate_excludes_tunnels_that_never_handshook():
+    unproven = _path("unproven")
+    unproven.has_ever_answered = False
+    proven = _path("proven")
+    paths = [unproven, proven]
+    recompute(paths, PolicyConfig(mode=BondMode.AGGREGATE))
+
+    assert multipath_nexthops(paths, BondMode.AGGREGATE) == [("pb-proven", proven.effective_weight)]
 
 
 def test_sticky_primary_keeps_current():
