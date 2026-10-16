@@ -121,7 +121,6 @@ object BootConfigStore {
             .putString(KEY_STAND_DOWN_REASON, reason)
             .putLong(KEY_STAND_DOWN_AT, reconsiderAtEpochMs)
             .commit()
-    }
 
     fun clearBudgetStandDown(context: Context) {
         store(context).edit().remove(KEY_STAND_DOWN_REASON).remove(KEY_STAND_DOWN_AT).apply()
