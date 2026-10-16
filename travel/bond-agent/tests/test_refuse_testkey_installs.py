@@ -13,8 +13,8 @@ from __future__ import annotations
 import hashlib
 import io
 import os
-import subprocess
 import struct
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -39,7 +39,14 @@ def make_test_apk(
     cert_digest = hashlib.sha256(cert_der).hexdigest()
 
     # 1. Build UTF-8 string pool for binary AndroidManifest.xml
-    strings = ["manifest", "package", "versionCode", "versionName", package, version_name]
+    strings = [
+        "manifest",
+        "package",
+        "versionCode",
+        "versionName",
+        package,
+        version_name,
+    ]
     str_data = bytearray()
     offsets = []
     for s in strings:
@@ -58,7 +65,17 @@ def make_test_apk(
     flags = 1 << 8  # UTF-8
     offsets_bytes = struct.pack(f"<{count}I", *offsets)
     pool_chunk = (
-        struct.pack("<HHI IIIII", 0x0001, header_size, pool_chunk_size, count, 0, flags, strings_start, 0)
+        struct.pack(
+            "<HHI IIIII",
+            0x0001,
+            header_size,
+            pool_chunk_size,
+            count,
+            0,
+            flags,
+            strings_start,
+            0,
+        )
         + offsets_bytes
         + bytes(str_data)
     )
@@ -95,7 +112,7 @@ def make_test_apk(
     cert_entry = struct.pack("<I", len(cert_der)) + cert_der
     certs_list = struct.pack("<I", len(cert_entry)) + cert_entry
     digests_list = struct.pack("<I", 0)
-    signed_data = struct.pack("<I", len(digests_list) + len(certs_list)) + digests_list + certs_list
+    signed_data = digests_list + certs_list
     signer = struct.pack("<I", len(signed_data)) + signed_data
     signers = struct.pack("<I", len(signer)) + signer
     v2_value = struct.pack("<I", len(signers)) + signers
@@ -147,10 +164,16 @@ def test_feed_throwaway_signed_apk_asserts_rejection(tmp_path: Path):
 
     assert proc.returncode != 0, "install path accepted a throwaway-signed APK!"
     combined = proc.stdout + proc.stderr
-    assert digest in combined, "error output must name the candidate throwaway signer found"
-    assert RELEASE_SIGNER in combined, "error output must name the expected pinned release signer"
+    assert digest in combined, (
+        "error output must name the candidate throwaway signer found"
+    )
+    assert RELEASE_SIGNER in combined, (
+        "error output must name the expected pinned release signer"
+    )
     assert "refusing to install TESTKEY or throwaway-signed build" in combined
-    assert "asking fake-router" not in combined, "preflight should halt before probing the router"
+    assert "asking fake-router" not in combined, (
+        "preflight should halt before probing the router"
+    )
 
 
 def test_feed_matching_signer_apk_passes_candidate_preflight(tmp_path: Path):
