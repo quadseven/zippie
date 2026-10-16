@@ -70,7 +70,10 @@ fi
 # deliberate test install; the default is the pinned fleet certificate.
 # build-signed-apk.sh carries the same pin on the build side - changing the
 # release key means editing both.
-FLEET_SIGNER_SHA256="${ZIPPIE_FLEET_SIGNER_SHA256:-ecaaf695e2ac5bee845edf075038437ab8ae668890c07012525640c652e477f7}"
+# Both names are honored: #249's tests and ZIPPIE_FLEET_SIGNER above use the
+# short one, and #201 added this line with the long one, which silently threw
+# the short override away.
+FLEET_SIGNER_SHA256="${ZIPPIE_FLEET_SIGNER_SHA256:-${ZIPPIE_FLEET_SIGNER:-ecaaf695e2ac5bee845edf075038437ab8ae668890c07012525640c652e477f7}}"
 
 # ---------------------------------------------------------------------------
 # What we are about to install, read out of the file rather than its name
