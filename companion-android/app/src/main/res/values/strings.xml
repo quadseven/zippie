@@ -31,5 +31,12 @@
     <string name="mc_dd_site_title">Datadog site</string>
     <string name="mc_dd_site_desc">Intake host, e.g. datadoghq.com. Leave blank for US1.</string>
     <string name="mc_home_screen_title">Use this phone as a home screen</string>
+    <!-- The widget picker label and the long-press description (#244). The
+         description is the operator's one chance to find out what the tile
+         claims before adding it, so it says the claim rather than naming the
+         feature. -->
+    <string name="widget_label">Zippie</string>
+    <string name="widget_description">Is it working, and on what.</string>
+
     <string name="mc_home_screen_desc">Only for a dedicated leg - a phone whose job is carrying the bond. It makes the bond status the phone\'s home screen. Leave this off for any phone somebody uses as a phone: turning it on makes Android ask which home app to use.</string>
 </resources>

@@ -99,6 +99,44 @@ nothing - worth fixing there.
 - **The home host is resolved on the cellular `Network`**, not with the default
   resolver, for the captive-portal reason above.
 
+## The home-screen widget
+
+A small and a medium tile, on Glance, answering "is it working, and on what"
+without opening the app. Add it from the launcher's widget picker; there is
+nothing to configure.
+
+It renders `RelayVerdict` and derives none of it. `WidgetContent.from` is the one
+place that turns evidence into something readable, and `WidgetContentTest` /
+`WidgetBondTest` hold it honest - the same rule that keeps the app's own screens
+from telling an operator they are connected to a router that has never dialled
+them (#44).
+
+Three things about it are decisions rather than defaults, and each one is a way
+the widget could have lied:
+
+- **It reads from disk, never from memory.** Android starts a fresh process for
+  a widget broadcast far more often than not. `RelayStatusStore.report` is an
+  in-memory `StateFlow` that answers `null` in every process that has not itself
+  published, which would render a confident "Off" while the relay, in its own
+  process, was carrying traffic. `RelayReportFile` exists for that read.
+- **It has two staleness thresholds, not one.** The relay report is rewritten
+  every two seconds by the relay's own heartbeat and stays fresh however long the
+  app is closed. The router's view of the bond is fetched by `BondViewModel`,
+  which only exists while a screen is on top, so it goes stale after
+  `WidgetBondSnapshot.STALENESS_MS` (20s) and the widget falls back to the single
+  "This phone" row. That is the honest answer rather than a defect - the price of
+  not polling a router from a background task for the sake of a glance.
+- **It draws no click target, and says nothing while loading.** The loading
+  layout is deliberately empty. Interactivity is out of scope (#244), and the
+  iOS widget has none either; two surfaces behaving differently about the same
+  fact is the failure the whole feature is guarded against.
+
+Colours come from `design/tokens.json` through `design/Tokens.generated.kt`, so
+a token change moves this tile along with the hub and the iOS app.
+`WidgetPaletteWiringTest` fails if a colour here stops coming from `Tok` - the
+obvious implementation, `GlanceTheme.colors`, is the Material palette and would
+have been the one surface a token change never reached.
+
 ## Announcing
 
 A phone is not a fixed address, so it does not belong in the router's
