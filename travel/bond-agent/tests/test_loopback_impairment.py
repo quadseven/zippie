@@ -821,7 +821,10 @@ def test_five_percent_loss_variance_does_not_flap_policy_state(tmp_path):
         > report["state_passes"]["leg0"].get("degraded", 0)
         for report in json_reports.values()
     ), json.dumps(json_reports, sort_keys=True)
-    assert all(report["loss_pct"]["leg0"] in (0.0, 4.17, 8.33, 12.5, 16.67) for report in json_reports.values())
+    assert all(
+        report["loss_pct"]["leg0"] in (0.0, 4.17, 8.33, 12.5, 16.67)
+        for report in json_reports.values()
+    )
 
 
 def test_a_leg_with_no_loss_evidence_yet_is_not_penalised(tmp_path):

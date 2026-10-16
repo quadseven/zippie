@@ -2130,9 +2130,7 @@ class BondAgent:
                     path.loss_degraded = False
                     path.loss_good_streak = 0
             judged_loss = policy_config.degraded_loss_pct if path.loss_degraded else 0.0
-        return policy.classify_state(
-            rtt_ms, judged_loss, policy_config, previous=path.state
-        )
+        return policy.classify_state(rtt_ms, judged_loss, policy_config, previous=path.state)
 
     def _probe_packet_leg(self, path: PathRuntime) -> None:
         """Judge one packet-mode leg on evidence from the FAR END.
