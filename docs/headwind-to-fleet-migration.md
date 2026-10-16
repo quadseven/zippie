@@ -147,6 +147,56 @@ discovered by reading rather than by wiping the phone the household depends on.
   2026-08-17), and rotating it during the migration means changing it in exactly
   one place instead of two. Worth folding in rather than doing twice.
 
+## Public exposure for Android Enterprise: what is live, what is blocked
+
+Checked 2026-10-15 for #228, against the running cluster and from outside it.
+Re-check before trusting any line here.
+
+**Live.**
+
+- Fleet answers on a public HTTPS origin under a publicly-trusted certificate,
+  and `FLEET_SERVER_URL` is that origin exactly. From outside, the Pub/Sub path
+  returns 400 "token is required" (reached Fleet, refused without the token)
+  and `/setup` returns 404 (never reached Fleet).
+- Exactly two anchored paths are public: the Pub/Sub push and the Android
+  Enterprise signup callback. Both are needed because Fleet derives both from
+  its one server URL. Everything else, the admin UI included, stays
+  tailnet-only. The two routes are Cloudflare tunnel ingress rules in the infra
+  repo's Pulumi.
+- Fleet is initialised: `/setup` on the tailnet name redirects to `/login`.
+- The Android Enterprise is bound, and a test device has enrolled through it
+  (see the table at the top).
+
+**Two things that look wrong and are not.**
+
+- `kubectl get ingress` shows nothing for Fleet and never will. The public
+  route is a tunnel rule, not a Kubernetes Ingress object. The proof is the
+  tunnel config plus a request from outside, as above.
+- `FLEET_SERVER_TLS` is `false` on purpose. TLS terminates at the edge, and
+  Fleet serves plain HTTP behind it. Turning it on would break the upstream,
+  not secure anything.
+
+**The fleetdm.com dependency, accepted.** Self-hosted Fleet never talks to
+Google directly. The enterprise was created through fleetdm.com's proxy, and
+Fleet calls Google through it with a server secret issued at setup. That proxy
+is what makes self-hosting possible at all (see door 1 in
+`docs/android-device-management.md`). The cost: if fleetdm.com is down or
+withdraws the proxy, enrolment and policy pushes stop. A device already
+enrolled keeps its last policy, but nothing new reaches it.
+
+**Blocked, and none of it is agent work.**
+
+1. **No Fleet admin credential is in SSM.** Fleet's other secrets are there;
+   the admin login is not. The operator created that account interactively,
+   and the credential belongs next to the others.
+2. **Fleet runs on the free tier.** No licence key is configured, and Android
+   app install is Premium (door 5). Until a licence is bought, Fleet cannot put
+   the companion on a device by any route, managed Play included.
+3. **The private-app publish is not finished.** The PEPK key upload in
+   `docs/play-private-app.md` is still the operator's step.
+4. **Enrolling a factory-fresh Pixel by QR**, and watching the companion arrive
+   without a sideload, needs 1-3 done and a device in hand.
+
 ## Traps inherited from the infra side, recorded so nobody re-derives them
 
 - `FLEET_SERVER_URL` in the configmap only SEEDS Fleet on first setup; thereafter

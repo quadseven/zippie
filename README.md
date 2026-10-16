@@ -211,6 +211,16 @@ node's own `*.ts.net` MagicDNS name, and GL's admin nginx already owns
 `0.0.0.0:443` on this router. `dashboard_host` must be set under `[agent]`;
 at top level it is silently ignored.
 
+## Device drift check
+
+Run `python3 scripts/check-device-drift.py <status-url> ...` from a checkout of
+`main` to compare live devices with that same checkout. See
+[`scripts/device-drift.env.example`](scripts/device-drift.env.example) for the
+scheduled workflow's `ZIPPIE_STATUS_URLS` setting. The workflow requires your
+own self-hosted runner with tailnet access and a repository secret containing
+the device status URLs. Device-side GitHub credentials are optional. See
+[`docs/coldboot-testing.md`](docs/coldboot-testing.md) for result semantics.
+
 ## Repo layout
 
 ```

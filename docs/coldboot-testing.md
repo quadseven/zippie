@@ -122,33 +122,24 @@ the device restores it, because whoever cut it cannot.
 
 ## Drift: is the router running what main says?
 
-`travel/gl-mt3000/drift-check.sh` answers this from the router, on demand or
-from cron. It fetches the package as `main` has it, fingerprints both copies
-with the same code the agent uses, and raises a Datadog event only on a real
-mismatch.
+The scheduled control-plane check runs `scripts/check-device-drift.py` from a
+fresh checkout of `main`. It reads each configured device's `/api/status` and
+compares `build.fingerprint` with the package in that checkout. It compares
+`config_repo_sha256` with the checked-in config after excluding the three
+device-specific `[home]` fields. The existing `config_sha256` is a raw hash of
+the live file and remains available to verify the deploy stamp; comparing that
+raw hash to a config with placeholders would falsely report drift.
 
-    /etc/zippie/drift-check.sh          # exit 0 = same, 2 = drift, 1 = could not tell
+Set `ZIPPIE_STATUS_URLS` to whitespace-separated status URLs (see
+`scripts/device-drift.env.example`). The scheduled workflow needs a self-hosted
+runner with tailnet access and its own `ZIPPIE_STATUS_URLS` repository secret.
+Run it locally with `python3 scripts/check-device-drift.py <status-url> ...`.
+Exit 2 means drift or an invalid status response. An unreachable device is
+reported as `UNREACHABLE` and does not fail the comparison.
 
-Three decisions are load-bearing, all of them learned the same day:
-
-- **The ROUTER asks, not CI.** Nothing in `.github` reaches the tailnet, so a
-  workflow that curls the console would ship on an unverified assumption about
-  runner networking. The router can reach github and already holds the Datadog
-  credentials.
-- **Fingerprint, not commit.** A commit comparison alarms on every docs-only
-  merge - the router sat on `08d4368` while main was `a2f6c47` with a
-  byte-identical agent; the difference was `CONTEXT.md`.
-- **It fetches its own copy.** A fingerprint computed from a stale working
-  checkout reported drift that did not exist. A checker that trusts a tree it
-  did not just fetch will page about its own staleness.
-
-A fetch failure is NOT drift. This router is often on a metered or absent
-uplink, and reporting drift because github was unreachable would make the check
-untrustworthy exactly when the bond is unhealthy.
-
-NOT ARMED BY A DEPLOY, like the test harness. Add cron deliberately:
-
-    17 6 * * * /etc/zippie/drift-check.sh >/dev/null 2>&1 # zippie-drift
+`travel/gl-mt3000/drift-check.sh` remains installed for optional off-tailnet
+self-reporting. Without `ZIPPIE_GH_TOKEN`, it logs one quiet line and exits 0.
+With a token, it fetches `main` and can raise a Datadog event on mismatch.
 
 ## "Ethernet is plugged in" is not a second leg
 
