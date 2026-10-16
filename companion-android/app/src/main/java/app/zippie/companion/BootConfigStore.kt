@@ -54,6 +54,8 @@ object BootConfigStore {
     private const val KEY_LISTEN_PORT = "listenPort"
     private const val KEY_DAILY_BUDGET = "dailyBudgetBytes"
     private const val KEY_MONTHLY_BUDGET = "monthlyBudgetBytes"
+    private const val KEY_STAND_DOWN_REASON = "budgetStandDownReason"
+    private const val KEY_STAND_DOWN_AT = "budgetStandDownAt"
 
     /**
      * THE SAME LITERAL KEY RelayService uses for its ledger inside
@@ -110,6 +112,26 @@ object BootConfigStore {
                 val ledger = BudgetLedgerCodec.decode(ledgerRaw, budget) ?: BudgetLedger(budget)
                 return ledger.verdict()
             }
+    }
+
+    data class BudgetStandDown(val reason: String, val reconsiderAtEpochMs: Long)
+
+    fun recordBudgetStandDown(context: Context, reason: String, reconsiderAtEpochMs: Long): Boolean =
+        store(context).edit()
+            .putString(KEY_STAND_DOWN_REASON, reason)
+            .putLong(KEY_STAND_DOWN_AT, reconsiderAtEpochMs)
+            .commit()
+    }
+
+    fun clearBudgetStandDown(context: Context) {
+        store(context).edit().remove(KEY_STAND_DOWN_REASON).remove(KEY_STAND_DOWN_AT).apply()
+    }
+
+    fun budgetStandDown(context: Context): BudgetStandDown? {
+        val prefs = store(context)
+        val reason = prefs.getString(KEY_STAND_DOWN_REASON, null) ?: return null
+        if (!prefs.contains(KEY_STAND_DOWN_AT)) return null
+        return BudgetStandDown(reason, prefs.getLong(KEY_STAND_DOWN_AT, 0L))
     }
 
     /**
