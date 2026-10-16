@@ -441,6 +441,22 @@ _KA_LOSS_WINDOW = 40
 # peer vanishes already says so.
 PEER_SILENT_S = 30.0
 
+# HOW LONG A LEARNED DOWNSTREAM LEG MAY BE SILENT BEFORE HOME STOPS SENDING TO
+# IT (#264). The travel side's own stale window (agent.PACKET_LINK_STALE_S), not
+# PEER_SILENT_S: that one decides when to tell a human the peer is gone, this
+# one decides when to stop feeding frames to a leg that is eating them.
+LEG_SILENT_S = 6.0
+# The most legs home will learn from the wire. The path id is peer-supplied, so
+# an unbounded table is a memory lever for anyone who holds the epoch.
+MAX_LEARNED_LEGS = 16
+# Floor for a learned leg's share. Never zero: a slow leg still has to carry
+# something to be seen recovering, and zero is how the policy layer says "held
+# out".
+MIN_LEARNED_WEIGHT = 10
+# How often the silent-leg check runs. The loop ticks far faster than a leg can
+# meaningfully change state.
+_STANDDOWN_CHECK_S = 0.5
+
 # WireGuard's public wire format leaves its message type and total length
 # visible. That is enough to separate its own handshakes and empty transport
 # keepalives from encrypted client data without inspecting any plaintext.
@@ -645,6 +661,10 @@ class Transport:
         # reorder_deadline_ms itself - see ADAPT_MAX_DEADLINE_MULTIPLIER.
         max_reorder_deadline_ms: int | None = None,
         roam: bool = False,
+        # HOME ROLE ONLY (#264): learn one link per path_id seen on the wire,
+        # all sharing the listening socket, so replies can be spread over every
+        # leg the peer has instead of following the last one that spoke.
+        learn_legs: bool = False,
         wg_peer: tuple[str, int] | None = None,
         socket_factory=make_udp_socket,
         # Injectable for the same reason socket_factory is: the real
@@ -709,6 +729,10 @@ class Transport:
         # the travel side dialling out. Off by default: the travel side dials
         # fixed remotes and must NOT roam to a spoofed source.
         self._roam = roam
+        self._learn_legs = learn_legs
+        # learned path_id -> the path_id whose socket it sends through.
+        self._shared_sock: dict[int, int] = {}
+        self._last_standdown_check = float("-inf")
         self.scheduler = Scheduler(duplicate_fanout=duplicate_fanout)
         self.reassembler = Reassembler(reorder_deadline_ms=reorder_deadline_ms, _clock=_clock)
         self.retransmit = RetransmitBuffer(retransmit, _clock=_clock)
@@ -860,8 +884,11 @@ class Transport:
         }
 
     def remove_link(self, path_id: int) -> None:
+        self._shared_sock.pop(path_id, None)
         sock = self._socks.pop(path_id, None)
         if sock is not None:
+            for leg in [leg for leg, owner in self._shared_sock.items() if owner == path_id]:
+                self.remove_link(leg)
             try:
                 self._sel.unregister(sock)
             except (KeyError, ValueError):
@@ -1092,7 +1119,7 @@ class Transport:
     # ---- send / receive --------------------------------------------------
 
     def _send_on(self, path_id: int, wire: bytes) -> bool:
-        sock = self._socks.get(path_id)
+        sock = self._socks.get(self._shared_sock.get(path_id, path_id))
         link = self._links.get(path_id)
         if sock is None or link is None:
             return False
@@ -1193,7 +1220,8 @@ class Transport:
 
           1. `_verify_mac`         the rung ladder; a forgery stops here
           2. `_pass_epoch_gate`    the epoch gate; a stranger stops here
-          3. `_roam_link`          ONLY on the far side of both gates
+          3. `_leg_for`            which leg this is (learned at home), then
+             `_roam_link`          ONLY on the far side of both gates
           4. `_credit_leg`         liveness, also only on the far side
           5. `_answer_control`     NACK and keepalive replies, both gated
           6. the data path         reassembly and gap tracking
@@ -1213,6 +1241,7 @@ class Transport:
         # the far side of the gate. This used to happen in run_once BEFORE the
         # frame was parsed at all, so one unauthenticated 17-byte datagram
         # repointed every reply at whoever sent it.
+        path_id = self._leg_for(frame, path_id)
         if self._roam and addr is not None and path_id is not None:
             self._roam_link(path_id, addr)
         if path_id is not None:
@@ -1237,6 +1266,38 @@ class Transport:
         delivered = self.reassembler.push(frame)
         self._note_gaps(frame.seq)
         return delivered
+
+    def _leg_for(self, frame: Frame, socket_leg: int | None) -> int | None:
+        """The leg a frame belongs to. Past the gates, so a stranger cannot
+        mint legs.
+
+        Travel: the socket it arrived on. Home (`learn_legs`): every travel leg
+        sprays to the one listening socket, so the socket names nothing and the
+        frame's own path_id is the leg, learned here on first sight. A NACK
+        names no leg - it carries path_id 0 whichever leg sent it - so it
+        neither teaches nor moves one.
+        """
+        if not self._learn_legs or socket_leg is None:
+            return socket_leg
+        if frame.flags & FLAG_NACK:
+            return None
+        leg = frame.path_id
+        if leg not in self._links:
+            if len(self._links) >= MAX_LEARNED_LEGS:
+                return None
+            self._learn_leg(leg, socket_leg)
+        return leg
+
+    def _learn_leg(self, leg: int, owner: int) -> None:
+        """Add a link for `leg` that sends through `owner`'s listening socket.
+        The remote is a placeholder the roam that follows corrects."""
+        base = self._links[owner]
+        link = replace(base, path_id=leg, name=f"leg{leg}", listen=None, weight=100)
+        self._links[leg] = link
+        self._shared_sock[leg] = owner
+        self.scheduler.add_path(PathState(leg, link.name, weight=link.weight))
+        self._link_rx[leg] = self._clock()
+        log.info("learned downstream leg %d from the wire", leg)
 
     def _verify_mac(self, raw: bytes) -> Frame | None:
         """MAC VERIFICATION: the rung ladder (auth.py). Owns the decision
@@ -1422,6 +1483,7 @@ class Transport:
                     struct.unpack("!H", frame.payload)[0],
                     self._clock(),
                 )
+                self._reweigh_learned_legs()
             # Answer on the SAME leg it arrived on. Replying over whichever
             # link the scheduler happens to like would measure that link
             # instead, and the answer would prove nothing about the leg
@@ -1439,6 +1501,26 @@ class Transport:
                 ),
             )
         return True
+
+    def _reweigh_learned_legs(self) -> None:
+        """Split downstream by the RTT the peer reports for each leg.
+
+        Deliberately dumb (#264): a leg's share is the best fresh RTT over its
+        own, floored, so a leg twice as slow carries half. Legs the peer has
+        not reported on keep a full share. Adaptive scheduling is out of scope.
+        """
+        if not self._learn_legs:
+            return
+        fresh = {
+            leg: max(rtt, 1.0)
+            for leg, (rtt, seen) in self._peer_rtt.items()
+            if self._clock() - seen < PEER_SILENT_S and leg in self._links
+        }
+        if not fresh:
+            return
+        best = min(fresh.values())
+        for leg, rtt in fresh.items():
+            self.set_link_weight(leg, max(MIN_LEARNED_WEIGHT, round(100 * best / rtt)))
 
     def _note_keepalive_reply(self, probe: int, path_id: int) -> None:
         """Match an answered probe to the one that caused it and settle the
@@ -1590,9 +1672,33 @@ class Transport:
     def tick(self) -> None:
         """Time-driven work: release stalled reorder gaps, send due NACKs."""
         self._deliver_to_wireguard(self.reassembler.tick())
+        self._stand_down_silent_legs()
         for seq in self.nacks.due():
             self._send_nack(seq)
         self._maybe_adapt_recovery()
+
+    def _stand_down_silent_legs(self) -> None:
+        """Stop scheduling onto a learned leg the peer has gone quiet on, so
+        a dying leg degrades the split instead of black-holing its share.
+
+        The same discipline as the travel side's standdown: only ever stand
+        down while something else is heard from, because standing aside needs
+        somewhere to stand FOR. With every leg silent nothing is withdrawn and
+        the split keeps trying them all. A leg comes back the moment it is
+        heard (`_credit_leg`).
+        """
+        now = self._clock()
+        if not self._learn_legs or now - self._last_standdown_check < _STANDDOWN_CHECK_S:
+            return
+        self._last_standdown_check = now
+        paths = self.scheduler.healthy_paths
+        heard = {p.path_id for p in paths if (self.link_rx_age_s(p.path_id) or 0.0) < LEG_SILENT_S}
+        if not heard:
+            return
+        for p in paths:
+            if p.path_id not in heard:
+                self.scheduler.set_healthy(p.path_id, False)
+                log.info("downstream leg %d silent; standing it down", p.path_id)
 
     def _worst_known_rtt_ms(self) -> float | None:
         """Max RTT among legs `_heard_recently` still trusts (#62).

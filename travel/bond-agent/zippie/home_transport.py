@@ -17,11 +17,16 @@ Provisioning (keys, peers) stays in zippie_home.py; carrying packets is here.
 
 THE THREE THINGS THAT MAKE HOME ROLE DIFFERENT FROM TRAVEL
 ----------------------------------------------------------
-1. ONE listening link on a FIXED port. Travel dials out on ephemeral ports;
+1. ONE listening SOCKET on a FIXED port. Travel dials out on ephemeral ports;
    home must listen on the port the travel router sprays to (default 51901),
-   because the travel router cannot know an ephemeral home port.
-2. roam=True. The travel router moves between ISPs, so each frame can arrive
-   from a different source; the link's reply target follows the last source.
+   because the travel router cannot know an ephemeral home port. Every travel
+   leg sprays to it, so replies must leave from it too.
+2. roam=True and learn_legs=True. The travel router moves between ISPs, so each
+   frame can arrive from a different source. Home learns one link per path_id
+   from the frames, all sharing the listening socket, each following its own
+   leg's last source. Downstream is sprayed across them weighted by the RTT
+   the travel end reports per leg, and a leg gone silent is stood down while
+   any other is heard (#264).
 3. wg_peer PRESET. The real wg server never speaks until it receives a
    handshake, and the transport cannot deliver that handshake without already
    knowing where the server is. Travel learns this from its wg client's first
@@ -39,6 +44,7 @@ import threading
 from dataclasses import dataclass
 
 from zippie.auth import AuthLevel, build_identity, parse_auth_level
+from zippie.classify import ClassifierConfig
 from zippie.transport import LinkEndpoint, Transport
 
 log = logging.getLogger("zippie.home_transport")
@@ -98,6 +104,11 @@ def build_home_transport(
         "reorder_deadline_ms": cfg.reorder_deadline_ms,
         "max_reorder_deadline_ms": cfg.max_reorder_deadline_ms,
         "roam": True,
+        # One link per travel leg, learned from the frames (#264).
+        "learn_legs": True,
+        # Downstream is deliberately dumb: spray, never the upstream
+        # duplication policy, or two legs would carry one leg's worth.
+        "classifier": ClassifierConfig(duplicate_enabled=False),
         "wg_peer": cfg.wg_server,
         # Raises rather than falling back to unauthenticated if the level and
         # the key file disagree, or the key file is group/world readable. A
@@ -113,9 +124,11 @@ def build_home_transport(
         kwargs["selector_factory"] = selector_factory
 
     t = Transport(cfg.local_addr, **kwargs)
-    # ONE link, bound to the public listen port, roaming to the travel source.
-    # The initial remote is a placeholder the first inbound frame corrects; it
-    # is never used to send before then because replies only follow inbound.
+    # The boot link owns the public listen socket. Its remote is a placeholder
+    # the first frame for its path_id corrects, so it is held out of the split
+    # until that frame arrives: the travel end may not even have a leg 0, and
+    # frames sent at the placeholder would go nowhere. Further links are
+    # learned from the wire as their legs speak.
     t.add_link(
         LinkEndpoint(
             path_id=0,
@@ -126,8 +139,9 @@ def build_home_transport(
             listen=cfg.listen_addr,
         )
     )
+    t.set_link_health(0, False)
     log.info(
-        "home transport built: listen %s -> wg server %s (roam on, one link)",
+        "home transport built: listen %s -> wg server %s (roam on, legs learned)",
         cfg.listen_addr,
         cfg.wg_server,
     )
