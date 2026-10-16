@@ -38,6 +38,7 @@ PACKAGE="app.zippie.companion"
 CI_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ADB_PORT_PROBE="$CI_DIR/../mdm/restore/adb-port.py"
 FLEET_SIGNER_SHA256="${ZIPPIE_FLEET_SIGNER:-ecaaf695e2ac5bee845edf075038437ab8ae668890c07012525640c652e477f7}"
+PINNED_RELEASE_SIGNER="$FLEET_SIGNER_SHA256"
 
 fail() { echo "error: $*" >&2; exit 1; }
 
@@ -54,7 +55,6 @@ done
 [ -n "$APK" ] || fail "usage: install-to-handsets.sh <apk> [--router <ssh-target>] [--dry-run]"
 [ -f "$APK" ] || fail "$APK does not exist"
 [ -n "$ROUTER" ] || fail "no router: pass --router <ssh-target> or set ZIPPIE_ROUTER"
-command -v adb >/dev/null || fail "adb is not on PATH"
 
 # ---------------------------------------------------------------------------
 # What we are about to install, read out of the file rather than its name
@@ -85,6 +85,7 @@ echo "$PROBE"
 
 ENDPOINTS="$(echo "$PROBE" | awk '/^connect /{print $2" "$4}')"
 [ -n "$ENDPOINTS" ] || fail "no handset is advertising adb - wireless debugging is off, or every screen is asleep"
+command -v adb >/dev/null || fail "adb is not on PATH"
 
 # ---------------------------------------------------------------------------
 # One tunnel per handset. The LAN is not reachable from here directly; the

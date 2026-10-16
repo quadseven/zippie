@@ -17,7 +17,6 @@ import subprocess
 import struct
 import zipfile
 from pathlib import Path
-from unittest.mock import MagicMock
 
 REPO = Path(__file__).resolve().parents[3]
 INSTALL_SCRIPT = REPO / "companion-android" / "ci" / "install-to-handsets.sh"
@@ -199,7 +198,7 @@ def test_router_web_root_guards_in_scripts():
 def test_agent_dashboard_forbids_serving_apks(monkeypatch):
     """The agent dashboard HTTP handler must refuse requests for APK files."""
     from zippie.agent import BondAgent
-    from zippie.models import AgentConfig, Config
+    from zippie.models import AgentConfig, HomeConfig, PolicyConfig
 
     captured_handler = None
 
@@ -209,8 +208,11 @@ def test_agent_dashboard_forbids_serving_apks(monkeypatch):
 
     monkeypatch.setattr("zippie.agent._install_dashboard_listeners", fake_install)
 
-    cfg = Config()
-    cfg.agent = AgentConfig()
+    cfg = AgentConfig(
+        home=HomeConfig(endpoint="127.0.0.1"),
+        policy=PolicyConfig(),
+        paths=[],
+    )
     agent = BondAgent(cfg)
     agent.start_dashboard()
 
