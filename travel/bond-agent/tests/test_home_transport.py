@@ -12,7 +12,7 @@ import socket
 import threading
 import time
 
-from zippie.home_transport import HomeTransportConfig, build_home_transport
+from zippie.home_transport import LISTENER_PATH_ID, HomeTransportConfig, build_home_transport
 from zippie.transport import LinkEndpoint, Transport
 
 
@@ -26,7 +26,8 @@ def _free_port() -> int:
 
 def test_home_role_is_constructed_correctly():
     """One listening link, roam on, wg_peer preset - the three things that make
-    home role different from travel."""
+    home role different from travel. The listener is not a scheduler path:
+    downstream goes out on the per-leg links learned through it (#264)."""
     cfg = HomeTransportConfig(
         listen_addr=("127.0.0.1", 51901),
         local_addr=("127.0.0.1", 51831),
@@ -37,7 +38,8 @@ def test_home_role_is_constructed_correctly():
         assert t._roam is True
         assert t._wg_peer == ("127.0.0.1", 51820)
         assert len(t._links) == 1
-        assert t._links[0].listen == ("127.0.0.1", 51901)
+        assert t._links[LISTENER_PATH_ID].listen == ("127.0.0.1", 51901)
+        assert t.scheduler.healthy_paths == []
     finally:
         t.close()
 

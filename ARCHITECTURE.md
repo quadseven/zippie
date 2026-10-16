@@ -563,9 +563,14 @@ every client fails to handshake against a config that pins the old one - which
 looks like a network problem, not a storage one.
 
 **The home transport** is the other end of the datapath: it reassembles, answers
-keepalives, and answers NACKs. Its endpoint roams - it has one physical link and
-hears the same client from several source addresses, so it replies to whoever
-spoke most recently on that leg.
+keepalives, and answers NACKs. It listens on one socket and learns a downstream
+link per travel leg from the path id each frame carries, each roaming to its
+own leg's latest source address. Downstream is sprayed across the legs the
+travel router is carrying upstream data on, weighted by the RTT it reports for
+each. A leg silent for six seconds stands down, and comes back only after eight
+seconds of being heard again. The last leg still up never stands down. Before
+#264 it held one link roamed to whoever spoke last, so every downstream byte
+went down a single leg.
 
 **The fleet hub** polls every router every five seconds from home, on mains
 power and wired internet. It exists because of a structural blind spot: the

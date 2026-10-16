@@ -707,7 +707,9 @@ class Transport:
         # reply target to the source of each received frame is what makes
         # per-packet failover work with zero routing churn - the home mirror of
         # the travel side dialling out. Off by default: the travel side dials
-        # fixed remotes and must NOT roam to a spoofed source.
+        # fixed remotes and must NOT roam to a spoofed source. The home end
+        # itself goes one step further and roams one link per travel leg - see
+        # _roam_link and home_transport.HomeTransport (#264).
         self._roam = roam
         self.scheduler = Scheduler(duplicate_fanout=duplicate_fanout)
         self.reassembler = Reassembler(reorder_deadline_ms=reorder_deadline_ms, _clock=_clock)
@@ -1214,7 +1216,7 @@ class Transport:
         # frame was parsed at all, so one unauthenticated 17-byte datagram
         # repointed every reply at whoever sent it.
         if self._roam and addr is not None and path_id is not None:
-            self._roam_link(path_id, addr)
+            path_id = self._roam_link(path_id, addr, frame)
         if path_id is not None:
             self._credit_leg(path_id, len(raw))
         if self._answer_control(frame, path_id):
@@ -1555,8 +1557,14 @@ class Transport:
             return 0
         return self._gap_high_water - nxt
 
-    def _roam_link(self, path_id: int, addr: tuple[str, int]) -> None:
-        """Point a link's reply target at the source of its latest frame.
+    def _roam_link(self, path_id: int, addr: tuple[str, int], frame: Frame) -> int:
+        """Point a link's reply target at the source of its latest frame, and
+        return the path the frame is credited to.
+
+        Here that is always the link it arrived on. The home end overrides this
+        to learn one link per travel leg from `frame` (home_transport.py,
+        #264), so liveness, keepalive answers and downstream traffic follow
+        the leg that sent the frame rather than the one socket it reached.
 
         Only mutates on an actual change, so a stable connection costs nothing.
         The LinkEndpoint is frozen for its identity fields but remote is
@@ -1564,9 +1572,10 @@ class Transport:
         """
         link = self._links.get(path_id)
         if link is None or link.remote == addr:
-            return
+            return path_id
         self._links[path_id] = replace(link, remote=addr)
         log.debug("link %s roamed to %s", link.name, addr)
+        return path_id
 
     def _deliver_to_wireguard(self, payloads: list[bytes]) -> None:
         if not self._wg_peer:

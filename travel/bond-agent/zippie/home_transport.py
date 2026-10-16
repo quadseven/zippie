@@ -17,11 +17,16 @@ Provisioning (keys, peers) stays in zippie_home.py; carrying packets is here.
 
 THE THREE THINGS THAT MAKE HOME ROLE DIFFERENT FROM TRAVEL
 ----------------------------------------------------------
-1. ONE listening link on a FIXED port. Travel dials out on ephemeral ports;
+1. ONE listening socket on a FIXED port. Travel dials out on ephemeral ports;
    home must listen on the port the travel router sprays to (default 51901),
    because the travel router cannot know an ephemeral home port.
-2. roam=True. The travel router moves between ISPs, so each frame can arrive
-   from a different source; the link's reply target follows the last source.
+2. One downstream link PER TRAVEL LEG, learned and roamed (#264). Every leg
+   sprays to that one socket, so home tells them apart by the path_id each
+   frame carries and keeps a reply target per leg, each following its own
+   leg's source as the travel router moves between ISPs. It used to hold ONE
+   link roamed to whichever source spoke last, which put every downstream
+   byte on a single leg at a time: a bond of two healthy legs streamed no
+   faster than the better of them. See HomeTransport.
 3. wg_peer PRESET. The real wg server never speaks until it receives a
    handshake, and the transport cannot deliver that handshake without already
    knowing where the server is. Travel learns this from its wg client's first
@@ -39,7 +44,8 @@ import threading
 from dataclasses import dataclass
 
 from zippie.auth import AuthLevel, build_identity, parse_auth_level
-from zippie.transport import LinkEndpoint, Transport
+from zippie.datapath import MAX_PATH_ID, Frame, PathState
+from zippie.transport import FLAG_NACK, FLAG_RETRANSMIT, LinkEndpoint, Transport
 
 log = logging.getLogger("zippie.home_transport")
 
@@ -51,6 +57,43 @@ DEFAULT_LISTEN_PORT = 51901
 DEFAULT_LOCAL = ("127.0.0.1", 51831)
 # Where the real wg server listens. Decoded datagrams are delivered here.
 DEFAULT_WG_SERVER = ("127.0.0.1", 51820)
+
+# The listening link's id, OUTSIDE the wire's 0..MAX_PATH_ID space on purpose.
+# Every learned leg takes the travel router's own leg id, which can be any value
+# in that space including 0, so the listener must not be able to collide with
+# one. It never reaches the wire: it is not a scheduler path, so nothing is ever
+# framed with its id.
+LISTENER_PATH_ID = MAX_PATH_ID + 1
+
+# SECONDS OF SILENCE BEFORE A DOWNSTREAM LEG STANDS DOWN. The travel router's
+# own PACKET_LINK_STALE_S (agent.py), and equal to it deliberately: the travel
+# router keepalives every leg about once a second, so this is the same six
+# missed chances to be heard that it allows an upstream leg before calling it
+# dead. Not imported, because the home pod ships without agent.py.
+LEG_STALE_S = 6.0
+
+# SECONDS A STOOD-DOWN LEG MUST BE HEARD WITHOUT A BREAK BEFORE IT CARRIES
+# AGAIN. Leaving is instant and rejoining is earned, the same asymmetry as the
+# travel router's join_streak_min (8 passes at its ~1 s control tick): a leg
+# that flaps would otherwise re-enter the bond every time it twitched. A
+# silence of LEG_STALE_S inside the run starts the proof over.
+LEG_REJOIN_S = 8.0
+
+# HOW RECENTLY THE TRAVEL ROUTER MUST HAVE PUT UPSTREAM DATA ON A LEG for home
+# to put downstream data on it. Keepalives prove a leg is alive; only data
+# proves the travel end CHOSE it - a metered reserve, or a leg its join gate is
+# holding out, is probed and never carries. Long enough that an idle-ish flow
+# (a shell, a chat app) keeps its legs between packets.
+LEG_CARRY_WINDOW_S = 30.0
+
+# The travel-reported RTT at or under which a leg takes its full share. Above
+# it the share falls in proportion, so a 400 ms leg beside a 40 ms one takes an
+# eighth as much. Deliberately dumb, per #264: a start, not a scheduler.
+LEG_FULL_WEIGHT_RTT_MS = 50.0
+
+# How often leg standdown and weights are re-judged. tick() runs on every pass
+# of the loop, and the evidence here moves on a scale of seconds.
+LEG_JUDGE_INTERVAL_S = 0.5
 
 
 @dataclass
@@ -83,12 +126,204 @@ class HomeTransportConfig:
     auth_peer_id: int = 1
 
 
+def health_weight(rtt_ms: float | None) -> int:
+    """A leg's downstream share from the RTT the travel router measured on it.
+
+    None - no reading yet - is a full share: absence of evidence is not
+    evidence of badness. Never below 1, so a slow leg the travel router is
+    still carrying on keeps a trickle rather than being dropped outright.
+    """
+    if rtt_ms is None:
+        return 100
+    return max(1, round(100 * LEG_FULL_WEIGHT_RTT_MS / max(rtt_ms, LEG_FULL_WEIGHT_RTT_MS)))
+
+
+def _carries_data(frame: Frame) -> bool:
+    """Whether this frame is the travel router choosing to carry on its leg.
+
+    Not a keepalive, which every leg gets whether it carries or not, and not a
+    NACK. Not a retransmit either: the travel end sends those on any healthy
+    leg OTHER than the one that lost the packet, regardless of weight, so a
+    resend can arrive on a leg the travel router is deliberately holding out.
+    """
+    return not (frame.is_keepalive or frame.flags & (FLAG_NACK | FLAG_RETRANSMIT))
+
+
+@dataclass
+class DownstreamLeg:
+    """What home knows about one travel leg, from the frames it has sent."""
+
+    heard_at: float
+    # Start of the current unbroken run of hearing this leg; a silence of
+    # LEG_STALE_S restarts it. What a stood-down leg's rejoin is timed from.
+    heard_since: float
+    carried_at: float | None = None
+    standing_down: bool = False
+
+    def hear(self, now: float, *, carried: bool) -> None:
+        if self.silent(now):
+            self.heard_since = now
+        self.heard_at = now
+        if carried:
+            self.carried_at = now
+
+    def silent(self, now: float) -> bool:
+        return now - self.heard_at >= LEG_STALE_S
+
+    def rejoin_due(self, now: float) -> bool:
+        return not self.silent(now) and now - self.heard_since >= LEG_REJOIN_S
+
+    def carrying(self, now: float) -> bool:
+        return self.carried_at is not None and now - self.carried_at < LEG_CARRY_WINDOW_S
+
+
+class HomeTransport(Transport):
+    """A home-role Transport: one listening socket, one downstream link per
+    travel leg (#264).
+
+    LEARNED, NOT CONFIGURED. Home cannot know the travel router's legs in
+    advance - they come and go, and each reaches home from whatever address
+    its ISP's NAT hands out. So each leg's link is created by the first frame
+    that carries its path_id past the epoch gate (and MAC), and from then on
+    roams on its own frames only. Every link sends through the listener's one
+    socket: the travel router dialled that port, and its NAT only lets replies
+    back in from it.
+
+    DOWNSTREAM IS SPLIT ACROSS THE CARRYING LEGS by the scheduler's ordinary
+    weighted spray, each leg weighted by the health the travel router reports
+    for it - see health_weight. Deliberately dumb: no duplication policy of
+    its own, no capacity estimate. A leg the travel router puts no upstream
+    data on carries none downstream either (LEG_CARRY_WINDOW_S).
+
+    A DYING LEG STANDS DOWN rather than stalling the bond, with the travel
+    router's own discipline: out after LEG_STALE_S of silence, back only after
+    LEG_REJOIN_S of being heard again, and never the last leg up - a slow path
+    beats no path (#202). Standing down takes the leg out of the healthy set
+    as well as zeroing its weight, because NACKs and retransmits pick by
+    health and must not keep going down a dead leg either.
+    """
+
+    def __init__(self, local_bind: tuple[str, int], **kwargs) -> None:
+        super().__init__(local_bind, roam=True, **kwargs)
+        self.legs: dict[int, DownstreamLeg] = {}
+        self.standdowns = 0
+        self.rejoins = 0
+        self._judged_at = self._clock()
+
+    def listen(self, addr: tuple[str, int], device: str | None) -> None:
+        """Open the listening socket every travel leg sprays to.
+
+        It is a link so the loop polls it, but not a scheduler path: it has no
+        reply target of its own, only the legs learned through it do.
+        """
+        self.add_link(
+            LinkEndpoint(
+                path_id=LISTENER_PATH_ID,
+                name="wan",
+                device=device,
+                remote=addr,  # never sent to; legs carry their own targets
+                weight=0,
+                listen=addr,
+            )
+        )
+        self.scheduler.remove_path(LISTENER_PATH_ID)
+
+    def _roam_link(self, path_id: int, addr: tuple[str, int], frame: Frame) -> int:
+        leg = self._leg_of(frame, addr)
+        if leg is None:
+            return path_id
+        now = self._clock()
+        if leg in self.legs:
+            super()._roam_link(leg, addr, frame)
+            self.legs[leg].hear(now, carried=_carries_data(frame))
+        else:
+            self._learn(leg, addr, now, carried=_carries_data(frame))
+        return leg
+
+    def _leg_of(self, frame: Frame, addr: tuple[str, int]) -> int | None:
+        """Which travel leg sent this frame: the path_id it carries, except
+        for a NACK. A NACK is stamped path_id 0 whichever leg it goes out on,
+        so it is matched to a known leg by source address instead, and taught
+        nothing - learning from it would point leg 0 at another leg's address.
+        """
+        if not frame.flags & FLAG_NACK:
+            return frame.path_id
+        return next((leg for leg in self.legs if self._links[leg].remote == addr), None)
+
+    def _learn(self, leg: int, addr: tuple[str, int], now: float, *, carried: bool) -> None:
+        listener = self._links[LISTENER_PATH_ID]
+        name = f"leg{leg}"
+        self._links[leg] = LinkEndpoint(path_id=leg, name=name, device=listener.device, remote=addr)
+        self._socks[leg] = self._socks[LISTENER_PATH_ID]
+        self.legs[leg] = DownstreamLeg(heard_at=now, heard_since=now)
+        self.legs[leg].hear(now, carried=carried)
+        self.scheduler.add_path(PathState(leg, name, weight=self._weight_of(leg, now)))
+        log.info("downstream leg %d learned at %s", leg, addr)
+
+    def remove_link(self, path_id: int) -> None:
+        if path_id in self.legs:
+            # Borrowed from the listener; removing a leg must not close it.
+            self._socks.pop(path_id, None)
+            del self.legs[path_id]
+        super().remove_link(path_id)
+
+    def tick(self) -> None:
+        super().tick()
+        now = self._clock()
+        if now - self._judged_at >= LEG_JUDGE_INTERVAL_S:
+            self._judged_at = now
+            self.judge_legs()
+
+    def judge_legs(self) -> None:
+        """Stand silent legs down, let proven ones back, and re-weigh all."""
+        now = self._clock()
+        for leg, state in self.legs.items():
+            if state.standing_down:
+                self._maybe_rejoin(leg, state, now)
+            elif state.silent(now) and self._another_leg_up(leg):
+                self._stand_down(leg, state, now)
+            self.scheduler.set_weight(leg, self._weight_of(leg, now))
+
+    def _another_leg_up(self, leg: int) -> bool:
+        return any(not s.standing_down for other, s in self.legs.items() if other != leg)
+
+    def _stand_down(self, leg: int, state: DownstreamLeg, now: float) -> None:
+        state.standing_down = True
+        self.standdowns += 1
+        self.scheduler.set_healthy(leg, False)
+        log.warning("downstream leg %d standing down: silent for %.0fs", leg, now - state.heard_at)
+
+    def _maybe_rejoin(self, leg: int, state: DownstreamLeg, now: float) -> None:
+        if not state.rejoin_due(now):
+            return
+        state.standing_down = False
+        self.rejoins += 1
+        log.info("downstream leg %d rejoined after %.0fs heard", leg, now - state.heard_since)
+
+    def _weight_of(self, leg: int, now: float) -> int:
+        state = self.legs[leg]
+        if state.standing_down or not state.carrying(now):
+            return 0
+        reading = self._peer_rtt.get(leg)
+        return health_weight(None if reading is None else reading[0])
+
+    def stats_dict(self) -> dict[str, object]:
+        out = super().stats_dict()
+        out["downstream"] = {
+            "legs": len(self.legs),
+            "carrying": sum(1 for p in self.scheduler.healthy_paths if p.weight > 0),
+            "standdowns": self.standdowns,
+            "rejoins": self.rejoins,
+        }
+        return out
+
+
 def build_home_transport(
     cfg: HomeTransportConfig,
     *,
     socket_factory=None,
     selector_factory=None,
-) -> Transport:
+) -> HomeTransport:
     """Construct a home-role Transport. Does NOT start it.
 
     Factories are injectable for the same reason Transport's are: the whole
@@ -97,7 +332,6 @@ def build_home_transport(
     kwargs = {
         "reorder_deadline_ms": cfg.reorder_deadline_ms,
         "max_reorder_deadline_ms": cfg.max_reorder_deadline_ms,
-        "roam": True,
         "wg_peer": cfg.wg_server,
         # Raises rather than falling back to unauthenticated if the level and
         # the key file disagree, or the key file is group/world readable. A
@@ -112,22 +346,12 @@ def build_home_transport(
     if selector_factory is not None:
         kwargs["selector_factory"] = selector_factory
 
-    t = Transport(cfg.local_addr, **kwargs)
-    # ONE link, bound to the public listen port, roaming to the travel source.
-    # The initial remote is a placeholder the first inbound frame corrects; it
-    # is never used to send before then because replies only follow inbound.
-    t.add_link(
-        LinkEndpoint(
-            path_id=0,
-            name="wan",
-            device=cfg.wan_device,
-            remote=cfg.listen_addr,  # placeholder; roam overwrites on first frame
-            weight=100,
-            listen=cfg.listen_addr,
-        )
-    )
+    t = HomeTransport(cfg.local_addr, **kwargs)
+    # ONE listening socket, bound to the public listen port. Downstream links
+    # are learned through it, one per travel leg, from the frames each sends.
+    t.listen(cfg.listen_addr, cfg.wan_device)
     log.info(
-        "home transport built: listen %s -> wg server %s (roam on, one link)",
+        "home transport built: listen %s -> wg server %s (one link per travel leg)",
         cfg.listen_addr,
         cfg.wg_server,
     )

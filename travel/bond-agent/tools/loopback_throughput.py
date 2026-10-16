@@ -654,13 +654,15 @@ def _home_process(listen_ports, wg_sink, seconds, reorder_ms, out_q):
     """The far end: a real home-role Transport, so gaps are noticed and NACKed.
 
     ONE LISTENING LINK PER TRAVEL LEG, which is NOT the production topology -
-    home really listens on a single port and roams it to whichever leg spoke
-    last. That is fine for carrying packets and useless for measuring: with one
-    roaming link, a keepalive from leg 3 is answered to whichever leg sent most
-    recently, so travel's per-leg RTT would be attributed at random and the
-    shed rule would be judging noise. One link per leg keeps the reassembler,
-    the NACK tracker and the delivery path completely unchanged - they are
-    global, not per link - while making the RTT measurement per leg honest.
+    home really listens on a single port and learns a downstream link per leg
+    through it (home_transport.HomeTransport, #264). This rig predates that and
+    keeps a plain roaming Transport with one listener per leg: one roaming
+    link on a shared port would answer a keepalive from leg 3 to whichever
+    leg sent most recently, so travel's per-leg RTT would be attributed at
+    random and the shed rule would be judging noise. One link per leg keeps
+    the reassembler, the NACK tracker and the delivery path completely
+    unchanged - they are global, not per link - while making the RTT
+    measurement per leg honest.
 
     WHAT THAT COSTS, AND WHERE IT SHOWS. A link here only learns its remote by
     ROAMING, on the first frame it receives, and `Transport._send_nack` walks
@@ -672,7 +674,8 @@ def _home_process(listen_ports, wg_sink, seconds, reorder_ms, out_q):
     so its `delivered_pct` is a FLOOR and not a datapath result. Leg membership
     is unaffected - that is measured on the travel side, from the policy - but
     the delivery figure from a total-blackhole arm must not be quoted as one.
-    Production is the single roaming link, where the surviving leg answers.
+    Production learns a link only from a leg that has spoken, and stands a
+    silent one down, so there the surviving leg answers.
     """
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from zippie.transport import LinkEndpoint, Transport
