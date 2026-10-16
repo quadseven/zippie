@@ -384,19 +384,23 @@ which build a given phone carries.
 **The signing certificate was compared on 2026-09-03 and it matches.** Both
 handsets and the release job produce
 `ecaaf695e2ac5bee845edf075038437ab8ae668890c07012525640c652e477f7`, read off
-the APK pulled from each device rather than off a log. That digest is now
-PINNED in `build-signed-apk.sh`, so a real release build signed by anything
-else fails in CI instead of on a handset. The certificate SUBJECT is `zippie`
-on every key this project has used, throwaway keys included, so only the digest
-tells them apart - a build whose file name, version name and artifact name all
-said TESTKEY reached the fleet once anyway. Naming is not a control.
+the APK pulled from each device rather than off a log. That digest is PINNED in
+`build-signed-apk.sh` and in `ci/install-to-handsets.sh`. The certificate SUBJECT
+is `zippie` on every key this project has used, throwaway keys included, so only
+the digest tells them apart - a build whose file name, version name and artifact
+name all said TESTKEY reached the fleet once anyway. Naming is not a control.
+The fleet audit and web root verification are recorded in
+`docs/fleet-audit-testkey-installs.md`.
 
 ## Getting a build onto the handsets
 
     ci/install-to-handsets.sh <apk> --router <ssh-target> [--dry-run]
 
-One command, and it refuses rather than trying when it cannot work. It finds
-the handsets by asking the LAN over mDNS (Android picks a new wireless-debugging
+One command, and it refuses rather than trying when it cannot work. It checks
+the candidate APK signing certificate against the pinned release digest
+`ecaaf695e2ac5bee845edf075038437ab8ae668890c07012525640c652e477f7` immediately
+and refuses with a loud message before touching any handset. It then finds the
+handsets by asking the LAN over mDNS (Android picks a new wireless-debugging
 port whenever debugging is enabled and does not keep it across a reboot, so no
 port can be written down), tunnels to each one through the router, and then
 checks BOTH facts that decide an install, reading each off both sides:
@@ -404,13 +408,15 @@ checks BOTH facts that decide an install, reading each off both sides:
 - **version code**, from the APK's own manifest and from the device - not from
   the file name, which is a claim rather than a fact;
 - **signing certificate**, from the APK and from the copy pulled off the device.
-  On a mismatch it stops and changes nothing: the only way through is an
-  uninstall, which discards that phone's `DataBudget` counters, and that is a
-  decision for a person.
+  On a mismatch or non-release signer it stops and changes nothing: the only way
+  through is an uninstall, which discards that phone's `DataBudget` counters, and
+  that is a decision for a person.
 
 Afterwards it asks the device what it is running, because `adb install` reports
 failure for installs that SUCCEEDED - the result comes back over the connection
-the install itself disturbs, so its exit code is not the answer.
+the install itself disturbs, so its exit code is not the answer. If
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE` occurs, it reports the failure loudly
+instead of retrying silently.
 
 `ci/apk-facts.py <apk>` answers the same questions on their own, with no
 Android SDK: package, version code, version name and signer digest, straight

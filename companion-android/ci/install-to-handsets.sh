@@ -37,6 +37,7 @@ set -euo pipefail
 PACKAGE="app.zippie.companion"
 CI_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ADB_PORT_PROBE="$CI_DIR/../mdm/restore/adb-port.py"
+FLEET_SIGNER_SHA256="${ZIPPIE_FLEET_SIGNER:-ecaaf695e2ac5bee845edf075038437ab8ae668890c07012525640c652e477f7}"
 
 fail() { echo "error: $*" >&2; exit 1; }
 
@@ -64,6 +65,10 @@ echo "candidate: $APK"
 echo "  versionCode  $APK_versionCode"
 echo "  versionName  $APK_versionName"
 echo "  signer       $APK_signerSha256"
+
+if [ "${APK_signerSha256:-}" != "$FLEET_SIGNER_SHA256" ]; then
+    fail "candidate APK signer (${APK_signerSha256:-none}) does not match pinned release signer ($FLEET_SIGNER_SHA256) - refusing to install TESTKEY or throwaway-signed build"
+fi
 
 # ---------------------------------------------------------------------------
 # Find the handsets by asking the LAN they are on
@@ -169,10 +174,18 @@ for target in $LOCAL_TARGETS; do
         rm -rf "$tmp"
         echo "  signer       $have_signer"
         if [ "$have_signer" != "$APK_signerSha256" ]; then
-            echo "  SIGNER MISMATCH - REFUSED."
-            echo "  Installing needs an uninstall first, which discards this phone's"
-            echo "  DataBudget counters. That is a decision for a person, so this"
-            echo "  script will not make it. Nothing has been changed on the device."
+            echo "  SIGNER MISMATCH - REFUSED." >&2
+            echo "  device signer:    ${have_signer:-none}" >&2
+            echo "  candidate signer: $APK_signerSha256 (pinned release: $PINNED_RELEASE_SIGNER)" >&2
+            echo "  Installing needs an uninstall first, which discards this phone's" >&2
+            echo "  DataBudget counters. That is a decision for a person, so this" >&2
+            echo "  script will not make it. Nothing has been changed on the device." >&2
+            REFUSED=$((REFUSED + 1)); continue
+        fi
+        if [ "$have_signer" != "$PINNED_RELEASE_SIGNER" ]; then
+            echo "  DEVICE SIGNED BY UNTRUSTED/TESTKEY CERTIFICATE - REFUSED." >&2
+            echo "  device has non-release signer: ${have_signer:-none} (pinned release: $PINNED_RELEASE_SIGNER)" >&2
+            echo "  Device is running a TESTKEY or throwaway build and cannot be upgraded in place." >&2
             REFUSED=$((REFUSED + 1)); continue
         fi
     fi
@@ -186,7 +199,15 @@ for target in $LOCAL_TARGETS; do
     # Exit code deliberately ignored: adb reports failure for installs that
     # succeeded, because the result comes back over a connection the install
     # itself disturbs. The device is asked afterwards instead.
-    adb -s "$target" install -r "$APK" 2>&1 | sed 's/^/    /' || true
+    install_out="$(adb -s "$target" install -r "$APK" 2>&1 || true)"
+    echo "$install_out" | sed 's/^/    /'
+    if echo "$install_out" | grep -q "INSTALL_FAILED_UPDATE_INCOMPATIBLE"; then
+        echo "  ERROR: INSTALL_FAILED_UPDATE_INCOMPATIBLE on $target ($serial)" >&2
+        echo "  The device's installed build was signed with a different key than this APK." >&2
+        echo "  Refusing to retry silently. Loud refusal recorded." >&2
+        REFUSED=$((REFUSED + 1))
+        continue
+    fi
     sleep 3
     adb connect "$target" >/dev/null 2>&1 || true
     now_code="$(adb -s "$target" shell dumpsys package "$PACKAGE" 2>/dev/null | tr -d '\r' \

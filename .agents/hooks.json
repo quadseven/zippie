@@ -1,0 +1,16 @@
+{
+  "fix-bin": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh /Users/loom/lanes/quadseven.zippie-241/.agents/hook.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
