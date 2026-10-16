@@ -75,9 +75,23 @@ class WidgetBondTest {
         WidgetBondSnapshot(status, now - ageMs)
 
     /** A relay report good enough that the verdict is not one of the
-     *  short-circuiting ones, so the leg list is reached at all. */
+     *  short-circuiting ones, so the leg list is reached at all.
+     *
+     *  `listening = true` IS LOAD-BEARING and was left off by accident. It
+     *  defaults to false, and `RelayVerdict.evaluate` reads that before it
+     *  looks at a single counter - a relay that never bound its LAN socket is
+     *  `NotListening`, not `Carrying`. So without it this helper produced a
+     *  report whose verdict is `NotListening`, which `WidgetContent.legsOf`
+     *  answers with a DOWN row: every test below that expects the carrying
+     *  fallback row was silently asserting the wrong thing, and the bond's own
+     *  staleness gate was never the thing under test. */
     private fun carryingReport(ageMs: Long = 0) = RelayReport(
-        RelayStats(cellularReady = true, upDatagrams = 12, lastRouterInboundAtMs = now - 1),
+        RelayStats(
+            listening = true,
+            cellularReady = true,
+            upDatagrams = 12,
+            lastRouterInboundAtMs = now - 1,
+        ),
         now - ageMs,
     )
 

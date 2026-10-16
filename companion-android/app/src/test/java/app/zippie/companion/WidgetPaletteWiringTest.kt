@@ -110,9 +110,17 @@ class WidgetPaletteWiringTest {
     fun `the widget's spacing comes from the generated scale too`() {
         // Space resolves to Tok.space_* in design/Theme.kt, so naming Space
         // rather than a dp literal is the same single-source property as colour.
+        //
+        // SPACING POSITIONS ONLY - padding/width/height. tokens.json has one
+        // scale, the rhythm, and nothing this file uses outside those three is
+        // on it: the responsive size set and the medium breakpoint are widget
+        // geometry, the corner radius and the hairline have no token at all.
+        // Asserting on EVERY dp in the file therefore fails on those four while
+        // saying nothing about the rhythm, and a check that is always red is a
+        // check somebody switches off.
         assertTrue(
             "the widget is using a raw dp instead of the Space scale",
-            !Regex("""\d+\.dp""").containsMatchIn(widget.replace("16.dp", "").replace("1.dp", "")),
+            !Regex("""\.(padding|width|height)\(\s*\d+(\.\d+)?\.dp""").containsMatchIn(widget),
         )
     }
 
@@ -133,7 +141,14 @@ class WidgetPaletteWiringTest {
         for (name in listOf("live", "down", "tertiary", "primary", "secondary", "ground", "rule")) {
             val entry = color.getJSONObject(name)
             for (variant in listOf("Light", "Dark")) {
-                val hex = entry.getString(if (variant == "Light") "light" else "dark").uppercase()
+                // tokens.json stores "#1757D6"; design/generate.py strips the '#'
+                // before emitting `Color(0xFF1757D6)`. Without lstrip here the
+                // expected literal reads `Color(0xFF#1757D6)`, which matches
+                // nothing and fails on the very first colour - a check that can
+                // only ever be red is not a check.
+                val hex = entry.getString(if (variant == "Light") "light" else "dark")
+                    .removePrefix("#")
+                    .uppercase()
                 val literal = "Color(0xFF$hex)"
                 assertTrue(
                     "Tok.${name}${variant} should be $literal, but the generated file says " +

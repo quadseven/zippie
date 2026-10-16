@@ -29,8 +29,21 @@ class RelayBondFileTest {
 
     private val now = 2_000_000L
 
+    /**
+     * ONE directory for the whole class.
+     *
+     * `TemporaryFolder.newFolder()` MINTS A NEW DIRECTORY ON EVERY CALL, so the
+     * obvious helper - `RelayBondFile(File(tmp.newFolder(), name))` - does not
+     * return "a second reader of the same record" at all. It returns a reader of
+     * a private, empty directory, and the three fresh-process tests below were
+     * failing on that rather than on anything about persistence.
+     * `RelayReportFileTest` binds the path once and passes it to both instances
+     * instead; this does the same, one level up.
+     */
+    private val dir: File by lazy { tmp.newFolder() }
+
     private fun file(name: String = "widget_bond.json") =
-        RelayBondFile(File(tmp.newFolder(), name))
+        RelayBondFile(File(dir, name))
 
     private fun path(label: String, weight: Int, tier: Int = 1) = """
         {"name":"${label.lowercase().replace(' ', '-')}","label":"$label","state":"up",
@@ -64,7 +77,12 @@ class RelayBondFileTest {
     fun `the timestamp survives, so staleness is still decidable`() {
         val target = file()
         val body = payload(path("Lone SIM", 100))
-        target.publish(WidgetBondSnapshot(BondStatus.decode(body), now - 3_000), body)
+        // PAST THE THRESHOLD, not merely old. The threshold is 20s, so a
+        // three-second-old snapshot is a fresh one and asserting it is stale
+        // would be asserting a lie; what has to survive the round trip is an
+        // age the reader can actually act on.
+        val writtenAt = now - WidgetBondSnapshot.STALENESS_MS - 1
+        target.publish(WidgetBondSnapshot(BondStatus.decode(body), writtenAt), body)
 
         val got = checkNotNull(file("widget_bond.json").read()) { "the snapshot must be readable" }
 
@@ -72,7 +90,7 @@ class RelayBondFileTest {
         // once would read as infinitely fresh and the widget would describe a
         // bond nobody had looked at since the app was last opened.
         assertTrue(got.isStale(now))
-        assertTrue(!got.isStale(now - 3_000))
+        assertTrue(!got.isStale(writtenAt))
     }
 
     @Test
