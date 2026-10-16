@@ -64,6 +64,19 @@ if [ -z "$local_fp" ]; then
     exit 1
 fi
 
+# Web root guard against TESTKEY / throwaway APKs (zippie#241).
+# A TESTKEY APK in /www previously reached production handsets over HTTP.
+# Purge and alarm if found in the web root.
+for apk in /www/*TESTKEY*.apk /www/*throwaway*.apk; do
+    if [ -f "$apk" ]; then
+        log "FOUND TESTKEY/throwaway APK IN /www ($apk) - REMOVING"
+        rm -f "$apk" 2>/dev/null || true
+        dd_event "TESTKEY APK found in router web root" \
+            "drift-check.sh found and removed $apk from /www. Web root must not serve throwaway builds." \
+            "error"
+    fi
+done
+
 # Fetch the tree as $REF has it. One tarball request; listing files
 # individually would be many requests on a metered uplink.
 #

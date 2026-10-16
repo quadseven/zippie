@@ -4801,6 +4801,9 @@ class BondAgent:
                     self.end_headers()
                     self.wfile.write(body)
                     return
+                if parsed.path.lower().endswith(".apk"):
+                    self.send_error(403, "serving APKs from agent dashboard is forbidden")
+                    return
                 self.send_error(404)
 
         _install_dashboard_listeners(self, Handler)
