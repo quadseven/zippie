@@ -115,13 +115,13 @@ final class BondModel: ObservableObject {
             of: candidates.filter { !$0.isLocal }, timeout: 3)
 
         if let local = await localHit {
-            bond = local
+            publish(local)
             decision = ModeDecision(proximity: .local)
             await refreshSeries()
             return
         }
         if let remote = await remoteHit {
-            bond = remote
+            publish(remote)
             decision = ModeDecision(proximity: .remote)
             await refreshSeries()
             return
@@ -131,6 +131,26 @@ final class BondModel: ObservableObject {
         // saying so is better than leaving the last good snapshot on screen
         // pretending to be current.
         bond = nil
+        WidgetBondStore.clear(from: defaults)
+    }
+
+    /// Record a bond the router actually answered with, for the widget process.
+    ///
+    /// THE WIDGET CANNOT FETCH IT. A WidgetKit extension has no business opening
+    /// a console connection, and more to the point it usually runs when the app
+    /// does not - so this poll is the only thing that can keep that record
+    /// moving, and skipping the write here would leave the medium size showing
+    /// the this-phone row forever.
+    ///
+    /// THE COST, STATED. This record only advances while the app is in the
+    /// foreground, so on a home screen with the app closed the widget finds it
+    /// stale within `WidgetBondSnapshot.stalenessThreshold` and falls back to
+    /// the single this-phone row - see that type's doc comment. Widening it
+    /// would mean polling a router from a background task for the sake of a
+    /// glance, which is a different trade and belongs in its own decision.
+    private func publish(_ status: BondStatus) {
+        bond = status
+        WidgetBondStore.write(status, to: defaults, at: now)
     }
 
     private var isStale: Bool {
