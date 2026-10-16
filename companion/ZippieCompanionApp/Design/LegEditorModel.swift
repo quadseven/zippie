@@ -86,6 +86,7 @@ final class LegEditorModel: ObservableObject {
     func load() async {
         loading = true
         defer { loading = false }
+        hasToken = token.read() != nil
 
         var lastFailure: LegEditError?
         for address in consoles() {

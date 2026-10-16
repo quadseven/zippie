@@ -32,6 +32,8 @@ public enum RelayVerdict: Equatable, Sendable {
     case off
     case starting
     case stopping
+    /// Running, but no write token is stored on this phone.
+    case noToken
     /// Running, but nothing has reported yet.
     case awaitingFirstReport
     /// A report exists and has gone quiet - the relay was killed and its
@@ -66,14 +68,16 @@ public enum RelayVerdict: Equatable, Sendable {
     public static func evaluate(run: RelayRun,
                                 report: RelayStatus?,
                                 now: Date = Date(),
-                                quietAfter: TimeInterval = RelayVerdict.routerQuietAfter)
+                                quietAfter: TimeInterval = RelayVerdict.routerQuietAfter,
+                                hasToken: Bool = true)
         -> RelayVerdict {
         switch run {
         case .off:      return .off
-        case .starting: return .starting
+        case .starting: return hasToken ? .starting : .noToken
         case .stopping: return .stopping
         case .running:  break
         }
+        guard hasToken else { return .noToken }
         guard let report else { return .awaitingFirstReport }
         if report.isStale(asOf: now) { return .notReporting }
 
@@ -105,6 +109,7 @@ public enum RelayVerdict: Equatable, Sendable {
         case .off:                 return "Off"
         case .starting:            return "Connecting"
         case .stopping:            return "Stopping"
+        case .noToken:             return "No token"
         case .awaitingFirstReport: return "Starting"
         case .notReporting:        return "Not reporting"
         case .paused:              return "Paused"
@@ -151,6 +156,8 @@ public enum RelayVerdict: Equatable, Sendable {
             return "Bringing the tunnel up."
         case .stopping:
             return "Taking the tunnel down."
+        case .noToken:
+            return "No write token is stored. This phone cannot join the bond."
         case .awaitingFirstReport:
             return "The tunnel is up. Waiting for the relay's first report."
         case .notReporting:
@@ -223,7 +230,7 @@ public enum RelayVerdict: Equatable, Sendable {
     /// PHONE cannot get traffic through count as down.
     public var isDownLeg: Bool {
         switch self {
-        case .paused, .noCellular, .notForwarding: return true
+        case .noToken, .paused, .noCellular, .notForwarding: return true
         default: return false
         }
     }
@@ -233,7 +240,7 @@ public enum RelayVerdict: Equatable, Sendable {
     /// mean there is no single instance per case, and a rule that only checked
     /// the payload-free cases would miss exactly the sentences that vary.
     static let allCasesForCopyReview: [RelayVerdict] = [
-        .off, .starting, .stopping, .awaitingFirstReport, .notReporting,
+        .off, .starting, .stopping, .noToken, .awaitingFirstReport, .notReporting,
         .paused(reason: "Daily cap of 2 GB reached."),
         .noCellular(detail: nil),
         .noCellular(detail: "cellular unavailable (interface not usable)"),

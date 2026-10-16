@@ -191,7 +191,8 @@ final class BondModel: ObservableObject {
     /// present-but-old report means something died holding it.
     private var localVerdict: RelayVerdict {
         RelayVerdict.evaluate(run: report == nil ? .off : .running,
-                              report: report, now: now)
+                              report: report, now: now,
+                              hasToken: ConsoleWriteToken.shared.read() != nil)
     }
 
     /// The mode or released-route warning, said plainly. A client tunnel can
