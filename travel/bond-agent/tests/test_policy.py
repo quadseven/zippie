@@ -56,6 +56,18 @@ def test_classify_down_on_high_loss():
     assert classify_state(50.0, 20.0, pol) == PathState.DOWN
 
 
+def test_a_total_loss_sample_with_a_fresh_rtt_withdraws_the_leg():
+    """A recent handshake cannot keep a path in the bond at 100% loss."""
+    pol = PolicyConfig()
+    path = _path("dead", state=PathState.UP, rtt=40.0, loss=100.0)
+    path.state = classify_state(path.rtt_ms, path.loss_pct, pol, previous=path.state)
+    path.effective_weight = effective_weight(path, pol)
+
+    assert path.state is PathState.DOWN
+    assert path.effective_weight == 0
+    assert multipath_nexthops([path], pol.mode) == []
+
+
 def test_classify_degraded():
     pol = PolicyConfig()
     assert classify_state(250.0, 1.0, pol) == PathState.DEGRADED

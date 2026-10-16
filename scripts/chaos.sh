@@ -44,9 +44,9 @@
 # the leg sending while it happily keeps receiving - a half-blackhole, not a
 # dead link. The ingress half needs the traffic mirrored to an ifb device and
 # shaped there. If ifb is unavailable (kmod-ifb / kmod-sched not installed on
-# this OpenWrt build) we fall back to egress-only and SAY SO in the log and in
-# every affected result line, so old and new runs stay comparable instead of
-# silently meaning different things.
+# this OpenWrt build), ordinary loss/delay scenarios fall back to egress-only
+# and say so in the log. The hard-blackhole scenario skips instead: it cannot
+# claim a dead leg without the bidirectional setup and packet-drop proof.
 #
 # NOT measured here: true flow survival. That needs a long-lived TCP stream to
 # a peer at the home end (iperf3 -s in the zippie-home pod) - see #2136.
@@ -102,6 +102,23 @@ probe_loss() {
         | grep -oE '[0-9]+% *packet loss' | grep -oE '^[0-9]+' | head -1
 }
 
+# Packets the netem qdisc itself says it dropped. A missing/unsupported stats
+# format is zero, which makes the blackhole proof fail closed.
+netem_drops() {
+    tc -s qdisc show dev "$1" 2>/dev/null | awk '
+        /dropped/ {
+            for (i = 1; i <= NF; i++) {
+                if ($i == "dropped") {
+                    n = $(i + 1)
+                    gsub(/[,)]/, "", n)
+                    total += n
+                }
+            }
+        }
+        END { print total + 0 }
+    '
+}
+
 # Average round-trip milliseconds through $1, or empty.
 probe_rtt() {
     ping -I "$1" -c "${2:-5}" -W 2 -q "$PROBE_TARGET" 2>/dev/null \
@@ -149,8 +166,12 @@ verify_impairment() {
     case "$_kind" in
     blackhole)
         _got=$(probe_loss "$_iface" 6)
-        [ "$_got" = "100" ] && return 0
-        say "    ABORT: blackhole not in effect (measured ${_got:-no-result}% loss, want 100%)"
+        _drops=$(netem_drops "$_iface")
+        if [ "$_got" = "100" ] && [ "$_drops" -ge 6 ]; then
+            say "    blackhole proof: 6 probes, netem dropped $_drops packets; no probe escaped"
+            return 0
+        fi
+        say "    ABORT: blackhole unproven (measured ${_got:-no-result}% loss; egress netem dropped $_drops packets, want 6)"
         return 1
         ;;
     loss)
@@ -220,6 +241,11 @@ scenario() {
         halves="bidirectional"
     else
         ingress_off "$iface"
+        if [ "$kind" = "blackhole" ]; then
+            tc qdisc del dev "$iface" root 2>/dev/null
+            say "    scenario SKIPPED - bidirectional blackhole unavailable; no measurement reported"
+            return
+        fi
         halves="EGRESS-ONLY (no ifb; leg can still receive)"
     fi
     say "    impairment applied: $halves"
