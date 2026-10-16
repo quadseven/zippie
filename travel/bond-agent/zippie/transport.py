@@ -61,6 +61,7 @@ from zippie.datapath import (
     PathState,
     Reassembler,
     Scheduler,
+    SendMode,
     frame_seq,
 )
 from zippie.retransmit import NackTracker, RetransmitBuffer, RetransmitConfig
@@ -440,6 +441,8 @@ _KA_LOSS_WINDOW = 40
 # and much faster than the 60 s stats line, so the first report after the
 # peer vanishes already says so.
 PEER_SILENT_S = 30.0
+HOME_PROBE_INTERVAL_S = 2.0
+HOME_PROBE_STANDDOWN_S = 6.0
 
 # WireGuard's public wire format leaves its message type and total length
 # visible. That is enough to separate its own handshakes and empty transport
@@ -645,6 +648,7 @@ class Transport:
         # reorder_deadline_ms itself - see ADAPT_MAX_DEADLINE_MULTIPLIER.
         max_reorder_deadline_ms: int | None = None,
         roam: bool = False,
+        home_multipath: bool = False,
         wg_peer: tuple[str, int] | None = None,
         socket_factory=make_udp_socket,
         # Injectable for the same reason socket_factory is: the real
@@ -702,13 +706,13 @@ class Transport:
         self._epoch = int.from_bytes(os.urandom(4), "big") if epoch is None else epoch
         self._peer_epoch: int | None = None
         self._socket_factory = socket_factory
-        # ENDPOINT ROAMING. The home end has one physical link but hears the
-        # travel router across whichever ISP delivered last; setting a link's
-        # reply target to the source of each received frame is what makes
-        # per-packet failover work with zero routing churn - the home mirror of
-        # the travel side dialling out. Off by default: the travel side dials
-        # fixed remotes and must NOT roam to a spoofed source.
+        # ENDPOINT ROAMING. Home learns one source per travel path on a shared
+        # listening socket. Off by default: travel dials fixed remotes.
         self._roam = roam
+        self._home_multipath = home_multipath
+        self._home_learned: set[int] = set()
+        self._home_failed: set[int] = set()
+        self._next_home_probe = self._clock() + HOME_PROBE_INTERVAL_S
         self.scheduler = Scheduler(duplicate_fanout=duplicate_fanout)
         self.reassembler = Reassembler(reorder_deadline_ms=reorder_deadline_ms, _clock=_clock)
         self.retransmit = RetransmitBuffer(retransmit, _clock=_clock)
@@ -951,7 +955,8 @@ class Transport:
         demoted once could never produce the evidence needed to come back, and
         a bond that cannot recover a recovered link is not a bond.
         """
-        for path_id in list(self._socks):
+        paths = self._home_learned if self._home_multipath else self._socks
+        for path_id in list(paths):
             self._ka_probe += 1
             probe = self._ka_probe
             # The probe's OWN identifier, where a data frame carries its
@@ -1093,6 +1098,8 @@ class Transport:
 
     def _send_on(self, path_id: int, wire: bytes) -> bool:
         sock = self._socks.get(path_id)
+        if sock is None and self._home_multipath:
+            sock = self._socks.get(0)
         link = self._links.get(path_id)
         if sock is None or link is None:
             return False
@@ -1117,6 +1124,8 @@ class Transport:
             # the situation this whole system exists to survive.
             self.stats.send_errors += 1
             self.scheduler.set_healthy(path_id, False)
+            if self._home_multipath:
+                self._home_failed.add(path_id)
             log.debug("send failed on %s: %s", link.name, exc)
             return False
 
@@ -1127,8 +1136,12 @@ class Transport:
         overhead = client_bytes is None
         if client_bytes is not None:
             self._last_client_payload_at = self._clock()
-        mode = self.classifier.mode_for(
-            len(payload), paths_available=len(healthy), overhead=overhead
+        mode = (
+            SendMode.SPRAY
+            if self._home_multipath
+            else self.classifier.mode_for(
+                len(payload), paths_available=len(healthy), overhead=overhead
+            )
         )
         targets, frames = self.scheduler.build(payload, mode, self._epoch, pack=self._pack)
         if not targets:
@@ -1213,18 +1226,24 @@ class Transport:
         # the far side of the gate. This used to happen in run_once BEFORE the
         # frame was parsed at all, so one unauthenticated 17-byte datagram
         # repointed every reply at whoever sent it.
-        if self._roam and addr is not None and path_id is not None:
-            self._roam_link(path_id, addr)
-        if path_id is not None:
-            self._credit_leg(path_id, len(raw))
-        if self._answer_control(frame, path_id):
+        # Legacy NACKs use path_id=0 regardless of their actual sending leg.
+        # They request recovery but cannot establish an endpoint for path 0.
+        received_path = (
+            None
+            if self._home_multipath and frame.flags & FLAG_NACK
+            else frame.path_id
+            if self._home_multipath
+            else path_id
+        )
+        if self._roam and addr is not None and received_path is not None:
+            self._roam_link(received_path, addr)
+        if received_path is not None:
+            self._credit_leg(received_path, len(raw))
+        if self._answer_control(frame, received_path):
             return []
 
-        # The frame's OWN path_id, not the socket it turned up on. Home listens
-        # on one link and every travel leg sprays to it, so the arriving socket
-        # says "wan" for all of them; the sender's leg id is the only per-leg
-        # identity this end has, and it is what the forward-progress rule in
-        # NackTracker.due is keyed on.
+        # The sender's path id is the per-leg identity for NACK progress.
+        # Home receives every travel leg on the same listening socket.
         #
         # None for a resend, because it proves nothing about the leg it came in
         # on: it was deliberately routed AWAY from the leg that lost it, so it
@@ -1359,17 +1378,29 @@ class Transport:
             self.reassembler.reset_stream()
             self._reset_gap_tracking()
             self._peer_rtt.clear()
+            if self._home_multipath:
+                self._reset_home_paths()
         self._peer_epoch = frame.epoch
         return True
 
+    def _reset_home_paths(self) -> None:
+        """Retire endpoint evidence belonging to the previous sender run."""
+        for path_id in self._home_learned:
+            self._ka_sent.pop(path_id, None)
+            self._link_rx.pop(path_id, None)
+            if path_id:
+                self._links.pop(path_id, None)
+                self.scheduler.remove_path(path_id)
+            else:
+                self.scheduler.set_healthy(0, False)
+        self._home_learned.clear()
+        self._home_failed.clear()
+
     def _credit_leg(self, path_id: int, wire_len: int) -> None:
-        """Owns the decision "this leg round-trips". Sits after the gate
-        because a stranger's datagram must not keep a dead leg looking alive,
-        and BEFORE the frame type is inspected: any well-formed frame proves
-        the leg, whether it is a keepalive answer or ordinary tunnel data -
-        and on a busy bond real data is the more common proof. Judging
-        liveness on keepalives alone would call a leg dead while it was
-        carrying traffic.
+        """Record a received frame on its path. Sits after the epoch gate
+        because a rejected datagram must not keep a dead leg looking alive.
+        Receiving proves the upstream path; home also needs answered probes
+        before re-admitting a path stood down for downstream failure.
         """
         self._link_rx[path_id] = self._clock()
         # Estimated bytes the metered IP link carried. The socket exposes
@@ -1393,7 +1424,8 @@ class Transport:
         # frame silently dropped, while the wg server was visibly replying
         # on loopback. The bond looked alive from both ends and moved
         # nothing.
-        self.scheduler.set_healthy(path_id, True)
+        if not self._home_multipath or path_id not in self._home_failed:
+            self.scheduler.set_healthy(path_id, True)
 
     def _answer_control(self, frame: Frame, path_id: int | None) -> bool:
         """CONTROL-FRAME REPLIES: NACK answers and keepalives. Owns the
@@ -1450,6 +1482,9 @@ class Transport:
         sent = outstanding.pop(probe, None) if outstanding else None
         if sent is None:
             return
+        if self._home_multipath:
+            self._home_failed.discard(path_id)
+            self.scheduler.set_healthy(path_id, True)
         self._link_rtt[path_id] = (self._clock() - sent) * 1000.0
         self._note_ka_outcome(path_id, lost=False)
         # Anything older than the probe just answered is LOST, not
@@ -1563,6 +1598,13 @@ class Transport:
         reassigned wholesale via dataclasses.replace to keep it hashable-safe.
         """
         link = self._links.get(path_id)
+        if link is None and self._home_multipath:
+            link = LinkEndpoint(path_id, f"path-{path_id}", None, addr)
+            self._links[path_id] = link
+            self.scheduler.add_path(PathState(path_id, link.name, weight=100))
+            log.info("home path learned: %s", link.name)
+        if self._home_multipath:
+            self._home_learned.add(path_id)
         if link is None or link.remote == addr:
             return
         self._links[path_id] = replace(link, remote=addr)
@@ -1588,11 +1630,33 @@ class Transport:
     # ---- the loop --------------------------------------------------------
 
     def tick(self) -> None:
-        """Time-driven work: release stalled reorder gaps, send due NACKs."""
+        """Refresh home paths, release reorder gaps, and send due probes/NACKs."""
+        if self._home_multipath:
+            self._refresh_home_paths()
+            if self._clock() >= self._next_home_probe:
+                self.send_keepalives()
+                self._next_home_probe = self._clock() + HOME_PROBE_INTERVAL_S
         self._deliver_to_wireguard(self.reassembler.tick())
         for seq in self.nacks.due():
             self._send_nack(seq)
         self._maybe_adapt_recovery()
+
+    def _refresh_home_paths(self) -> None:
+        """Stand down silent paths and weight the paths with fresh RTT and loss."""
+        now = self._clock()
+        for path_id in self._home_learned:
+            unanswered = self._ka_sent.get(path_id, {})
+            missed = sum(now - sent >= HOME_PROBE_STANDDOWN_S for sent in unanswered.values())
+            if missed >= 3:
+                self._home_failed.add(path_id)
+            active = path_id not in self._home_failed and self._heard_recently(path_id)
+            self.scheduler.set_healthy(path_id, active)
+            measured = self._peer_rtt.get(path_id)
+            peer_rtt = measured[0] if measured and now - measured[1] < PEER_SILENT_S else None
+            rtt_ms = peer_rtt if peer_rtt is not None else self.link_rtt_ms(path_id) or 0
+            loss_pct = self.link_loss_pct(path_id) or 0
+            reliability = max(0.25, 1 - loss_pct / 100)
+            self.scheduler.set_weight(path_id, max(1, round(10000 * reliability / (100 + rtt_ms))))
 
     def _worst_known_rtt_ms(self) -> float | None:
         """Max RTT among legs `_heard_recently` still trusts (#62).
@@ -1719,7 +1783,7 @@ class Transport:
             # see that from outside the process without a code change.
             "recovery": self._adaptive.stats.as_dict(),
             "classifier": self.classifier.stats(),
-            "links": len(self._links),
+            "links": len(self._home_learned) if self._home_multipath else len(self._links),
             # A leg counts only while the peer is still reaching us on it.
             # The scheduler's flag drops on a send error alone, and a peer
             # that vanishes causes none - this read 1 for the whole 7 h the
