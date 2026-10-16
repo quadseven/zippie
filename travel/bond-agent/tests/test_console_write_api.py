@@ -94,6 +94,55 @@ def test_descriptive_metadata_is_accepted_without_touching_routing(tmp_path):
     assert a.paths[0].config.monthly_cap_gb == 5.0
 
 
+def test_plan_metadata_from_config_and_console_edit_reaches_status(tmp_path):
+    a = _agent(tmp_path)
+    a.set_leg_fields(
+        "att",
+        {
+            "carrier": "Sample Mobile",
+            "plan_name": "Base",
+            "plan_type": "prepaid",
+            "billing_day": 14,
+            "expected_kbps": 2000,
+        },
+    )
+
+    status = a.paths[0].to_dict()
+    assert status["carrier"] == "Sample Mobile"
+    assert status["plan_name"] == "Base"
+    assert status["plan_type"] == "prepaid"
+    assert status["billing_day"] == 14
+    assert status["expected_kbps"] == 2000
+    assert status["monthly_cap_gb"] == 5.0
+    assert a._billing_days()["att"] == 14
+
+
+def test_plan_metadata_is_read_from_config(tmp_path):
+    raw = {
+        "name": "sample",
+        "interface": "eth1",
+        "carrier": "Example Mobile",
+        "plan_name": "Basic",
+        "plan_type": "prepaid",
+        "billing_day": 12,
+        "monthly_cap_gb": 3.0,
+        "expected_kbps": 2000,
+    }
+    data = {
+        "agent": {"private_key": "cGtleQ=="},
+        "home": {
+            "endpoint": "home.example:51900",
+            "server_public_key": "c2VydmVy",
+            "address_cidr": "10.66.0.10/24",
+            "ports": [51900],
+        },
+        "paths": [raw],
+    }
+    path = parse_config(data).paths[0]
+    assert (path.carrier, path.plan_name, path.plan_type) == ("Example Mobile", "Basic", "prepaid")
+    assert (path.billing_day, path.monthly_cap_gb, path.expected_kbps) == (12, 3.0, 2000)
+
+
 def test_clearing_an_override_restores_the_configured_value(tmp_path):
     """OVERRIDES MUST BE REVERSIBLE.
 

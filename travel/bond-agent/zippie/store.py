@@ -428,15 +428,11 @@ class LegStore:
         "label",
         "enabled",
     }
-    #: The carrier's cycle day. NOT descriptive and not overridable: it names
-    #: no field of PathConfig, so nothing copies it onto a leg's config, but it
-    #: decides which billing period usage is counted against and therefore when
-    #: a cap - and the demotion behind it - resets. It was already accepted
-    #: here and already sent by the phone app, and until now nothing read it.
+    #: The carrier's cycle day also decides when usage resets.
     CYCLE = frozenset({"billing_day"})
     #: Descriptive only. Never affects routing; exists so the dashboard can be
     #: accurate about what a leg actually IS.
-    DESCRIPTIVE = {"carrier", "plan_name", "plan_type", "notes"}
+    DESCRIPTIVE = {"carrier", "plan_name", "plan_type", "expected_kbps", "notes"}
 
     def __init__(self, state_dir: str | Path) -> None:
         self.path = Path(state_dir) / "legs.json"

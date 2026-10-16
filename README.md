@@ -266,6 +266,12 @@ monthly_cap_gb = 50
 match = { type = "ssid", ssid = "PHONE-VZ" }
 ```
 
+Each path may also set `carrier`, `plan_name`, `plan_type`, `billing_day`
+(1-31), `expected_kbps`, and `max_kbps`. These appear in the console; `max_kbps`
+caps outbound traffic on that link. A higher `tier` keeps a reserve link idle
+until all healthy links in lower tiers are unavailable. The example config
+shows the optional plan fields.
+
 ## Security
 
 - All path traffic is **WireGuard** (Noise_IK, modern crypto).

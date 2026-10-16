@@ -332,3 +332,15 @@ def test_clearing_a_rename_gives_back_the_ANNOUNCED_label(tmp_path):
     assert leg.config.label == "iPhone", (
         "clearing the rename left the override in place; removal is a no-op"
     )
+
+
+def test_clearing_dynamic_plan_metadata_restores_defaults(tmp_path):
+    a = _agent(tmp_path)
+    a.dynamic.announce(name="sample-phone", host="10.99.0.151", port=51999)
+    a.reconcile_dynamic_legs()
+    a.set_leg_fields("sample-phone", {"carrier": "Example Mobile", "billing_day": 14})
+    assert a.paths[-1].to_dict()["carrier"] == "Example Mobile"
+
+    a.set_leg_fields("sample-phone", {"carrier": None, "billing_day": None})
+    assert a.paths[-1].to_dict()["carrier"] == ""
+    assert a.paths[-1].to_dict()["billing_day"] == 1

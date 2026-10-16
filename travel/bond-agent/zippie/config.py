@@ -315,6 +315,11 @@ def parse_config(
                 port=int(raw["port"]) if raw.get("port") is not None else None,
                 relay_endpoint=str(raw.get("relay_endpoint", "")),
                 max_kbps=int(raw.get("max_kbps", 0) or 0),
+                carrier=str(raw.get("carrier", "")),
+                plan_name=str(raw.get("plan_name", "")),
+                plan_type=str(raw.get("plan_type", "")),
+                billing_day=int(raw.get("billing_day", 1)),
+                expected_kbps=int(raw.get("expected_kbps", 0) or 0),
                 # tier and label existed in the model, were used by policy.py,
                 # and had passing unit tests -- but were never read from the
                 # config file, so setting tier = 2 in zippie.toml did nothing

@@ -92,6 +92,13 @@ match = { type = "ssid", ssid = "PHONE-FI-OPERATOR" }
 
 [[paths]]
 name = "verizon-operator"
+# Optional plan details shown in the console. Enter values from your own plan.
+# carrier = "Example Mobile"
+# plan_name = "Basic"
+# plan_type = "prepaid"
+# billing_day = 14
+# expected_kbps = 2000
+# max_kbps = 500
 weight = 90
 priority = 30
 # After 50GB Verizon often still works (throttled) — keep as "burn last" workhorse

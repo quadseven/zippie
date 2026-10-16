@@ -113,6 +113,11 @@ class PathConfig:
     # is the whole month. This is an absolute ceiling enforced in the datapath
     # at the last point before bytes leave, so nothing routes around it.
     max_kbps: int = 0
+    carrier: str = ""
+    plan_name: str = ""
+    plan_type: str = ""
+    billing_day: int = 1
+    expected_kbps: int = 0
     # When usage_gb/monthly_cap_gb >= this, demote path (still usable if nothing better)
     soft_limit_pct: float = 0.85
     # Per-path WireGuard identity (required for correct multipath return routing)
@@ -933,6 +938,11 @@ class PathRuntime:
             # The deliberate ceiling, so a dashboard can say "capped at 500
             # kbit/s" instead of leaving a slow leg looking broken.
             "max_kbps": self.config.max_kbps,
+            "carrier": self.config.carrier,
+            "plan_name": self.config.plan_name,
+            "plan_type": self.config.plan_type,
+            "billing_day": self.config.billing_day,
+            "expected_kbps": self.config.expected_kbps,
             "usage_gb": round(self.usage_gb, 3),
             "usage_period_start": self.usage_period_start,
             "previous_period_usage_gb": round(self.previous_usage_gb, 3),

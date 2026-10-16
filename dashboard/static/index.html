@@ -489,6 +489,19 @@
       );
       el.appendChild(metrics);
 
+      const plan = [p.carrier, p.plan_name, p.plan_type].filter(Boolean);
+      if (plan.length || p.expected_kbps || p.max_kbps || (p.billing_day && p.billing_day !== 1)) {
+        const details = document.createElement("div");
+        details.className = "io";
+        const parts = [];
+        if (plan.length) parts.push(plan.join(" / "));
+        if (p.billing_day && p.billing_day !== 1) parts.push("renews day " + p.billing_day);
+        if (p.expected_kbps) parts.push("expected " + p.expected_kbps + " kbit/s");
+        if (p.max_kbps) parts.push("capped " + p.max_kbps + " kbit/s");
+        details.textContent = parts.join(" | ");
+        el.appendChild(details);
+      }
+
       // Split tx from rx. Summing them into one THROUGHPUT figure hides the
       // single clearest symptom of a dead tunnel: WireGuard still SENDING
       // handshake retries while receiving nothing back. Observed live on

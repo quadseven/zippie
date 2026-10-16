@@ -271,12 +271,7 @@ struct LegEditor: View {
             FieldRow(label: "Billing day", text: model.binding(for: .billingDay),
                      keyboard: .numberPad)
 
-            // The blankness is not a bug and saying so is cheaper than someone
-            // discovering it and assuming the save failed.
-            Note(text: "Descriptive only - none of this changes routing. The "
-               + "router does not publish these back in its status, so they "
-               + "start blank every time this screen opens. What it stored is "
-               + "listed under Saved below, straight from its reply.")
+            Note(text: "Plan details describe this line. They do not change routing.")
         }
     }
 

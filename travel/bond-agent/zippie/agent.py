@@ -690,7 +690,7 @@ class BondAgent:
         self._config_baseline: dict[str, dict[str, Any]] = {
             path.name: {
                 field: getattr(path.config, field)
-                for field in LegStore.OVERRIDABLE
+                for field in LegStore.OVERRIDABLE | LegStore.CYCLE | LegStore.DESCRIPTIVE
                 if hasattr(path.config, field)
             }
             for path in self.paths
@@ -2453,17 +2453,16 @@ class BondAgent:
         self.apply_leg_overrides()
 
     def _billing_days(self) -> dict[str, Any]:
-        """Each leg's carrier cycle day, as typed into legs.json.
+        """Each leg's configured cycle day, with legs.json overrides.
 
         Read from the leg store and PASSED to the usage store rather than
         letting the usage store open legs.json itself. The two files are
         deliberately separate - one is measured, one is human input that cannot
         be recomputed - and the agent is the only thing allowed to hold both.
 
-        Absent means the calendar month, which is the right default for a leg
-        nobody has told us a billing date for.
+        A leg with no specified day uses the first of the month.
         """
-        out: dict[str, Any] = {}
+        out: dict[str, Any] = {p.name: p.config.billing_day for p in self.paths}
         for name, entry in self._leg_store.load().items():
             if isinstance(entry, dict) and entry.get("billing_day") is not None:
                 out[str(name)] = entry["billing_day"]
@@ -2650,6 +2649,7 @@ class BondAgent:
         for name in list(self._dynamic_paths):
             if name not in live:
                 path = self._dynamic_paths.pop(name)
+                self._config_baseline.pop(name, None)
                 if path in self.paths:
                     self.paths.remove(path)
                 self._drop_transport_path(name)
@@ -2686,6 +2686,11 @@ class BondAgent:
                 )
                 path = PathRuntime(name=name, config=cfg)
                 self._dynamic_paths[name] = path
+                self._config_baseline[name] = {
+                    field: getattr(cfg, field)
+                    for field in LegStore.OVERRIDABLE | LegStore.CYCLE | LegStore.DESCRIPTIVE
+                    if hasattr(cfg, field)
+                }
                 self.paths.append(path)
                 log.info("dynamic leg %s announced at %s", name, leg.relay_endpoint)
                 continue
@@ -2850,8 +2855,8 @@ class BondAgent:
 
         An override is the more recent human decision - "the provider says the
         cap is 15 GB, not the 5 you configured" - so it takes precedence. Only
-        whitelisted fields are applied; anything else in the file is
-        descriptive (carrier, plan name) and never touches routing.
+        whitelisted fields are applied; plan details describe the line and
+        never touch routing.
 
         Applied to config objects rather than runtime state so a later
         recompute cannot quietly undo them.
@@ -2860,7 +2865,7 @@ class BondAgent:
         for p in self.paths:
             entry = overrides.get(p.name) or {}
             baseline = self._config_baseline.get(p.name) or {}
-            for field in LegStore.OVERRIDABLE:
+            for field in LegStore.OVERRIDABLE | LegStore.CYCLE | LegStore.DESCRIPTIVE:
                 if field not in entry:
                     # RESTORE, do not skip. An override that has been removed
                     # must give the configured value back; leaving the last
