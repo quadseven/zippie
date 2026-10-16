@@ -1299,6 +1299,13 @@ class Transport:
         self._link_rx[leg] = self._clock()
         log.info("learned downstream leg %d from the wire", leg)
 
+    def _forget_learned_legs(self) -> None:
+        """A new peer stream starts with no legs: what the old one taught is
+        re-learned from the first frames, so a restart that drops a leg does
+        not leave it in the split."""
+        for leg in list(self._shared_sock):
+            self.remove_link(leg)
+
     def _verify_mac(self, raw: bytes) -> Frame | None:
         """MAC VERIFICATION: the rung ladder (auth.py). Owns the decision
         "is this frame authentic under the rung this end stands on", and
@@ -1420,6 +1427,7 @@ class Transport:
             self.reassembler.reset_stream()
             self._reset_gap_tracking()
             self._peer_rtt.clear()
+            self._forget_learned_legs()
         self._peer_epoch = frame.epoch
         return True
 
