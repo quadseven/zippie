@@ -421,6 +421,12 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             echo "| file | \`$(basename "$AAB_DIST")\` |"
             echo "| size | $AAB_BYTES bytes |"
             echo
+            if [ -n "$MARKER" ]; then
+                echo "Built and verified only. It is signed by a $MARKER key, and"
+                echo "Play binds an app to its upload key for good, so this bundle"
+                echo "is not uploaded and must never reach Play."
+                echo
+            fi
             echo "For managed Google Play, which is the only way Fleet can install"
             echo "a custom Android app. Same gradle invocation as the APK above, so"
             echo "it carries the same versionCode."

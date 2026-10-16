@@ -97,7 +97,16 @@ jobs:
             || { echo "::error::Android SDK not found at the configured ANDROID_HOME"; exit 1; }
           echo "Android SDK present."
 
-      - name: Build and verify a release APK with a throwaway key
+      # THE BUNDLE IS BUILT HERE TOO, AND NEVER UPLOADED. Managed Google Play
+      # takes only an .aab, and it is the only way the commercial MDM can put
+      # the companion on a fully-managed phone. Without this, bundleRelease and
+      # its jarsigner check ran only on a manual release dispatch, so a gradle
+      # change that broke the bundle surfaced on release day. The upload step
+      # below takes *.apk only, deliberately: Play binds an app to its upload
+      # key for good, so a throwaway-signed bundle must not leave this job.
+      - name: Build and verify a release APK and bundle with a throwaway key
+        env:
+          ZIPPIE_BUILD_BUNDLE: "1"
         run: |
           set -euo pipefail
           companion-android/ci/with-throwaway-keystore.sh \
