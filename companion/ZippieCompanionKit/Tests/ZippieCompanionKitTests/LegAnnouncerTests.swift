@@ -43,6 +43,25 @@ final class LegAnnouncerTests: XCTestCase {
         XCTAssertEqual(seen["port"] as? Int, 51999)
         XCTAssertEqual(seen["label"] as? String, "iPhone (Verizon)")
         XCTAssertNotNil(seen["lease_s"], "no lease requested, so the router would use its default")
+        XCTAssertNil(seen["delegated"], "a phone announcing itself must keep #252's source-address rule")
+    }
+
+    /// A phone adopting a verified peer (#270) is not the leg. Without the
+    /// flag the router dials the request's source - this phone - instead.
+    func testADelegatedAnnouncementSaysSo() async throws {
+        var seen: [String: Any] = [:]
+        let a = announcer { req in
+            if let b = req.httpBodyData,
+               let o = try? JSONSerialization.jsonObject(with: b) as? [String: Any] { seen = o }
+            return (200, Data(#"{"lease_s":45}"#.utf8))
+        }
+        let cfg = LegAnnouncer.Config(consoleHost: "10.99.0.1:8787", token: "tok",
+                                      name: "spare-android", label: "spare-android",
+                                      listenPort: 51999, delegated: true)
+        _ = await a.announce(cfg, address: "10.99.0.57")
+
+        XCTAssertEqual(seen["delegated"] as? Bool, true)
+        XCTAssertEqual(seen["host"] as? String, "10.99.0.57")
     }
 
     func testTheBearerTokenIsSent() async {

@@ -765,5 +765,38 @@ final class CallSiteWiringTests: XCTestCase {
                     "the provider is assembling content somewhere other than the tested function")
     }
 
+
+    /// SAME-LAN DISCOVERY (#270) HAS THREE WAYS TO GO INERT, each invisible
+    /// from inside the Kit. iOS refuses to browse a service type the Info.plist
+    /// does not declare and reports nothing. A verifier that stopped calling
+    /// the binding would have to trust something else. And a service no screen
+    /// renders finds peers nobody can adopt. `PeerDiscoveryTests` proves the
+    /// decisions; these prove the app is wired to them.
+    func testDiscoveredPeersAreDeclaredVerifiedInGoAndOffered() throws {
+        let project = try source("project.yml")
+        assertCalls(project, "NSBonjourServices:",
+                    "iOS browses only the Bonjour types the Info.plist declares")
+        assertCalls(project, "- \(PeerDiscovery.serviceType)",
+                    "the declared Bonjour type is not the one the app advertises and browses")
+
+        let service = try source("ZippieCompanionApp/PeerDiscoveryService.swift")
+        assertCalls(service, "PeerVerification.verify(",
+                    "discovered devices are not challenged through the tested handshake")
+        assertCalls(service, "PeerVerification.answer(",
+                    "this phone never answers a peer's challenge, so nobody can verify it")
+        assertCalls(service, "MobileVerifyPeer(",
+                    "verification no longer reaches the Go ClientRegistry")
+        assertCalls(service, "MobilePeerProof(",
+                    "proofs are no longer made with the Go identity")
+        assertCalls(service, ".announcerConfig(",
+                    "an adopted peer is announced some other way than the tested, delegated one")
+
+        let screen = try source("ZippieCompanionApp/Design/BondScreen.swift")
+        assertCalls(screen, "NearbyPeers(",
+                    "verified peers are found and never offered")
+        let nearby = try source("ZippieCompanionApp/Design/NearbyPeers.swift")
+        assertCalls(nearby, ".offers(",
+                    "the screen lists something other than the tested offers")
+    }
 }
 

@@ -16,6 +16,8 @@ import SwiftUI
 @main
 struct ZippieCompanionApp: App {
     @StateObject private var bond = BondModel()
+    @StateObject private var discovery = PeerDiscoveryService()
+    @Environment(\.scenePhase) private var scenePhase
     @State private var tab = Tab.initial
 
     enum Tab: Hashable {
@@ -47,7 +49,7 @@ struct ZippieCompanionApp: App {
             // not a probe harness, which is a builder's tool that happened to
             // ship first.
             TabView(selection: $tab) {
-                BondScreen(model: bond)
+                BondScreen(model: bond, discovery: discovery)
                     .tabItem { Label("Status", systemImage: "point.3.connected.trianglepath.dotted") }
                     .tag(Tab.status)
                 // The SAME model the Status tab renders. The mode decision is
@@ -64,6 +66,14 @@ struct ZippieCompanionApp: App {
             }
             .tint(Ink.live)
             .task { await bond.refresh() }
+            // Same-LAN discovery (#270). Started here rather than by the Status
+            // tab, so this phone keeps answering peers' challenges whichever
+            // tab is open.
+            .task { discovery.start() }
+            .onChange(of: scenePhase) { phase in
+                guard phase == .active else { return }
+                discovery.resumeIfStopped()
+            }
         }
     }
 }

@@ -39,5 +39,16 @@ rather than like a pruned requirement.
 ## Status
 
 Both artifacts build (2026-08-05): xcframework with device and simulator
-slices, and a ~10 MB aar. NEITHER IS WIRED INTO AN APP YET - that is client
-mode (#2247 iOS, #2248 Android). Building is not carrying.
+slices, and a ~10 MB aar. The xcframework is linked by the iOS tunnel
+extension (client mode) and by the iOS app, which calls the same-LAN discovery
+functions in `discovery.go` (#270). The aar is NOT a build dependency of the
+Android app yet; its discovery code reaches `mobile.Mobile` reflectively and
+fails closed without it. Building is not carrying.
+
+## Same-LAN discovery (#270)
+
+`NewPeerChallenge`, `PeerProof` and `VerifyPeer` let a phone prove its pairing
+credential to another device on the wifi and check another device's proof
+against the paired roster. The trust decision is `zippie.ClientRegistry`'s,
+the same code that authenticates every datapath frame; see
+`zippie/discovery.go` for the proof's shape and what it does not protect.

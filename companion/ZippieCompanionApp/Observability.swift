@@ -259,6 +259,13 @@ enum Observability {
         span.finish(at: finishedAt)
     }
 
+    /// Same-LAN discovery (#270): a refused peer, a challenge this phone could
+    /// not answer, or discovery stopping. `detail` is the reason in words -
+    /// never a key, a proof or a roster.
+    static func peerDiscovery(_ event: String, detail: String) {
+        log.warn("peer discovery", attributes: ["event": event, "detail": detail])
+    }
+
     static func relayStats(_ s: CellularRelay.Stats) {
         log.info("relay", attributes: [
             "cellular_ready": s.cellularReady,

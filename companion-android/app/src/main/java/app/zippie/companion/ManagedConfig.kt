@@ -43,12 +43,18 @@ object ManagedConfig {
      *  HomeScreenRole for why the default must be off. */
     const val KEY_HOME_SCREEN_MODE = "homeScreenMode"
 
+    /** This phone's pairing bundle for same-LAN discovery (#270). Read on its
+     *  own by [peerPairing] rather than merged into RelayConfiguration: it is
+     *  key material for other devices too, and nothing about the relay
+     *  depends on it. */
+    const val KEY_PEER_PAIRING = "peerPairing"
+
     /** Every key an MDM may set. Kept beside the parser so a key added to one
      *  and not the other is visible in review rather than at runtime. */
     val KEYS = listOf(
         KEY_TOKEN, KEY_CONSOLE_LAN_HOST, KEY_CONSOLE_URL, KEY_HOME_HOST,
         KEY_HOME_PORT, KEY_LISTEN_PORT, KEY_AUTO_START, KEY_DD_TOKEN, KEY_DD_SITE,
-        KEY_HOME_SCREEN_MODE,
+        KEY_HOME_SCREEN_MODE, KEY_PEER_PAIRING,
     )
 
     /**
@@ -108,6 +114,11 @@ object ManagedConfig {
         is String -> v.trim().equals("true", ignoreCase = true)
         else -> false
     }
+
+    /** The pairing bundle the MDM pushed, or null when absent or unusable -
+     *  in which case this phone neither advertises nor verifies peers. */
+    fun peerPairing(managed: Map<String, Any?>): PeerPairing? =
+        PeerPairing.parse(managed[KEY_PEER_PAIRING] as? String)
 
     /**
      * Is this host a private-use address this phone may send the WRITE TOKEN to?

@@ -20,10 +20,18 @@ final class DiagnosticsModel: ObservableObject {
     @Published private(set) var hasToken: Bool
     @Published private(set) var tokenError: String?
 
+    /// The same never-prefilled rule as the token: the bundle holds this
+    /// phone's pairing key and every paired device's.
+    @Published var pairingEntry = ""
+    @Published private(set) var hasPairing: Bool
+    @Published private(set) var pairingError: String?
+
     private let consoleHost: String?
     private let mdmHost: String
     private let session: URLSession
     private let token: ConsoleWriteToken
+    private let pairing: ConsoleWriteToken
+    private let onPairingChanged: () -> Void
 
     /// NO DEFAULT (#156). This named one specific deployment's MDM in every
     /// build, extractable from the binary. Nothing on iOS writes a real value
@@ -36,12 +44,45 @@ final class DiagnosticsModel: ObservableObject {
     init(consoleHost: String?,
          mdmHost: String = "",
          session: URLSession = .shared,
-         token: ConsoleWriteToken = .shared) {
+         token: ConsoleWriteToken = .shared,
+         pairing: ConsoleWriteToken = PeerDiscoveryService.pairingStore,
+         onPairingChanged: @escaping () -> Void = {}) {
         self.consoleHost = consoleHost
         self.mdmHost = mdmHost
         self.session = session
         self.token = token
         self.hasToken = token.read() != nil
+        self.pairing = pairing
+        self.hasPairing = pairing.read() != nil
+        self.onPairingChanged = onPairingChanged
+    }
+
+    // MARK: - the pairing bundle (#270)
+
+    /// Refuses a bundle `PeerPairing` cannot use BEFORE storing it. Stored and
+    /// unusable would read as "paired" here while discovery sat at "unpaired".
+    @discardableResult
+    func savePairing() -> Bool {
+        guard PeerPairing(bundleJSON: pairingEntry) != nil else {
+            pairingError = "That is not a usable pairing bundle: it needs client_id, key_hex and roster."
+            return false
+        }
+        guard pairing.save(pairingEntry) else {
+            pairingError = "The pairing bundle could not be stored on this phone."
+            return false
+        }
+        pairingEntry = ""
+        pairingError = nil
+        hasPairing = true
+        onPairingChanged()
+        return true
+    }
+
+    func forgetPairing() {
+        pairing.remove()
+        hasPairing = pairing.read() != nil
+        pairingError = nil
+        onPairingChanged()
     }
 
     // MARK: - the write token

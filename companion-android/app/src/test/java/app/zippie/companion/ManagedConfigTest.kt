@@ -280,4 +280,21 @@ class ManagedConfigTest {
         assertTrue(ManagedConfig.KEYS.contains(ManagedConfig.KEY_DD_TOKEN))
         assertTrue(ManagedConfig.KEYS.contains(ManagedConfig.KEY_DD_SITE))
     }
+
+    /** Same-LAN discovery (#270) needs this phone's pairing bundle, and MDM is
+     *  how a managed phone gets one without anyone typing a key. */
+    @Test
+    fun `the peer pairing bundle is pushable and parsed`() {
+        assertTrue(ManagedConfig.KEYS.contains(ManagedConfig.KEY_PEER_PAIRING))
+        val key = "42".repeat(32)
+        val bundle = """{"client_id": 3, "key_hex": "$key", "roster": []}"""
+        assertEquals(3L, ManagedConfig.peerPairing(mapOf(ManagedConfig.KEY_PEER_PAIRING to bundle))?.clientId)
+    }
+
+    @Test
+    fun `an absent or unusable pairing bundle is no pairing`() {
+        assertEquals(null, ManagedConfig.peerPairing(emptyMap()))
+        assertEquals(null, ManagedConfig.peerPairing(mapOf(ManagedConfig.KEY_PEER_PAIRING to "{")))
+        assertEquals(null, ManagedConfig.peerPairing(mapOf(ManagedConfig.KEY_PEER_PAIRING to 7)))
+    }
 }

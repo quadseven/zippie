@@ -62,6 +62,14 @@ const (
 	// flag is read only by a Go end interpreting frames from another Go end
 	// that set it via the same constant.
 	FlagRetransmit = 0x40
+	// FlagPeerProof marks a frame as a same-LAN discovery proof (discovery.go),
+	// never as traffic. The first fence is the key: proofs are made with a
+	// derived discovery key no datapath identity holds. This bit is the
+	// second: it sits under the MAC, so it cannot be cleared, and
+	// ClientRegistry.Verify refuses any frame carrying it, which catches a
+	// registry mistakenly built from a roster. Go-only and v3-only, like
+	// FlagEncrypted: the Python end never reads or emits it.
+	FlagPeerProof = 0x80
 )
 
 var magic = [2]byte{'P', 'B'}

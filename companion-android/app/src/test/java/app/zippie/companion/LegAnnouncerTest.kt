@@ -80,6 +80,24 @@ class LegAnnouncerTest {
         )
     }
 
+    /** A phone announcing ITSELF must keep #252's source-address rule. */
+    @Test
+    fun `an ordinary announcement is not delegated`() {
+        val http = Recorder()
+        LegAnnouncer(http).announce(config(), "10.99.0.151")
+        assertTrue("delegated sent for a phone's own leg", !http.sent!!.has("delegated"))
+    }
+
+    /** A phone adopting a verified peer (#270) is not the leg. Without the flag
+     *  the router dials the request's source - this phone - instead. */
+    @Test
+    fun `a delegated announcement says so`() {
+        val http = Recorder()
+        LegAnnouncer(http).announce(config().copy(delegated = true), "10.99.0.57")
+        assertTrue(http.sent!!.getBoolean("delegated"))
+        assertEquals("10.99.0.57", http.sent!!.getString("host"))
+    }
+
     @Test
     fun `the bearer token is sent`() {
         val http = Recorder()

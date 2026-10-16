@@ -16,6 +16,8 @@
          resource linking with "is incompatible with attribute description". -->
     <string name="mc_token_title">Router write token</string>
     <string name="mc_token_desc">The router console write token, so this phone can announce itself as a bond leg without anyone typing it. Reads are open; writes are not.</string>
+    <string name="mc_peer_pairing_title">Peer pairing bundle</string>
+    <string name="mc_peer_pairing_desc">JSON with this phone\'s client_id and key_hex and the discovery roster printed by zippie-clienthome -discovery-roster. With it, this phone proves itself to other zippie devices on the same wifi and checks theirs before offering them as legs.</string>
     <string name="mc_console_title">Router console on the LAN</string>
     <string name="mc_console_desc">host:port of the router console on its own network, for example 10.20.0.1:8787. The LAN address, never the tailnet one - the tailnet console answers from anywhere, so announcing to it would tell a router to dial a private address on a network this phone is not on.</string>
     <string name="mc_home_host_title">Home transport host</string>

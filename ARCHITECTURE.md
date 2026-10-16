@@ -478,6 +478,53 @@ otherwise. A phone on two networks cannot know which of its addresses this
 router can route to; the router does not have to guess, because the packet
 demonstrably arrived from somewhere.
 
+### Paired devices found on the same wifi
+
+A phone that holds the console token can also offer *another* paired device as
+a leg, with nobody editing `zippie.toml` (#270). Both apps advertise and browse
+`_zippie._tcp` (Bonjour on iOS, NSD on Android). A discovered device is an
+unauthenticated claim from anything on the wifi, so before it is named or
+offered it must answer a fresh 32-byte challenge:
+
+```
+  verifier --{"challenge": hex}--> device
+  verifier <--{"proof": hex}------ device   a v3 frame, FlagPeerProof,
+                                            sealed and MAC'd with the device's
+                                            DISCOVERY key,
+                                            payload = challenge + "host:port"
+```
+
+The discovery key is `HMAC-SHA256(pairing key, "zippie/peer-proof/v1")`, never
+the pairing key itself. Home frames replies to a phone with that phone's own
+identity, so a proof under the pairing key would be a valid datapath frame for
+the phone that made it. Anything on the wifi can ask for a proof over a
+challenge it chose, so that would let it inject into the phone's tunnel. With
+the derived key, no datapath reader can accept a proof.
+
+The verifier checks the proof with `ClientRegistry` (`discovery.go`) against
+its roster. The roster has the clients.json shape and is parsed by the same
+`ParseRoster`, but it holds discovery keys, as printed by
+`zippie-clienthome -discovery-roster`. Holding one phone's roster therefore
+verifies peers and does nothing else: it cannot impersonate a client to home or
+open its sealed traffic. The id the MAC authenticates must equal the id
+advertised, the payload must start with this challenge, and the endpoint the
+router will dial is the one *inside* the proof. A relay on the LAN can forward
+a real proof but cannot change that address. As a second fence, the datapath
+refuses any frame carrying `FlagPeerProof`.
+
+Adopting a verified peer is an ordinary lease, announced with
+`"delegated": true`, because the request comes from the adopting phone and not
+the leg. A delegated announce keeps its claimed host instead of the request's
+source address. The claim is still held to a private LAN address. The adopting
+phone renews the lease only while the peer is still advertised and verified.
+
+The pairing material (this device's `client_id`/`key_hex` plus the discovery
+roster) arrives as one JSON bundle: stored in the keychain from Diagnostics on iOS,
+pushed as the `peerPairing` managed-configuration key on Android. That is a
+stand-in for the pairing ceremony (#31). On Android the Go binding is reached
+reflectively until `zippie.aar` is a build dependency, so until then every
+Android check fails closed and nothing is offered.
+
 ## 11. The relay, and the phone's own honesty
 
 The relay app is a dumb hop, but it is also the surface a person looks at when

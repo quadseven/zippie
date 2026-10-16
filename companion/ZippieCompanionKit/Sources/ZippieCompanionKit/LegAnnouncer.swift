@@ -29,14 +29,20 @@ public actor LegAnnouncer {
         public let name: String
         public let label: String
         public let listenPort: UInt16
+        /// True when this phone announces ANOTHER device - a peer it verified
+        /// over same-LAN discovery (#270). The router otherwise dials the
+        /// request's source address (#252), which here is this phone, not the
+        /// leg.
+        public let delegated: Bool
 
         public init(consoleHost: String, token: String, name: String,
-                    label: String, listenPort: UInt16) {
+                    label: String, listenPort: UInt16, delegated: Bool = false) {
             self.consoleHost = consoleHost
             self.token = token
             self.name = name
             self.label = label
             self.listenPort = listenPort
+            self.delegated = delegated
         }
 
         public var isUsable: Bool {
@@ -72,13 +78,16 @@ public actor LegAnnouncer {
             // could dial, and announcing a wrong one is worse than silence.
             return .refused("no local address to announce")
         }
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "name": config.name,
             "host": address,
             "port": Int(config.listenPort),
             "label": config.label,
             "lease_s": Self.leaseSeconds,
         ]
+        // Absent rather than false for a phone announcing itself, so the
+        // request it sends is byte for byte the one the router already knows.
+        if config.delegated { body["delegated"] = true }
         return await post("/api/legs/announce", body, config)
     }
 

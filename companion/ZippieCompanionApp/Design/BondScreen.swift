@@ -17,6 +17,7 @@ struct BondScreen: View {
     private static let rumViewName = "Bond"
 
     @ObservedObject var model: BondModel
+    @ObservedObject var discovery: PeerDiscoveryService
 
     var body: some View {
         // NAVIGATION LIVES HERE, not around the TabView. A stack per tab is
@@ -47,7 +48,8 @@ struct BondScreen: View {
                             DiagnosticsScreen(
                                 consoleHost: Settings.consoleCandidates
                                     .compactMap { URL(string: $0.url)?.host }
-                                    .first)
+                                    .first,
+                                onPairingChanged: { discovery.restart() })
                         } label: {
                             Image(systemName: "stethoscope")
                                 .accessibilityLabel("Diagnostics")
@@ -77,6 +79,11 @@ struct BondScreen: View {
                                    labels: model.legLabels)
                 }
                 legs
+                // Below the legs, not among them: these are devices that COULD
+                // be legs, and mixing the two would blur the one line the leg
+                // list exists to draw.
+                NearbyPeers(discovery: discovery, paths: model.bond?.paths ?? [])
+                    .padding(.top, Space.section)
                 if model.budget != nil { budget }
                 footer
             }

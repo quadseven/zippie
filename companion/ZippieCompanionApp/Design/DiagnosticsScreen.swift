@@ -15,8 +15,9 @@ struct DiagnosticsScreen: View {
 
     @StateObject private var model: DiagnosticsModel
 
-    init(consoleHost: String?) {
-        _model = StateObject(wrappedValue: DiagnosticsModel(consoleHost: consoleHost))
+    init(consoleHost: String?, onPairingChanged: @escaping () -> Void = {}) {
+        _model = StateObject(wrappedValue: DiagnosticsModel(consoleHost: consoleHost,
+                                                            onPairingChanged: onPairingChanged))
     }
 
     var body: some View {
@@ -24,6 +25,7 @@ struct DiagnosticsScreen: View {
             header
             rows
             tokenSection
+            pairingSection
             refresh
         }
         .task { await model.measure() }
@@ -103,6 +105,40 @@ struct DiagnosticsScreen: View {
                + "state directory. Without a write token, this phone cannot "
                + "join the bond. It is held in this phone's keychain and is "
                + "never shown again once stored.")
+        }
+    }
+
+    private var pairingSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionHead(title: "Pairing")
+
+            Readout(label: "On this phone",
+                    value: model.hasPairing ? "stored" : "not stored",
+                    tone: model.hasPairing ? Ink.primary : Ink.degraded)
+            Hairline()
+            SecretRow(label: "Bundle", text: $model.pairingEntry)
+
+            HStack(spacing: Space.snug) {
+                ActionButton(title: "Store bundle", role: .quiet,
+                             enabled: !model.pairingEntry.isEmpty) {
+                    model.savePairing()
+                }
+                if model.hasPairing {
+                    ActionButton(title: "Forget", role: .quiet) { model.forgetPairing() }
+                }
+            }
+            .padding(.top, Space.snug)
+
+            if let error = model.pairingError {
+                Note(text: error, tone: .warning)
+            }
+
+            Note(text: "This phone's pairing credential and the discovery roster "
+               + "(zippie-clienthome -discovery-roster), as one JSON bundle. With "
+               + "it, this phone proves itself "
+               + "to other zippie devices on the same wifi and checks theirs "
+               + "before offering them as legs. Held in the keychain and never "
+               + "shown again once stored.")
         }
     }
 

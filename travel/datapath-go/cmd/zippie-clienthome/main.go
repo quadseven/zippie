@@ -19,15 +19,16 @@
 package main
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"syscall"
 	"time"
@@ -35,22 +36,22 @@ import (
 	"github.com/quadseven/zippie-datapath/zippie"
 )
 
-// clientSpec is one paired phone. Provisioned out of band until the pairing
-// ceremony exists (infra#2251) - which is a UX gap, not a security one: the
-// key is a real credential either way.
-type clientSpec struct {
-	ID   uint32 `json:"id"`
-	Name string `json:"name"`
-	Key  string `json:"key_hex"`
-}
-
 func main() {
 	listen := flag.String("listen", ":51920", "UDP address for phone clients")
 	tunName := flag.String("tun", "zippie0", "TUN device to write decapsulated packets to")
 	clientsPath := flag.String("clients", "/etc/zippie/clients.json", "paired clients")
 	adminAddr := flag.String("admin", ":8788", "status endpoint")
 	reorderMS := flag.Int("reorder-ms", 250, "reorder deadline")
+	discoveryRoster := flag.Bool("discovery-roster", false,
+		"print the roster phones verify LAN peers against (discovery keys only) and exit")
 	flag.Parse()
+
+	if *discoveryRoster {
+		if err := printDiscoveryRoster(*clientsPath, os.Stdout); err != nil {
+			log.Fatalf("discovery roster: %v", err)
+		}
+		return
+	}
 
 	registry, names, err := loadClients(*clientsPath)
 	if err != nil {
@@ -169,42 +170,41 @@ func send(sock *net.UDPConn, datagrams []zippie.Datagram) {
 	}
 }
 
+// loadClients reads the paired-device roster. Parsing and validation live in
+// zippie.ParseRoster, shared with the phones that verify peers on the LAN, so
+// home and a phone can never disagree about which entries are valid.
 func loadClients(path string) (*zippie.ClientRegistry, []string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, err
 	}
-	var specs []clientSpec
-	if err := json.Unmarshal(raw, &specs); err != nil {
-		return nil, nil, fmt.Errorf("parse: %w", err)
+	roster, err := zippie.ParseRoster(raw)
+	if err != nil {
+		return nil, nil, err
 	}
-	reg := zippie.NewClientRegistry()
 	var names []string
-	for _, s := range specs {
-		if s.ID == 0 {
-			return nil, nil, fmt.Errorf("client %q has id 0, which home cannot "+
-				"tell from an unset field", s.Name)
-		}
-		key, err := hex.DecodeString(s.Key)
-		if err != nil {
-			return nil, nil, fmt.Errorf("client %q: bad key_hex: %w", s.Name, err)
-		}
-		if len(key) < 16 {
-			return nil, nil, fmt.Errorf("client %q: key is %d bytes, want >= 16",
-				s.Name, len(key))
-		}
-		// SEALED, always. A client registered without encryption would be
-		// refused by its own phone anyway (the downgrade guard cuts both ways),
-		// and quietly registering a plaintext peer is not a thing this command
-		// should make possible.
-		id, err := zippie.NewSealedIdentity(s.ID, key)
-		if err != nil {
-			return nil, nil, err
-		}
-		reg.Add(id)
-		names = append(names, fmt.Sprintf("%s(%d)", s.Name, s.ID))
+	for id, name := range roster.Names {
+		names = append(names, fmt.Sprintf("%s(%d)", name, id))
 	}
-	return reg, names, nil
+	sort.Strings(names)
+	return roster.Registry, names, nil
+}
+
+// printDiscoveryRoster writes the roster a phone's pairing bundle carries for
+// same-LAN discovery (#270): these clients with every key replaced by its
+// one-way discovery key, so the bundle verifies peers and cannot speak the
+// datapath.
+func printDiscoveryRoster(path string, w io.Writer) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	out, err := zippie.DiscoveryRoster(raw)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(w, "%s\n", out)
+	return err
 }
 
 // serveAdmin exposes the same shape of status the travel agent serves, so one

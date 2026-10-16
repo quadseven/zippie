@@ -19,6 +19,12 @@
 <restrictions xmlns:android="http://schemas.android.com/apk/res/android">
 
     <restriction
+        android:key="peerPairing"
+        android:title="@string/mc_peer_pairing_title"
+        android:description="@string/mc_peer_pairing_desc"
+        android:restrictionType="string" />
+
+    <restriction
         android:key="announceToken"
         android:title="@string/mc_token_title"
         android:description="@string/mc_token_desc"

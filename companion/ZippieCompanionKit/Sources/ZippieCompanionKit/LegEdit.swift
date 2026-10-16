@@ -506,9 +506,15 @@ public struct ConsoleWriteToken: Sendable {
     public static let shared = ConsoleWriteToken(service: "app.zippie.companion.console")
 
     private let service: String
-    private let account = "console-write-token"
+    private let account: String
 
-    public init(service: String) { self.service = service }
+    /// `account` separates items under one service. The default is the write
+    /// token's; same-LAN discovery (#270) keeps its pairing bundle in its own
+    /// item through the same keychain code rather than a second copy of it.
+    public init(service: String, account: String = "console-write-token") {
+        self.service = service
+        self.account = account
+    }
 
     /// A pasted token, cleaned up, or nil when there is nothing usable.
     ///

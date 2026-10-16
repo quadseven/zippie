@@ -229,6 +229,8 @@ class MainActivity : ComponentActivity() {
                                         state = state,
                                         onRefresh = model::refresh,
                                         onOpenDiagnostics = { showDiagnostics = true },
+                                        onAdoptPeer = model::adoptPeer,
+                                        onReleasePeer = model::releasePeer,
                                         budgetStandDown = remember {
                                             BootConfigStore.budgetStandDown(this@MainActivity)
                                         },
