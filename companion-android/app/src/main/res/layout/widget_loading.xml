@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What the launcher shows between placing the widget and Glance's first frame.
+
+  OWN FILE, DELIBERATELY. Glance ships `glance_default_loading_layout` and
+  every sample points `initialLayout` at it, which works - AAPT resolves
+  `@layout/` against the merged resource table. But it is a resource NAME in
+  someone else's artifact, and this project's rule is that a stranger must be
+  able to clone and build without depending on a detail of a dependency they did
+  not choose. Twelve lines removes that.
+
+  EMPTY ON PURPOSE, AND IT IS ONLY EVER ON SCREEN FOR A FEW FRAMES. The one
+  thing it must not do is state anything: a loading layout that drew a
+  plausible "Carrying" would be `neverStateUnmeasured` broken in the one place
+  nobody is looking closely enough to catch it.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent" />

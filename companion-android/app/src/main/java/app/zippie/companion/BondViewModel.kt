@@ -135,6 +135,7 @@ class BondViewModel(app: Application) : AndroidViewModel(app) {
             when (result) {
                 is ConsoleResult.Ok -> {
                     val status = result.status
+                    publishBond(context, status, result.rawPayload)
                     val rows = BondLegs.rows(status, config.listenPort, localIp)
                     // STAMPED WITH THIS PHONE'S CLOCK, not the router's, because
                     // the interval a rate is computed over is the interval
@@ -165,6 +166,7 @@ class BondViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
                 is ConsoleResult.Failed -> {
+                    publishBond(context, null, null)
                     // The last good snapshot is DROPPED rather than left on
                     // screen pretending to be current. A bond that cannot be
                     // observed is not the same as a bond that is fine.
@@ -206,6 +208,41 @@ class BondViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+    }
+
+    /**
+     * Record what the console answered with, for the home-screen widget.
+     *
+     * THE WIDGET CANNOT FETCH IT. A widget updates in whatever process the
+     * launcher happens to start, which is frequently a FRESH one, and this poll
+     * is the only thing that can keep that record moving - so skipping the
+     * write would leave the medium size showing the this-phone row forever
+     * while looking entirely healthy.
+     *
+     * `status == null` means every address failed. Clearing rather than leaving
+     * the last good bond on disk matches the screen's own rule, which drops it
+     * rather than showing something that stopped being true; a widget aging the
+     * same record out over twenty seconds instead would say the same thing much
+     * more slowly, and the person reading the home screen is not the person who
+     * can see the console error.
+     *
+     * Best-effort by construction: [RelayBondFile.publish] never throws, and a
+     * full disk must not be the reason the status screen stops updating.
+     */
+    private fun publishBond(
+        context: android.content.Context,
+        status: BondStatus?,
+        rawPayload: String?,
+    ) {
+        if (status == null || rawPayload.isNullOrEmpty()) {
+            RelayBondStore.clear(context)
+            return
+        }
+        RelayBondStore.publish(
+            context,
+            WidgetBondSnapshot(status, System.currentTimeMillis()),
+            rawPayload,
+        )
     }
 
     /**
