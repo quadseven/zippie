@@ -248,6 +248,13 @@ def test_agent_dashboard_forbids_serving_apks(monkeypatch):
     handler.do_GET()
     assert errors == [(403, "serving APKs from agent dashboard is forbidden")]
 
+    # The suffix match lowercases the path, so an uppercase extension
+    # must be refused too, not fall through to a 404.
+    errors.clear()
+    handler.path = "/zippie-companion-0.1.0-TESTKEY.APK"
+    handler.do_GET()
+    assert errors == [(403, "serving APKs from agent dashboard is forbidden")]
+
     errors.clear()
     handler.path = "/api/unknown"
     handler.do_GET()
