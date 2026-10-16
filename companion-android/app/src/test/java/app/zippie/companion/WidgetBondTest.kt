@@ -334,4 +334,107 @@ class WidgetBondTest {
             rows,
         )
     }
+
+    // --------------------------------------------------- stateOf tests ---
+
+    /** [stateOf] is internal and tested indirectly via [legsOfBond], but a
+     *  direct test pins the exact precedence that [legsOfBond] depends on. */
+    @Test
+    fun `stateOf returns reserve when held in reserve`() {
+        val p = path("lte", label = "SIM", weight = 0, tier = 3)
+        val activeTier = 1
+        val state = WidgetContent.stateOf(p, activeTier)
+        assertEquals(WidgetContent.Leg.State.RESERVE, state)
+    }
+
+    @Test
+    fun `stateOf returns carrying when path is carrying`() {
+        val p = path("wifi", label = "Cafe", weight = 100, inBond = true)
+        val state = WidgetContent.stateOf(p, activeTier = 1)
+        assertEquals(WidgetContent.Leg.State.CARRYING, state)
+    }
+
+    @Test
+    fun `stateOf returns not in bond when inBond is false`() {
+        val p = path("lte", label = "SIM", weight = 100, inBond = false)
+        val state = WidgetContent.stateOf(p, activeTier = 1)
+        assertEquals(WidgetContent.Leg.State.NOT_IN_BOND, state)
+    }
+
+    @Test
+    fun `stateOf returns down when state is down`() {
+        val p = path("wifi", label = "Cafe", state = "down", weight = 0)
+        val state = WidgetContent.stateOf(p, activeTier = 1)
+        assertEquals(WidgetContent.Leg.State.DOWN, state)
+    }
+
+    @Test
+    fun `stateOf returns present not carrying for up with no weight`() {
+        val p = path("wifi", label = "Cafe", state = "up", weight = 0)
+        val state = WidgetContent.stateOf(p, activeTier = 1)
+        assertEquals(WidgetContent.Leg.State.PRESENT_NOT_CARRYING, state)
+    }
+
+    // --------------------------------------------------- labelOf tests ---
+
+    /** [labelOf] is internal and tested indirectly via [legsOfBond], but a
+     *  direct test pins the precedence of label vs name. */
+    @Test
+    fun `labelOf prefers label over name`() {
+        val p = path("some-internal-id", label = "Lone SIM")
+        val label = WidgetContent.labelOf(p)
+        assertEquals("Lone SIM", label)
+    }
+
+    @Test
+    fun `labelOf falls back to name when label is empty`() {
+        val p = path("some-internal-id", label = "")
+        val label = WidgetContent.labelOf(p)
+        assertEquals("some-internal-id", label)
+    }
+
+    @Test
+    fun `labelOf falls back to Unnamed leg when both are empty`() {
+        val p = path("", label = "")
+        val label = WidgetContent.labelOf(p)
+        assertEquals("Unnamed leg", label)
+    }
+
+    @Test
+    fun `labelOf falls back to name when label is null`() {
+        val p = path("some-internal-id", label = null)
+        val label = WidgetContent.labelOf(p)
+        assertEquals("some-internal-id", label)
+    }
+
+    @Test
+    fun `labelOf falls back to Unnamed leg when label is empty and name is null`() {
+        val p = BondStatus.Path(
+            name = null,
+            label = "",
+            state = "up",
+            tier = 1,
+            effectiveWeight = 0,
+            rttMs = null,
+            lossPct = null,
+            txBytes = null,
+            rxBytes = null,
+            linkTxBytes = null,
+            linkRxBytes = null,
+            interfaceName = "br-lan",
+            lastError = null,
+            neverHandshaked = null,
+            shadowedInterfaces = null,
+            relayEndpoint = null,
+            maxKbps = null,
+            costClass = null,
+            monthlyCapGb = null,
+            usageGb = null,
+            overSoftLimit = null,
+            inBond = null,
+        )
+        val label = WidgetContent.labelOf(p)
+        assertEquals("Unnamed leg", label)
+    }
+
 }
