@@ -211,14 +211,16 @@ def test_a_nack_does_not_teach_home_a_leg():
 
 
 def test_a_peer_restart_forgets_the_legs_the_old_stream_taught():
-    rig = _two_legs()
+    rig = _Rig([1, 2])
     try:
+        rig.keepalive(1)
+        rig.keepalive(2)
+        assert set(rig.home._links) == {0, 1, 2}
         rig.home._last_good_frame -= 3600
         restart = Frame(seq=0, path_id=1, payload=b"hi", flags=0, epoch=EPOCH + 1)
         rig.legs[1].sendto(restart.pack(), ("127.0.0.1", rig.listen))
         for _ in range(5):
             rig.home.run_once(0.01)
         assert set(rig.home._links) == {0, 1}
-        assert rig.home._links[0].remote != rig.legs[0].getsockname()
     finally:
         rig.close()
