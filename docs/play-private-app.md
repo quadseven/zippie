@@ -1,5 +1,10 @@
 # Publishing the companion as a private app
 
+**Superseded 2026-10-16.** FleetDM is decommissioned (infra#5389): its tunnel
+routes, workloads and data are gone, and Muster replaces it. The Fleet steps
+below are history. The bundle build and the managed Play notes still hold for
+any EMM that installs private apps.
+
 Fleet installs a custom Android app only as a **private app through managed
 Google Play**. This is the runbook for getting there. Written 2026-08-17, when
 the bundle first existed.
@@ -148,8 +153,6 @@ the remaining migration steps are ordinary work rather than blocked:
    house WAN, so the household keeps internet while the bond carries nothing.
 3. `mdm.ts.example-home.invalid` retires last, once nothing points at it.
 
-See `docs/headwind-to-fleet-migration.md` for why that order and not the obvious
-one.
 
 ## The managed-configuration surface
 
