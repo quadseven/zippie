@@ -42,6 +42,11 @@ DEFAULT_LEASE_S = 45.0
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$")
 
 
+def is_leg_name(name: str) -> bool:
+    """Whether `name` may name a leg that arrived over the network."""
+    return bool(_NAME_RE.match(name or ""))
+
+
 @dataclass
 class DynamicLeg:
     name: str
@@ -114,7 +119,7 @@ class DynamicLegs:
         comes off the network rather than out of a file an operator wrote. A
         name that is not a plain slug would land in metric tags and path keys.
         """
-        if not _NAME_RE.match(name or ""):
+        if not is_leg_name(name):
             raise ValueError("name must be 2-32 chars of a-z, 0-9 and dashes")
         if not _is_private_v4(host):
             # The router dials this address on its own LAN. A public address

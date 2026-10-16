@@ -478,6 +478,22 @@ otherwise. A phone on two networks cannot know which of its addresses this
 router can route to; the router does not have to guess, because the packet
 demonstrably arrived from somewhere.
 
+Announcing needs the console write token. A phone plugged in by ethernet that
+does not have it yet can ask for it (`zippie/pairing.py`):
+
+```
+  phone     --POST /api/legs/pair {name, link: ethernet}----->  console
+            <--pending + a six-digit code, shown on the phone--
+  operator  --POST /api/legs/pair/approve {name, code} (token)->  console
+  phone     --POST /api/legs/pair (again)--------------------->  console
+            <--approved + the token, once, to the same address-
+```
+
+The operator types the code off the phone, which is what proves they are
+holding it. The code is never published in `/api/status`, which only lists
+pending requests. `link` is the phone's own claim, so the ethernet-only rule
+limits who is offered the flow. It does not secure anything.
+
 ## 11. The relay, and the phone's own honesty
 
 The relay app is a dumb hop, but it is also the surface a person looks at when

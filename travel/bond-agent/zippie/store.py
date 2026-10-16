@@ -428,15 +428,16 @@ class LegStore:
         "label",
         "enabled",
     }
-    #: The carrier's cycle day. NOT descriptive and not overridable: it names
-    #: no field of PathConfig, so nothing copies it onto a leg's config, but it
-    #: decides which billing period usage is counted against and therefore when
-    #: a cap - and the demotion behind it - resets. It was already accepted
-    #: here and already sent by the phone app, and until now nothing read it.
+    #: The carrier's cycle day. NOT descriptive and not overridable: nothing
+    #: copies it onto a leg's config, but it decides which billing period usage
+    #: is counted against and therefore when a cap - and the demotion behind it
+    #: - resets. Read by BondAgent._billing_days, which falls back to
+    #: PathConfig.billing_day when this file has none.
     CYCLE = frozenset({"billing_day"})
     #: Descriptive only. Never affects routing; exists so the dashboard can be
-    #: accurate about what a leg actually IS.
-    DESCRIPTIVE = {"carrier", "plan_name", "plan_type", "notes"}
+    #: accurate about what a leg actually IS. Shown in place of the matching
+    #: PathConfig field when present.
+    DESCRIPTIVE = {"carrier", "plan_name", "plan_type", "expected_kbps", "notes"}
 
     def __init__(self, state_dir: str | Path) -> None:
         self.path = Path(state_dir) / "legs.json"

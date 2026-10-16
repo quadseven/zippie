@@ -144,6 +144,22 @@ class PathConfig:
     # exactly, so an existing config is unaffected until an operator opts a
     # leg in. See agent.py's apply_auto_cost_class for how this is read.
     free_ssids: list[str] = field(default_factory=list)
+    # THE PLAN THIS LEG RIDES ON, as the operator typed it. No mobile OS hands
+    # an app a plan name, a cap or a billing cycle, so these are entered once
+    # rather than detected, and a typed value is more accurate than a guess.
+    # legs.json (written by the phone app) wins over these for display - see
+    # BondAgent._path_status. Empty / 0 means "not described".
+    #
+    # Descriptive only - never read by routing - except billing_day, which is
+    # the carrier's cycle day and decides which period usage counts against.
+    # 0 means the calendar month. The cap itself is monthly_cap_gb above.
+    carrier: str = ""
+    plan_name: str = ""
+    plan_type: str = ""
+    billing_day: int = 0
+    # What the operator expects this line to carry, in kbit/s. NOT a cap and
+    # not a measurement: it is what a dashboard compares the measured rate to.
+    expected_kbps: int = 0
 
 
 @dataclass
@@ -933,6 +949,13 @@ class PathRuntime:
             # The deliberate ceiling, so a dashboard can say "capped at 500
             # kbit/s" instead of leaving a slow leg looking broken.
             "max_kbps": self.config.max_kbps,
+            # What the line IS, beside what it is doing. Operator-entered; see
+            # PathConfig.carrier.
+            "carrier": self.config.carrier,
+            "plan_name": self.config.plan_name,
+            "plan_type": self.config.plan_type,
+            "billing_day": self.config.billing_day,
+            "expected_kbps": self.config.expected_kbps,
             "usage_gb": round(self.usage_gb, 3),
             "usage_period_start": self.usage_period_start,
             "previous_period_usage_gb": round(self.previous_usage_gb, 3),

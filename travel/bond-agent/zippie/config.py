@@ -322,6 +322,11 @@ def parse_config(
                 tier=int(raw.get("tier", 1)),
                 label=str(raw.get("label", "")),
                 free_ssids=_free_ssids(raw.get("free_ssids")),
+                carrier=str(raw.get("carrier", "")),
+                plan_name=str(raw.get("plan_name", "")),
+                plan_type=str(raw.get("plan_type", "")),
+                billing_day=int(raw.get("billing_day", 0) or 0),
+                expected_kbps=int(raw.get("expected_kbps", 0) or 0),
             )
         )
 
