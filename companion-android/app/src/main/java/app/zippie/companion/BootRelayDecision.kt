@@ -1,5 +1,8 @@
 package app.zippie.companion
 
+import java.time.Instant
+import java.time.ZoneId
+
 /**
  * Whether BootReceiver should start RelayService, and why - or why not.
  *
@@ -40,14 +43,17 @@ sealed class BootRelayDecision {
 
     companion object {
         /**
-         * Proximity first, budget second.
+         * Read the local budget before considering router proximity.
          *
-         * PROXIMITY FIRST because it is the correctness gate: contributing
-         * away from the router holds a cellular socket open for a bond that
-         * cannot hear it (see BondMode.kt - RouterProximity), which is true
-         * whether or not there is any budget left to spend on it.
+         * BUDGET FIRST because an exhausted local ledger can be checked for
+         * free. Probing the router before its period rolls over only spends
+         * radio and cannot change the answer.
          *
-         * BUDGET SECOND, and still checked even when the router is right
+         * PROXIMITY SECOND, because contributing away from the router holds a
+         * cellular socket open for a bond that cannot hear it. The probe is
+         * only reached while the local budget allows relaying.
+         *
+         * An exhausted cap is still checked even when the router is right
          * there - AC5 in #54: "an unattended phone that comes back must not
          * spend a month's cellular because a counter reset." Refusing to
          * start at all is the strongest available form of "stays exhausted"
@@ -60,7 +66,15 @@ sealed class BootRelayDecision {
             proximity: RouterProximity,
             budgetAllowed: Boolean,
             budgetReason: String?,
+            budgetRetryDelayMs: Long? = null,
         ): BootRelayDecision {
+            if (!budgetAllowed) {
+                return Skip(
+                    budgetReason ?: "data budget already exhausted",
+                    retryable = true,
+                    retryAfterMs = budgetRetryDelayMs,
+                )
+            }
             if (proximity != RouterProximity.LOCAL) {
                 // RETRYABLE, and that word is the whole of #176.
                 //
@@ -80,31 +94,6 @@ sealed class BootRelayDecision {
                         "from the router holds a cellular socket open for a bond that " +
                         "cannot hear it",
                     retryable = true,
-                )
-            }
-            if (!budgetAllowed) {
-                // RETRYABLE, SLOWLY. The old comment here said an exhausted cap
-                // "does not become false because a router appeared", which is
-                // true, and then concluded never to re-ask, which does not
-                // follow. A cap does not move because a router appeared - it
-                // moves because the BILLING PERIOD ROLLS OVER, and nothing was
-                // re-asking. A phone that stood down on budget stayed down until
-                // a human opened the app, however many days later the cap reset.
-                //
-                // Exactly the reasoning error #176 fixed one branch above: a
-                // permanent decision taken on a reading guaranteed to change.
-                //
-                // The old comment's real point survives as the CADENCE. Re-asking
-                // costs a local counter read (free) plus a console probe over
-                // wifi (free, and it is the same probe the proximity branch
-                // already makes), but it also wakes the radio, so it happens
-                // hourly rather than on the 15-second boot ladder. An hour is
-                // small against a monthly cap and still returns the leg on its
-                // own, which is the whole point.
-                return Skip(
-                    budgetReason ?: "data budget already exhausted",
-                    retryable = true,
-                    retryAfterMs = BUDGET_RECHECK_MS,
                 )
             }
             return Start
@@ -135,17 +124,21 @@ sealed class BootRelayDecision {
          * So it backs off to a slow poll and stays there. Once every 15 minutes,
          * forever, is cheaper than one person driving somewhere to tap a button.
          */
-        /**
-         * How long to leave a budget stand-down before re-asking.
-         *
-         * Not the period boundary itself, deliberately. The boundary is knowable
-         * - `usage_period_start` is published - but a phone that sleeps through
-         * a single alarm would then wait a whole further period, and an alarm
-         * set weeks out is exactly the kind nothing guarantees. An hourly poll
-         * cannot miss a rollover by more than an hour and needs no clock
-         * arithmetic to be right.
-         */
-        const val BUDGET_RECHECK_MS = 3_600_000L
+        /** Schedule only a local ledger re-read, at the earliest applicable reset. */
+        fun budgetRetryAfterMs(
+            verdict: BudgetVerdict,
+            now: Instant = Instant.now(),
+            zone: ZoneId = ZoneId.systemDefault(),
+        ): Long {
+            val today = now.atZone(zone).toLocalDate()
+            val nextBoundary = when (verdict) {
+                is BudgetVerdict.DailyExhausted -> today.plusDays(1).atStartOfDay(zone).toInstant()
+                is BudgetVerdict.MonthlyExhausted ->
+                    today.withDayOfMonth(1).plusMonths(1).atStartOfDay(zone).toInstant()
+                BudgetVerdict.Allowed -> now
+            }
+            return (nextBoundary.toEpochMilli() - now.toEpochMilli()).coerceAtLeast(0L)
+        }
 
         fun retryDelayMs(attempt: Int): Long? = when {
             attempt < 1 -> null          // attempt 0 is not a retry
