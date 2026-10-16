@@ -453,6 +453,10 @@ MAX_LEARNED_LEGS = 16
 # silent leg at the same pace; PEER_SILENT_S is the "the peer is gone" signal
 # and is far too slow to be the point at which a leg stops being sprayed to.
 LEG_SILENT_S = 6.0
+# A learned leg silent this long is forgotten outright (while another leg is
+# still heard), so junk ids a stranger got past the gates cannot hold the table
+# full and lock a genuine leg out of it.
+LEG_FORGET_S = PEER_SILENT_S
 # How often learned-leg weights and standdowns are re-judged. A review per
 # tick would re-derive the same answer thousands of times a second.
 LEG_REVIEW_S = 1.0
@@ -1645,7 +1649,8 @@ class Transport:
         The discipline is the travel side's: a leg nobody has heard from is
         withdrawn from the rotation so traffic degrades onto the others instead
         of stalling behind it, and it returns the moment a frame arrives on it
-        (`_credit_leg`, receiving is proof). NEVER THE LAST LEG: with every leg
+        (`_credit_leg`, receiving is proof). One silent past LEG_FORGET_S is
+        forgotten altogether and learned afresh if it ever speaks again. NEVER THE LAST LEG: with every leg
         silent there is nothing to stand aside for, and withdrawing them all
         would turn a quiet peer into a bond that cannot answer when it wakes.
         """
@@ -1654,11 +1659,24 @@ class Transport:
             return
         self._leg_review_at = now + LEG_REVIEW_S
         heard = [leg for leg in self._learned if self._leg_heard_within(leg, LEG_SILENT_S)]
-        for leg in self._learned:
+        for leg in sorted(self._learned):
             if leg in heard:
                 self.scheduler.set_weight(leg, self._leg_weight(leg, now))
-            elif heard:
+            elif not heard:
+                continue
+            elif self._leg_heard_within(leg, LEG_FORGET_S):
                 self.scheduler.set_healthy(leg, False)
+            else:
+                self._forget_leg(leg)
+
+    def _forget_leg(self, leg: int) -> None:
+        """Drop a learned leg. The listening link's own id keeps its socket: it
+        is only unscheduled, and is learned again if it is heard."""
+        if leg in self._shared:
+            self.remove_link(leg)
+            return
+        self.scheduler.remove_path(leg)
+        self._learned.discard(leg)
 
     def _leg_heard_within(self, leg: int, seconds: float) -> bool:
         age = self.link_rx_age_s(leg)

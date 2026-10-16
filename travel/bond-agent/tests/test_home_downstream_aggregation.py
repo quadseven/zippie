@@ -147,3 +147,20 @@ def test_a_weak_leg_gets_a_smaller_share():
     finally:
         home.close()
         travel.close()
+
+
+def test_a_long_silent_leg_is_forgotten_so_the_table_recovers():
+    clock = _Clock()
+    home, travel = _pair(2, clock)
+    try:
+        travel.send_keepalives()
+        _pump(home, travel)
+        travel.remove_link(0)
+        clock.now += 60.0
+        travel.send_keepalives()
+        _pump(home, travel)
+        assert home.learned_legs() == [1]
+        assert [p.path_id for p in home.scheduler.healthy_paths] == [1]
+    finally:
+        home.close()
+        travel.close()
