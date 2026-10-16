@@ -1,5 +1,9 @@
 package app.zippie.companion
 
+import android.content.Intent
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -52,6 +56,7 @@ fun RelayScreen(
     onStopRelay: () -> Unit,
     onStartClient: () -> Unit,
     onSaveToken: (String) -> Unit,
+    onRequestExemption: () -> Unit,
 ) {
     Column(
         Modifier
@@ -59,7 +64,7 @@ fun RelayScreen(
             .padding(horizontal = Space.margin, vertical = Space.roomy),
     ) {
         SectionTitle("This phone")
-        RelaySection(state, onStartRelay, onStopRelay, onSaveToken)
+        RelaySection(state, onStartRelay, onStopRelay, onSaveToken, onRequestExemption)
 
         Spacer(Modifier.height(Space.section))
         SectionTitle("Client mode")
@@ -84,6 +89,7 @@ private fun RelaySection(
     onStartRelay: () -> Unit,
     onStopRelay: () -> Unit,
     onSaveToken: (String) -> Unit,
+    onRequestExemption: () -> Unit,
 ) {
     val report = state.relay
     val stats = report?.stats
@@ -121,6 +127,27 @@ private fun RelaySection(
         style = Kind.caption,
         color = if (alarmed) Ink.down else Ink.secondary,
     )
+
+    Spacer(Modifier.height(Space.base))
+
+    // BATTERY OPTIMIZATION EXEMPTION WARNING AND PROMPT
+    // Only show if the report is live and the phone is contributing but not exempt
+    val batteryExemption = stats?.batteryExemption
+    if (batteryExemption?.isAtRisk == true) {
+        Spacer(Modifier.height(Space.base))
+        Text(
+            BatteryExemption.AT_RISK_REASON,
+            style = Kind.caption,
+            color = Ink.down,
+        )
+        Spacer(Modifier.height(Space.base))
+        OutlinedButton(
+            onClick = onRequestExemption,
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = Ink.live),
+        ) {
+            Text("Open Battery Settings", style = Kind.label)
+        }
+    }
 
     Spacer(Modifier.height(Space.base))
     // ONE CONTROL, decided by the verdict already computed above.
