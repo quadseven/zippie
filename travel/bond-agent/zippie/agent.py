@@ -284,7 +284,13 @@ _WIREGUARD_EMPTY_TRANSPORT_BYTES = 32
 def projected_idle_mb_per_day(
     metered_legs: int, probe_interval_s: float, keepalive_s: int
 ) -> float:
-    """Upper-bound packet-mode idle floor, including IPv4 and UDP headers."""
+    """Estimate packet-mode idle traffic, including IP/UDP and RTT-hint bytes.
+
+    Each probe request/reply pair costs two transport frames (HEADER_LEN
+    each), two IPv4/UDP headers, and two payload bytes for the RTT hint in the
+    request. The reply has no payload. Periodic WireGuard keepalives are
+    accounted separately below.
+    """
     if metered_legs <= 0:
         return 0.0
     seconds_per_day = 86400
