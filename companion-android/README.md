@@ -201,8 +201,8 @@ carry anything (#2246).
 | workflow | trigger | key | artifact |
 |---|---|---|---|
 | `check.android.yml` | every PR | debug (SDK's shared key) | test reports |
-| `check.android-signing.yml` | every PR | **throwaway**, made and destroyed in the job | `zippie-companion-release-apk-THROWAWAY-KEY` |
-| `app.companion-android.release.yml` | **manual dispatch only** | the real one, from repo secrets | `zippie-companion-release-apk-signed` |
+| `check.android-signing.yml` | every PR | **throwaway**, made and destroyed in the job | `zippie-companion-release-apk-THROWAWAY-KEY` (the `.aab` is built and verified too, never uploaded) |
+| `app.companion-android.release.yml` | **manual dispatch only** | the real one, from repo secrets | `zippie-companion-release-apk-signed`, `zippie-companion-release-aab` |
 
 Both signed builds go through `ci/build-signed-apk.sh`, which is the single
 place the version numbering and the post-build checks live. It refuses to

@@ -18,6 +18,12 @@ Rebuild it any time with the manual workflow
 `app.companion-android.release.yml`, `keystore: release`; the bundle uploads as
 the `zippie-companion-release-aab` artifact.
 
+Every PR that touches the app also builds and verifies a bundle, in
+`check.android-signing.yml`, with the throwaway key (#228). That bundle is never
+uploaded: Play binds an app to its upload key for good, so it exists only to
+prove `bundleRelease` and the jarsigner check still pass before a release
+dispatch depends on them.
+
 The Android app carries **no compiled-in personal infrastructure**. Its defaults
 are empty strings and a CI ratchet (#208) fails the build if a host reappears.
 Everything it needs arrives by managed configuration.
