@@ -662,6 +662,12 @@ class PathRuntime:
     # consecutive 500 ms probes, and in route mode every weight change
     # re-hashes flows.
     rtt_ewma_ms: float | None = None
+    # Loss needs independent confirmation because a short keepalive window
+    # quantizes ordinary loss into readings that jump across the policy line.
+    # The streaks and active verdict belong to this leg, like RTT smoothing.
+    loss_degraded: bool = False
+    loss_bad_streak: int = 0
+    loss_good_streak: int = 0
     # TAIL latency: a peak-hold that decays. Deliberately NOT another average.
     #
     # rtt_ewma_ms exists to suppress variance, and that is right for weighting -

@@ -43,6 +43,7 @@ sealed class AutoStartDecision {
             managedAutoStart: Boolean,
             alreadyRunning: Boolean,
             hasUsableConfig: Boolean,
+            budgetAllowed: Boolean = true,
         ): AutoStartDecision = when {
             // NOT "the user has not said no". A phone must never begin relaying
             // because a key was missing - ManagedConfig.autoStart already
@@ -57,6 +58,8 @@ sealed class AutoStartDecision {
             // reports itself healthy. Refusing is louder than that.
             !hasUsableConfig ->
                 Stand("no usable console configuration to announce to")
+            !budgetAllowed ->
+                Stand("data budget is exhausted; waiting for the usage period to reset")
             else -> Start
         }
     }

@@ -229,6 +229,9 @@ class MainActivity : ComponentActivity() {
                                         state = state,
                                         onRefresh = model::refresh,
                                         onOpenDiagnostics = { showDiagnostics = true },
+                                        budgetStandDown = remember {
+                                            BootConfigStore.budgetStandDown(this@MainActivity)
+                                        },
                                     )
                                     Destination.RELAY -> RelayScreen(
                                         state = state,
@@ -300,6 +303,7 @@ class MainActivity : ComponentActivity() {
             // A relay with no console cannot announce, so it would forward into
             // the void and report itself healthy. Refusing says more.
             hasUsableConfig = cfg.consoleLanHost.isNotBlank(),
+            budgetAllowed = BootConfigStore.read(context).budgetVerdict.isAllowed,
         )
         // LOGGED EITHER WAY. The handset that exposed this defect wrote NOTHING
         // when it declined - no refusal, no reason - and that absence was the

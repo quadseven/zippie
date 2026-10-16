@@ -13,8 +13,9 @@ import Zippie
 /// THE OPPOSITE OF THE RELAY. The contributor path forwards the travel router's
 /// frames and captures nothing of this device's traffic - that is why the
 /// tunnel it installs is inert (`includedRoutes = []`). Here the tunnel is the
-/// point: every packet the phone sends is read off `packetFlow`, handed to the
-/// Go datapath, sprayed across whichever links are up, and reassembled at home.
+/// point: routed packets are read off `packetFlow`, handed to the Go datapath,
+/// sprayed across whichever links are up, and reassembled at home. When every
+/// path stops answering, the routes are released until a keepalive replies.
 ///
 /// WHAT PROTECTS IT. The datapath frames are sealed (AES-256-GCM, see seal.go)
 /// because the phone is originating its own IP packets across hotel wifi and a
@@ -52,6 +53,11 @@ final class ClientTunnel {
     private var socket: NWConnection?
     private let queue = DispatchQueue(label: "app.zippie.client", qos: .userInitiated)
     private var running = false
+    private var probeTimer: DispatchSourceTimer?
+    private var recovery = ClientRouteRecovery()
+    private var appliedRouteState = ClientRouteRecovery.State.capturing
+    private var applyingRoutes = false
+    var applyRouteState: ((ClientRouteRecovery.State, @escaping (Error?) -> Void) -> Void)?
 
     // MARK: - path observation (#64) and rebuild (#65)
 
@@ -79,15 +85,12 @@ final class ClientTunnel {
 
     // MARK: - settings
 
-    /// The capturing settings. Everything the phone sends goes through here.
-    ///
-    /// `includedRoutes = [default]` is the line that separates this from the
-    /// relay's inert tunnel, and it is worth being explicit about what it costs:
-    /// with this set, a datapath that stops carrying takes the phone's
-    /// connectivity with it. That is the correct behaviour for a VPN - the
-    /// alternative is traffic silently leaving in the clear - but it means a
-    /// dead extension is an outage, not a degradation.
-    static func networkSettings(_ config: ClientConfig) -> NEPacketTunnelNetworkSettings {
+    /// A released tunnel retains its interface but captures no phone traffic.
+    /// With the two-second probe cadence, routes are released within twelve
+    /// seconds of startup silence or seventeen seconds after the last reply,
+    /// plus the time iOS takes to apply the new settings.
+    static func networkSettings(_ config: ClientConfig,
+                                state: ClientRouteRecovery.State) -> NEPacketTunnelNetworkSettings {
         let s = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: config.homeHost)
 
         let ipv4 = NEIPv4Settings(addresses: [config.tunnelAddress],
@@ -98,15 +101,22 @@ final class ClientTunnel {
         // packet tunnel at a time. A phone in client mode with a full tunnel
         // and no tailnet route cannot reach any of the user's own
         // infrastructure.
-        ipv4.includedRoutes = config.routes.map {
+        ipv4.includedRoutes = state == .capturing ? config.routes.map {
             $0.isDefaultRoute ? NEIPv4Route.default()
                               : NEIPv4Route(destinationAddress: $0.address,
                                             subnetMask: $0.mask)
-        }
+        } : []
         // The home transport's own address must NOT go through the tunnel, or
         // the datapath's packets to home would be routed into the tunnel that
         // carries them - a loop that presents as total silence.
-        if let excluded = config.homeExcludedRoute {
+        //
+        // RELEASED excludes EVERYTHING, which covers the home address too: with
+        // no included routes and the default route excluded, every packet
+        // (the datapath's probes home among them) uses the phone's own
+        // network, so the phone keeps internet while the bond is unreachable.
+        if state == .released {
+            ipv4.excludedRoutes = [NEIPv4Route.default()]
+        } else if let excluded = config.homeExcludedRoute {
             ipv4.excludedRoutes = [excluded]
         }
         s.ipv4Settings = ipv4
@@ -122,7 +132,7 @@ final class ClientTunnel {
         // direction: the phone is still using its own network for everything
         // outside the routed ranges, and hijacking its resolver would break
         // captive portals and local discovery for no benefit.
-        if !config.dnsServers.isEmpty {
+        if state == .capturing && !config.dnsServers.isEmpty {
             let dns = NEDNSSettings(servers: config.dnsServers)
             dns.matchDomains = config.isFullTunnel ? [""] : ["ts.net"]
             s.dnsSettings = dns
@@ -184,6 +194,7 @@ final class ClientTunnel {
 
         try openLoopback(port: Int(client.localPort()))
         running = true
+        startProbing()
         readFromTunnel()
         #else
         throw ClientTunnelError.datapathMissing
@@ -192,6 +203,8 @@ final class ClientTunnel {
 
     func stop() {
         running = false
+        probeTimer?.cancel()
+        probeTimer = nil
         pathMonitor.cancel()
         socket?.cancel()
         socket = nil
@@ -199,6 +212,53 @@ final class ClientTunnel {
         datapath?.stop()
         datapath = nil
         #endif
+    }
+
+    private func startProbing() {
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now(), repeating: .seconds(2))
+        timer.setEventHandler { [weak self] in self?.probeHome() }
+        probeTimer = timer
+        timer.resume()
+    }
+
+    private func probeHome() {
+        guard running else { return }
+        #if canImport(Zippie)
+        datapath?.sendKeepalives()
+        let stats = datapath?.statsJSON() ?? "{}"
+        #else
+        let stats = "{}"
+        #endif
+        let desired: ClientRouteRecovery.State
+        do {
+            desired = try recovery.observe(statsJSON: stats)
+        } catch {
+            Self.log.error("client reachability stats invalid: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        guard desired != appliedRouteState, !applyingRoutes else { return }
+        guard let applyRouteState else {
+            Self.log.error("client route change has no settings handler")
+            return
+        }
+        applyingRoutes = true
+        applyRouteState(desired) { [weak self] error in
+            self?.queue.async {
+                guard let self else { return }
+                self.applyingRoutes = false
+                guard self.running else { return }
+                if let error {
+                    Self.log.error("client route change failed: \(error.localizedDescription, privacy: .public)")
+                } else {
+                    self.appliedRouteState = desired
+                    if let defaults = RelayConfiguration.sharedDefaults {
+                        ClientProtectionStore.write(desired, to: defaults)
+                    }
+                    Self.log.log("client routes: \(desired.rawValue, privacy: .public)")
+                }
+            }
+        }
     }
 
     // MARK: - path observation (#64) and rebuild (#65)
