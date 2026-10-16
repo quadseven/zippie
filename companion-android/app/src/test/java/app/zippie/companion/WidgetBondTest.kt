@@ -381,35 +381,58 @@ class WidgetBondTest {
      *  direct test pins the precedence of label vs name. */
     @Test
     fun `labelOf prefers label over name`() {
-        val p = path("lte", label = "Lone SIM", name = "some-internal-id")
+        val p = path("some-internal-id", label = "Lone SIM")
         val label = WidgetContent.labelOf(p)
         assertEquals("Lone SIM", label)
     }
 
     @Test
     fun `labelOf falls back to name when label is empty`() {
-        val p = path("lte", label = "", name = "some-internal-id")
+        val p = path("some-internal-id", label = "")
         val label = WidgetContent.labelOf(p)
         assertEquals("some-internal-id", label)
     }
 
     @Test
     fun `labelOf falls back to Unnamed leg when both are empty`() {
-        val p = path("", label = "", name = "")
+        val p = path("", label = "")
         val label = WidgetContent.labelOf(p)
         assertEquals("Unnamed leg", label)
     }
 
     @Test
     fun `labelOf falls back to name when label is null`() {
-        val p = path("lte", label = null, name = "some-internal-id")
+        val p = path("some-internal-id", label = null)
         val label = WidgetContent.labelOf(p)
         assertEquals("some-internal-id", label)
     }
 
     @Test
     fun `labelOf falls back to Unnamed leg when label is empty and name is null`() {
-        val p = path("", label = "", name = null)
+        val p = BondStatus.Path(
+            name = null,
+            label = "",
+            state = "up",
+            tier = 1,
+            effectiveWeight = 0,
+            rttMs = null,
+            lossPct = null,
+            txBytes = null,
+            rxBytes = null,
+            linkTxBytes = null,
+            linkRxBytes = null,
+            interfaceName = "br-lan",
+            lastError = null,
+            neverHandshaked = null,
+            shadowedInterfaces = null,
+            relayEndpoint = null,
+            maxKbps = null,
+            costClass = null,
+            monthlyCapGb = null,
+            usageGb = null,
+            overSoftLimit = null,
+            inBond = null,
+        )
         val label = WidgetContent.labelOf(p)
         assertEquals("Unnamed leg", label)
     }
