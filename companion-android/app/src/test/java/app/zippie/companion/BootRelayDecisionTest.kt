@@ -3,6 +3,9 @@ package app.zippie.companion
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 
 /**
  * The two gates issue #54's acceptance criteria name directly: router
@@ -91,16 +94,15 @@ class BootRelayDecisionTest {
         )
     }
 
-    /** Proximity is checked FIRST: a phone away from the router should say
-     *  so, not blame a budget that was never the reason it did not start. */
+    /** An exhausted local budget is checked before the network is touched. */
     @Test
-    fun `proximity is reported even when the budget would also have refused`() {
+    fun `an exhausted budget is reported without requiring a router probe`() {
         val decision = BootRelayDecision.decide(
             RouterProximity.REMOTE,
             budgetAllowed = false,
             budgetReason = "spent",
         )
-        assertTrue((decision as BootRelayDecision.Skip).reason.contains("REMOTE"))
+        assertEquals("spent", (decision as BootRelayDecision.Skip).reason)
     }
 
     // ------------------------------------------- the boot race (#176)
@@ -219,21 +221,37 @@ class BootRelayDecisionTest {
     // the leg stayed down until a human opened the app days later.
 
     @Test
-    fun `a budget stand-down waits on its own clock, not the boot ladder`() {
+    fun `a budget stand-down waits until its period rolls over`() {
         val skip = BootRelayDecision.decide(
             proximity = RouterProximity.LOCAL,
             budgetAllowed = false,
             budgetReason = "monthly cap reached",
         ) as BootRelayDecision.Skip
 
-        assertEquals(BootRelayDecision.BUDGET_RECHECK_MS, skip.retryAfterMs)
-        // The ladder starts at 15s and tops out at 15m. Climbing it toward a
-        // data cap just wakes the radio to re-read a number that cannot have
-        // moved.
-        assertTrue(
-            "a budget recheck must be far slower than the boot ladder",
-            skip.retryAfterMs!! > BootRelayDecision.retryDelayMs(99)!!,
+        val zone = ZoneId.of("UTC")
+        val now = Instant.parse("2026-10-15T12:00:00Z")
+        val delay = BootRelayDecision.budgetRetryAfterMs(
+            BudgetVerdict.MonthlyExhausted(500, 500), now, zone,
         )
+        val decision = BootRelayDecision.decide(
+            RouterProximity.UNREACHABLE,
+            budgetAllowed = false,
+            budgetReason = "monthly cap reached",
+            budgetRetryDelayMs = delay,
+        ) as BootRelayDecision.Skip
+        assertEquals(
+            Instant.parse("2026-11-01T00:00:00Z").toEpochMilli() - now.toEpochMilli(),
+            decision.retryAfterMs,
+        )
+    }
+
+    @Test
+    fun `daily budget stand-down schedules the next local day boundary`() {
+        val zone = ZoneId.of("UTC")
+        val now = Instant.parse("2026-10-15T23:59:00Z")
+        assertEquals(60_000L, BootRelayDecision.budgetRetryAfterMs(
+            BudgetVerdict.DailyExhausted(5, 5), now, zone,
+        ))
     }
 
     @Test
@@ -253,16 +271,23 @@ class BootRelayDecisionTest {
 
     @Test
     fun `a budget that resets while the phone sits idle lets the leg return`() {
-        // AC4, as a state machine rather than a wall clock: stand down while
-        // exhausted, and the moment the same question is asked again after a
-        // rollover, start. The retry that asks it is armed by the first branch.
+        // AC4: a real ledger resets across the period boundary, then the
+        // same boot decision starts without any human action.
+        val ledger = BudgetLedger(DataBudget(monthlyBytes = 5), LocalDate.of(2026, 10, 15))
+        ledger.record(5, LocalDate.of(2026, 10, 15))
+        val beforeRollover = ledger.verdict(LocalDate.of(2026, 10, 31))
         val exhausted = BootRelayDecision.decide(
-            RouterProximity.LOCAL, budgetAllowed = false, budgetReason = "cap reached",
+            RouterProximity.LOCAL,
+            budgetAllowed = beforeRollover.isAllowed,
+            budgetReason = beforeRollover.reason,
         )
         assertTrue((exhausted as BootRelayDecision.Skip).retryable)
 
+        val rolledVerdict = ledger.verdict(LocalDate.of(2026, 11, 1))
         val afterRollover = BootRelayDecision.decide(
-            RouterProximity.LOCAL, budgetAllowed = true, budgetReason = null,
+            RouterProximity.LOCAL,
+            budgetAllowed = rolledVerdict.isAllowed,
+            budgetReason = rolledVerdict.reason,
         )
         assertEquals(BootRelayDecision.Start, afterRollover)
     }

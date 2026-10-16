@@ -1,0 +1,26 @@
+name: Check - device drift
+
+on:
+  schedule:
+    - cron: '31 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    if: github.repository == 'quadseven/zippie'
+    runs-on: arc-zippie
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compare live devices with this checkout of main
+        env:
+          ZIPPIE_STATUS_URLS: ${{ secrets.ZIPPIE_STATUS_URLS }}
+        run: python3 scripts/check-device-drift.py

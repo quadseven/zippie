@@ -93,8 +93,8 @@ jobs:
         # AN ABSENT ROUTER IS NOT A BROKEN MERGE. This is a travel router; it
         # will be powered off, in a car, or on somebody else's network. Failing
         # main for that would train everybody to ignore this workflow, and the
-        # drift check on the router is what keeps the estate honest when a deploy
-        # never happens. So: unreachable is reported loudly and exits GREEN, and
+        # the control-plane drift check reports unreachable separately. So:
+        # unreachable is reported loudly and exits GREEN, and
         # only a router that answers and then fails its own proof turns this red.
         run: |
           set -euo pipefail
@@ -108,7 +108,7 @@ jobs:
             echo "::notice::the router answered at $HOST"
           else
             echo "reachable=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::the router did not answer at $HOST, so nothing was deployed. This is not a failure - the router is portable and is often off. travel/gl-mt3000/drift-check.sh runs ON the router and will report the resulting drift to Datadog the moment it comes back."
+            echo "::warning::the router did not answer at its configured target, so nothing was deployed. The control-plane drift check will compare its status when it becomes reachable."
           fi
 
       - name: Deploy, and let the script prove it

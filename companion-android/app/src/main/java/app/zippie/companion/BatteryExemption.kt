@@ -76,5 +76,18 @@ sealed class BatteryExemption {
             !isContributing -> NotNeeded
             else -> AtRisk(AT_RISK_REASON)
         }
+
+        /**
+         * The warning line for the relay screen, or null when there is nothing
+         * to say (#178 AC2). The decision and the data (RelayStats) existed;
+         * nothing displayed them, so a phone one setting away from a dead leg
+         * said nothing on its own screen.
+         *
+         * Orthogonal to the verdict by design (#267): the screen shows this
+         * WITHOUT touching the headline, so a carrying relay still warns and
+         * the warning never claims the phone is not carrying.
+         */
+        fun warningLine(exemption: BatteryExemption): String? =
+            (exemption as? AtRisk)?.reason
     }
 }
