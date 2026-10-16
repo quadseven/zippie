@@ -40,13 +40,11 @@
 #
 # BIDIRECTIONAL IMPAIRMENT
 # ------------------------
-# A netem root qdisc shapes EGRESS only, so "loss 100%" on the root alone stops
-# the leg sending while it happily keeps receiving - a half-blackhole, not a
-# dead link. The ingress half needs the traffic mirrored to an ifb device and
-# shaped there. If ifb is unavailable (kmod-ifb / kmod-sched not installed on
-# this OpenWrt build) we fall back to egress-only and SAY SO in the log and in
-# every affected result line, so old and new runs stay comparable instead of
-# silently meaning different things.
+# A netem root qdisc shapes EGRESS only, and some WiFi client drivers bypass
+# it. The blackhole also installs IPv4 DROP rules in INPUT, OUTPUT and FORWARD
+# for the selected interface. Its bound probe must hit the OUTPUT rule six
+# times before a withdrawal number can be reported. Other impairments mirror
+# ingress through an ifb when available and report egress-only otherwise.
 #
 # NOT measured here: true flow survival. That needs a long-lived TCP stream to
 # a peer at the home end (iperf3 -s in the zippie-home pod) - see #2136.
@@ -64,6 +62,7 @@ say() { echo "$(date +%H:%M:%S) $*" >> "$LOG"; }
 # Clears EVERY impairment this script can create, on every device. Written to
 # be safe to call at any time, including when nothing is applied.
 all_impair_off() {
+    blackhole_off "${LEG:-apclix0}" || say "ERROR: packet filter cleanup failed"
     for d in $(tc qdisc show 2>/dev/null | awk '/netem/{print $5}' | sort -u); do
         tc qdisc del dev "$d" root 2>/dev/null
     done
@@ -78,6 +77,7 @@ all_impair_off() {
 arm_deadline() {
     (
         sleep "$MAX_SECONDS"
+        blackhole_off "${LEG:-apclix0}" || logger -t zippie-chaos "ERROR: packet filter cleanup failed"
         for d in $(tc qdisc show 2>/dev/null | awk '/netem/{print $5}' | sort -u); do
             tc qdisc del dev "$d" root 2>/dev/null
             logger -t zippie-chaos "DEADLINE cleared netem on $d"
@@ -112,6 +112,43 @@ probe_rtt() {
 fcmp() { awk -v a="$1" -v b="$3" "BEGIN{exit !(a $2 b)}"; }
 
 # ------------------------------------------------------------- impairments --
+
+# Some WiFi client drivers bypass the root qdisc. A blackhole also needs a
+# netfilter drop before packets reach the driver. Keep it scoped to one leg.
+blackhole_off() {
+    _bh_iface=$1
+    _bh_tag="zippie-chaos-$_bh_iface"
+    for _bh_spec in "OUTPUT -o" "INPUT -i" "FORWARD -o" "FORWARD -i"; do
+        # shellcheck disable=SC2086
+        iptables -D $_bh_spec "$_bh_iface" -m comment --comment "$_bh_tag" -j DROP 2>/dev/null
+        # A missing rule is harmless; one that remains after deletion is not.
+        # shellcheck disable=SC2086
+        if iptables -C $_bh_spec "$_bh_iface" -m comment --comment "$_bh_tag" -j DROP 2>/dev/null; then
+            return 1
+        fi
+    done
+    return 0
+}
+
+blackhole_on() {
+    _bh_iface=$1
+    _bh_tag="zippie-chaos-$_bh_iface"
+    blackhole_off "$_bh_iface" || return 1
+    for _bh_spec in "OUTPUT -o" "INPUT -i" "FORWARD -o" "FORWARD -i"; do
+        # Intentional split: chain and direction are separate iptables arguments.
+        # shellcheck disable=SC2086
+        if ! iptables -I $_bh_spec "$_bh_iface" -m comment --comment "$_bh_tag" -j DROP; then
+            blackhole_off "$_bh_iface" || say "ERROR: partial packet filter cleanup failed"
+            return 1
+        fi
+    done
+    return 0
+}
+
+blackhole_dropped() {
+    iptables -L OUTPUT -vxn 2>/dev/null | awk -v tag="zippie-chaos-$1" \
+        '$0 ~ tag && $3 == "DROP" {sum += $1} END {print sum + 0}'
+}
 
 # Bring up the ifb device once. Returns non-zero if this build cannot do it.
 ifb_up() {
@@ -148,9 +185,11 @@ verify_impairment() {
     _iface=$1; _kind=$2; _base_rtt=$3
     case "$_kind" in
     blackhole)
+        _before=$(blackhole_dropped "$_iface")
         _got=$(probe_loss "$_iface" 6)
-        [ "$_got" = "100" ] && return 0
-        say "    ABORT: blackhole not in effect (measured ${_got:-no-result}% loss, want 100%)"
+        _after=$(blackhole_dropped "$_iface")
+        [ "$_got" = "100" ] && [ "$((_after - _before))" -ge 6 ] && return 0
+        say "    ABORT: blackhole not in effect (loss=${_got:-no-result}%, filter drops=$((_after - _before)), want 100% and >=6)"
         return 1
         ;;
     loss)
@@ -216,15 +255,23 @@ scenario() {
     tc qdisc add dev "$iface" root netem $rule 2>/dev/null \
         || { say "    SKIP: could not apply netem to $iface"; return; }
 
+    if [ "$kind" = blackhole ] && ! blackhole_on "$iface"; then
+        tc qdisc del dev "$iface" root 2>/dev/null
+        say "    SKIP: could not install packet filter on $iface"
+        return
+    fi
+
     if ingress_on "$iface" "$rule"; then
         halves="bidirectional"
     else
         ingress_off "$iface"
         halves="EGRESS-ONLY (no ifb; leg can still receive)"
     fi
+    [ "$kind" = blackhole ] && halves="bidirectional (netem and packet filter)"
     say "    impairment applied: $halves"
 
     if ! verify_impairment "$iface" "$kind" "$base_rtt"; then
+        blackhole_off "$iface" || say "ERROR: packet filter cleanup failed on $iface"
         ingress_off "$iface"
         tc qdisc del dev "$iface" root 2>/dev/null
         say "    scenario SKIPPED - no numbers reported, impairment unproven"
@@ -237,6 +284,7 @@ scenario() {
     set -- $(watch_for "$iface" "$hold" absent)
     say "    during: changes=$1 withdraw_s=$2  [$halves]  $(nexthops)"
 
+    blackhole_off "$iface" || say "ERROR: packet filter cleanup failed on $iface"
     ingress_off "$iface"
     tc qdisc del dev "$iface" root 2>/dev/null
     # shellcheck disable=SC2046  # see above
@@ -246,9 +294,16 @@ scenario() {
     say "    post-check: loss=$(probe_loss "$iface" 4)% ingress=$(tc qdisc show dev "$iface" | grep -c ingress)"
 }
 
+[ "${CHAOS_LIB_ONLY:-0}" = 1 ] && return 0
+
 : > "$LOG"
 say "=== zippie chaos run ==="
-say "legs: $(ip -4 -br addr | grep -E '^(eth0|eth2|apcli0)' | awk '{printf "%s ", $1}')"
+LEG=${LEG:-$(ip -4 -o addr show | awk '$2 ~ /^apcli/ {print $2; exit}')}
+if [ -z "$LEG" ]; then
+    say "ABORT: no active WiFi client interface; set LEG explicitly"
+    exit 1
+fi
+say "legs: $(ip -4 -br addr | grep -E '^(eth0|eth2|apcli)' | awk '{printf "%s ", $1}')"
 say "baseline nexthops: $(nexthops)"
 if ifb_up; then
     say "ifb: available ($IFB_DEV) - blackholes will be bidirectional"
@@ -260,9 +315,9 @@ all_impair_off
 
 # Ordered least to most disruptive. Each one is survivable on its own: the
 # other two legs keep the bond and the tailscale management path alive.
-scenario "1 latency spike"      "${LEG:-apcli0}" "delay 400ms 80ms" 25 delay
-scenario "2 brownout 30% loss"  "${LEG:-apcli0}" "loss 30%"         25 loss
-scenario "3 hard blackhole"     "${LEG:-apcli0}" "loss 100%"        25 blackhole
+scenario "1 latency spike"      "$LEG" "delay 400ms 80ms" 25 delay
+scenario "2 brownout 30% loss"  "$LEG" "loss 30%"         25 loss
+scenario "3 hard blackhole"     "$LEG" "loss 100%"        25 blackhole
 
 all_impair_off
 say "final nexthops: $(nexthops)"
