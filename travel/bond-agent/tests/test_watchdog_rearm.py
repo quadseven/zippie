@@ -53,9 +53,24 @@ class Harness:
         # router with an ordinary WAN, which is the case the teardown was
         # written for. Defaulting to sole-uplink would silently turn all of them
         # into "no teardown" tests while leaving them green.
+        #
+        # A `routes` file REPLACES the table outright, written the way
+        # `ip route show` prints it - a multipath route is a `default metric 1`
+        # line followed by indented `nexthop` lines. Under `-o` the stub folds
+        # those continuation lines onto their route, as iproute2 does, so a
+        # script that parses the multi-line form gets the multi-line form.
         self._stub(
             "ip",
+            f'oneline=0; [ "$1" = "-o" ] && {{ oneline=1; shift; }}\n'
             f'[ "$1 $2 $3" = "route show default" ] || exit 0\n'
+            f'if [ -f "{tmp}/routes" ]; then\n'
+            f'  if [ "$oneline" = 1 ]; then\n'
+            f'    awk \'/^[ \\t]/ {{ printf " \\\\%s", $0; next }} '
+            f'NR > 1 {{ print "" }} {{ printf "%s", $0 }} END {{ print "" }}\' '
+            f'"{tmp}/routes"\n'
+            f'  else cat "{tmp}/routes"; fi\n'
+            f"  exit 0\n"
+            f"fi\n"
             f'echo "default dev pbz0 scope link metric 1"\n'
             f'[ -f "{tmp}/sole_uplink" ] && exit 0\n'
             f'echo "default via 192.0.2.1 dev eth0 proto static metric 10"\n',
@@ -129,6 +144,10 @@ class Harness:
         """True = zippie's default route is the ONLY one; nothing underneath."""
         f = self.tmp / "sole_uplink"
         f.touch() if sole else f.unlink(missing_ok=True)
+
+    def set_routes(self, table: str) -> None:
+        """Replace the default-route table with `table`, as `ip route` prints it."""
+        (self.tmp / "routes").write_text(table)
 
     @property
     def sole_down(self) -> int:
@@ -532,6 +551,77 @@ def test_teardown_still_fires_when_a_second_wan_exists(tmp_path):
         "a carrying bond with a real fallback WAN did not trip - the #188 guard "
         "disarmed the teardown entirely"
     )
+
+
+# ROUTE MODE'S OWN DEFAULT ROUTE (#267). Packet mode installs one route on
+# pbz0; route mode installs one per leg tunnel, pb0, pb1, ..., and with two or
+# more legs it is a multipath route whose FIRST LINE NAMES NO DEVICE at all.
+_ROUTE_MODE_MULTIPATH = (
+    "default metric 1 \n\tnexthop dev pb0 weight 100 \n\tnexthop dev pb1 weight 50 \n"
+)
+_ROUTE_MODE_SINGLE = "default dev pb0 scope link metric 1 \n"
+_NETIFD_WAN = "default via 192.0.2.1 dev eth0 proto static metric 20 \n"
+
+
+@pytest.mark.parametrize(
+    "ours", [_ROUTE_MODE_MULTIPATH, _ROUTE_MODE_SINGLE], ids=["multipath", "single"]
+)
+def test_route_modes_own_route_is_not_a_fallback(tmp_path, ours):
+    """Zippie's route-mode default is zippie's, whatever its tunnel is called.
+
+    The predicate used to exclude only `dev pbz0`, packet mode's interface. A
+    route-mode bond as the sole uplink therefore read as having a fallback -
+    `default metric 1` and `dev pb0` both survive that filter - and was torn
+    down on the same three-minute fuse #188 removed for packet mode, leaving
+    the router with no route at all.
+    """
+    hz = Harness(tmp_path)
+    (tmp_path / "unreachable").touch()
+    (tmp_path / "running").touch()
+    hz.set_routes(ours)
+
+    for _ in range(2 * MAX_FAILS):
+        hz.run()
+
+    assert not hz.tripped, "tore down a route-mode bond that was the only uplink"
+    assert hz.running
+    assert "only uplink" in hz.log
+
+
+def test_route_mode_teardown_still_fires_over_a_real_wan(tmp_path):
+    """Excluding our own tunnels must not exclude netifd's route underneath."""
+    hz = Harness(tmp_path)
+    (tmp_path / "unreachable").touch()
+    (tmp_path / "running").touch()
+    hz.set_routes(_ROUTE_MODE_MULTIPATH + _NETIFD_WAN)
+
+    for _ in range(2 * MAX_FAILS):
+        hz.run()
+
+    assert hz.tripped, "a route-mode bond with a real WAN underneath did not trip"
+
+
+@pytest.mark.parametrize("sole", [False, True], ids=["wan-underneath", "sole-uplink"])
+def test_safe_mode_is_not_re_armed_over(tmp_path, sole):
+    """The init script refuses to start zippie in safe mode (#267), so a
+    re-arm cannot succeed. Trying anyway spends budget and reports
+    `re-arm FAILED` to Datadog for a stop the operator asked for."""
+    hz = Harness(tmp_path)
+    hz.set_tripped()
+    hz.set_running(False)
+    hz.set_reachable(not sole)
+    hz.set_sole_uplink(sole)
+    hz.set_stable(STABLE_MIN)
+    (tmp_path / "volatile" / "zippie-watchdog.soledown").write_text(f"{SOLE_REARM_AFTER}\n")
+    (hz.persist / "safe-mode").touch()
+
+    for _ in range(STABLE_MIN + SOLE_REARM_AFTER):
+        hz.run()
+
+    assert "INITD start" not in hz.log, "re-armed over safe mode"
+    assert hz.budget is None, "safe mode spent re-arm budget"
+    assert "safe mode" in hz.log, "held silently - indistinguishable from a check that never ran"
+    assert hz.tripped, "the trip is still owed once safe mode is lifted"
 
 
 def test_a_sole_uplink_trip_recovers_without_needing_internet(tmp_path):

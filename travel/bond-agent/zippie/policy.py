@@ -669,7 +669,16 @@ def paths_in_active_tier(paths: list[PathRuntime]) -> list[PathRuntime]:
 
 
 def multipath_nexthops(paths: list[PathRuntime], mode: BondMode) -> list[tuple[str, int]]:
-    """Return list of (wg_iface, weight) for ip route multipath."""
+    """Return list of (wg_iface, weight) for ip route multipath.
+
+    A tunnel that has never completed a handshake gets no nexthop, whatever its
+    weight (#267). Weight comes from probes and from the anti-flap gate's
+    valves; the handshake is the one fact that says the far end exists, and a
+    default route into a tunnel without it is the 2026-07-27 black hole. Filtered
+    BEFORE the primary is chosen, so prefer mode falls through to a proven leg
+    rather than withdrawing the route over an unproven favourite.
+    """
+    paths = [p for p in paths if p.handshake_completed]
     usable = [p for p in paths if p.effective_weight > 0 and p.wg_iface]
     if not usable:
         return []
@@ -690,21 +699,6 @@ def multipath_nexthops(paths: list[PathRuntime], mode: BondMode) -> list[tuple[s
     # tier path whose tunnel has not come up yet has wg_iface=None, and that
     # None would be interpolated straight into an `ip route` nexthop.
     return [(p.wg_iface, p.effective_weight) for p in paths_in_active_tier(paths) if p.wg_iface]
-
-
-def direct_fallback_candidates(paths: list[PathRuntime]) -> list[str]:
-    """Physical interfaces to degrade onto when no TUNNEL is usable, best first.
-
-    Ranked by the same priority the bond uses, so the fallback picks the link
-    you would have preferred anyway. Note these are the UNDERLYING interfaces
-    (apclix0, eth2), not the wg tunnels - the whole point is that every tunnel
-    is down while the physical link underneath may be perfectly fine.
-    """
-    ranked = sorted(
-        (p for p in paths if p.interface),
-        key=lambda p: (p.config.priority, p.name),
-    )
-    return [p.interface for p in ranked if p.interface]
 
 
 def recompute(

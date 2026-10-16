@@ -4,7 +4,24 @@ START=99
 STOP=10
 USE_PROCD=1
 
+# SAFE MODE (#267). The agent installs this router's default route and is
+# started at every boot, so a config that leaves it broken comes back on every
+# reboot - and a power cycle, the one remedy left to someone at the roadside,
+# cannot get out of that. While the flag exists nothing is started, netifd's
+# own routes carry the box, and the operator can fix the config. It lives on
+# overlayfs so it survives the reboot it is usually created for:
+#
+#   touch /etc/zippie/safe-mode; reboot        # enter
+#   rm /etc/zippie/safe-mode; /etc/init.d/zippie start   # leave
+#
+# The watchdog reads the same path and holds its re-arm while it exists. The
+# override exists only so tests can run this function off the router.
 start_service() {
+  local flag="${ZIPPIE_SAFE_MODE_FLAG:-/etc/zippie/safe-mode}"
+  if [ -e "$flag" ]; then
+    logger -t zippie-init "safe mode: $flag exists - NOT starting the agent; remove it and run /etc/init.d/zippie start"
+    return 0
+  fi
   procd_open_instance
   procd_set_param command /usr/bin/zippie up --wifi-secrets /etc/zippie/wifi-secrets.json
   procd_set_param respawn 3600 5 0

@@ -43,6 +43,7 @@ def _path(
         name=name,
         config=cfg,
         wg_iface=f"pb-{name}",
+        handshake_completed=True,
         state=state,
         rtt_ms=rtt,
         loss_pct=loss,

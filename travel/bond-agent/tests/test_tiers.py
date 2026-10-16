@@ -26,6 +26,7 @@ def _path(name, *, tier=1, weight=100, iface=None, up=True, priority=100):
         interface=iface or name,
     )
     p.wg_iface = f"pb-{name}"
+    p.handshake_completed = True
     p.effective_weight = weight if up else 0
     return p
 

@@ -91,6 +91,18 @@ if [ -f /etc/zippie/zippie.toml.deploy-rollback ]; then
   logger -t "${TAG}" "restored /etc/zippie/zippie.toml"
 fi
 
+# The deploy replaces these too (#267), and the restart below runs through both,
+# so restoring the package under a broken init script would restart onto the
+# thing this is rescuing from.
+if [ -f /etc/zippie/zippie.init.deploy-rollback ]; then
+  cp -p /etc/zippie/zippie.init.deploy-rollback /etc/init.d/zippie
+  logger -t "${TAG}" "restored /etc/init.d/zippie"
+fi
+if [ -f /etc/zippie/zippie.wrapper.deploy-rollback ]; then
+  cp -p /etc/zippie/zippie.wrapper.deploy-rollback /usr/bin/zippie
+  logger -t "${TAG}" "restored /usr/bin/zippie"
+fi
+
 # RESTART LAST, and unconditionally. Even with nothing to restore, an agent that
 # was stopped by a half-finished deploy has to be started again - that is the
 # state this fired for.

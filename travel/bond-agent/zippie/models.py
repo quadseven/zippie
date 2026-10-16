@@ -706,6 +706,17 @@ class PathRuntime:
     # nine hours reading `degraded` - the same word used for a leg that works
     # and got worse. It had never worked at all.
     never_handshaked: bool = False
+    # ROUTE MODE: WireGuard has reported a completed handshake on this leg's
+    # tunnel since the tunnel was last brought up (#267). policy.
+    # multipath_nexthops routes nothing into a tunnel without one - the
+    # 2026-07-27 black hole was two tunnels at handshake=NEVER in the default
+    # route. Not has_ever_answered: a leg behind a carrier that filters ICMP
+    # never answers a ping and still carries.
+    #
+    # Sticky until _teardown_path, because one unreadable `wg show` reads as
+    # "never" and un-proving the leg on it would re-hash every flow. A rebuilt
+    # tunnel starts again at latest-handshake 0, which is why teardown clears it.
+    handshake_completed: bool = False
     # CONSECUTIVE control-loop passes this leg has been held out of the bond
     # by the anti-flap gate (agent._gate_flapped_paths) while it has NEVER
     # once been answered (#26). Deliberately a separate counter from the

@@ -49,6 +49,15 @@ STAMP=/etc/zippie/build.json
 FIRED_MARKER=/etc/zippie/state/deploy-rollback.fired
 CONFIG_SRC="${REPO_ROOT}/travel/gl-mt3000/zippie.toml"
 REMOTE_CONFIG=/etc/zippie/zippie.toml
+# The procd unit and the entrypoint it calls. Neither is in the package, and
+# until #267 the init script was installed by hand once and never again, so the
+# repo copy - the #175 bounded shutdown, safe mode - was only an intention.
+INIT_SRC="${REPO_ROOT}/travel/gl-mt3000/zippie.init"
+REMOTE_INIT=/etc/init.d/zippie
+WRAPPER_SRC="${REPO_ROOT}/travel/gl-mt3000/zippie.wrapper"
+REMOTE_WRAPPER=/usr/bin/zippie
+# While this exists the init script will not start the agent (#267).
+REMOTE_SAFE_MODE=/etc/zippie/safe-mode
 STATUS_URL=http://127.0.0.1:8787/api/status
 
 HOST=""
@@ -118,6 +127,48 @@ say() { printf '\n== %s\n' "$*"; }
 die() { printf '\nFAILED: %s\n' "$*" >&2; exit 1; }
 
 ssh_run() { ssh -o ConnectTimeout=15 -o BatchMode=yes "root@${HOST}" "$@"; }
+
+# The md5 of a file on the router, empty when it is absent.
+remote_md5() { ssh_run "md5sum $1 2>/dev/null | cut -d' ' -f1" || true; }
+
+# --dry-run's answer for one shipped file: would this deploy replace it.
+report_drift() {  # local source, remote path
+  local was
+  was="$(remote_md5 "$2")"
+  if [[ -z "${was}" ]]; then echo "  would install $2 (there is none)"
+  elif [[ "${was}" == "$(md5_of "$1")" ]]; then echo "  $2 unchanged"
+  else echo "  WOULD CHANGE $2: ${was} -> $(md5_of "$1")"; fi
+}
+
+# Install one shell script on the router and PROVE it: written aside, read back
+# by md5, parsed with `sh -n`, and only then moved over the live copy, so a
+# short write or a file that does not parse stops the deploy and leaves the
+# working one in place. An identical file is not rewritten, for the same reason
+# the config is not: an mtime that moves on every deploy says "changed" when
+# nothing was.
+install_verified() {  # local source, remote path
+  local src="$1" dest="$2" want got
+  want="$(md5_of "${src}")"
+  if [[ "$(remote_md5 "${dest}")" == "${want}" ]]; then
+    echo "  ${dest}: unchanged (${want})"
+    return 0
+  fi
+  ssh_run "cat > ${dest}.new" < "${src}" || die "could not write ${dest}.new"
+  got="$(remote_md5 "${dest}.new")"
+  if [[ "${want}" != "${got}" ]]; then
+    ssh_run "rm -f ${dest}.new" || true
+    die "${dest} differs after copy (want ${want}, got ${got}). dropbear has no
+  SFTP so this goes over a pipe, where a short write is silent. ${dest} was NOT
+  replaced."
+  fi
+  if ! ssh_run "sh -n ${dest}.new"; then
+    ssh_run "rm -f ${dest}.new" || true
+    die "${dest}.new does not parse on the router. ${dest} was NOT replaced."
+  fi
+  ssh_run "chmod 0755 ${dest}.new && mv ${dest}.new ${dest}" \
+    || die "could not move ${dest}.new into place"
+  echo "  ${dest}: installed (${want})"
+}
 
 # --------------------------------------------------------------- identify it
 # A deploy you cannot name later is how the drift started. The commit is
@@ -425,9 +476,22 @@ ssh_run "PYTHONPATH=${REMOTE_ROOT} python3 -c \
 # operator most wants to know in advance.
 CONFIG_WAS="$(ssh_run "sha256sum ${REMOTE_CONFIG} 2>/dev/null | cut -d' ' -f1" || true)"
 
+# SAFE MODE IS THE OPERATOR'S STOP, AND A DEPLOY CANNOT FINISH OVER IT (#267).
+# The init script will not start the agent while the flag exists, so the
+# running-agent check below could only fail, and the armed rollback would then
+# fire on a router somebody stopped on purpose. Checked before anything is armed
+# or changed, and before --dry-run returns, so a dry run says so too.
+if ssh_run "[ -e ${REMOTE_SAFE_MODE} ]"; then
+  die "${HOST} is in safe mode (${REMOTE_SAFE_MODE} exists), so the agent will not
+  start and this deploy could not prove it. Nothing was changed. Remove the file
+  once the router's config is fixed, then deploy."
+fi
+
 if [[ "${DRY_RUN}" -eq 1 ]]; then
   say "dry run - nothing was changed"
   echo "  would install fingerprint ${LOCAL_FP} (${LOCAL_COUNT} modules)"
+  report_drift "${INIT_SRC}" "${REMOTE_INIT}"
+  report_drift "${WRAPPER_SRC}" "${REMOTE_WRAPPER}"
   if [[ -z "${CONFIG_WAS}" ]]; then
     echo "  would install ${REMOTE_CONFIG} (there is none)"
   elif [[ "${CONFIG_WAS}" == "${CONFIG_SHA}" ]]; then
@@ -479,6 +543,11 @@ snapshot_for_rollback() {
   ssh_run "rm -rf ${REMOTE_ROOT}/zippie.deploy-rollback; \
            [ -d ${REMOTE_PKG} ] && cp -a ${REMOTE_PKG} ${REMOTE_ROOT}/zippie.deploy-rollback || true"
   ssh_run "[ -f ${REMOTE_CONFIG} ] && cp ${REMOTE_CONFIG} ${REMOTE_CONFIG}.deploy-rollback || true"
+  # The init script and wrapper are replaced below too (#267), so the rescue
+  # needs what was running. Saved under /etc/zippie, never beside the live
+  # script in /etc/init.d, where a stray copy would read as a second service.
+  ssh_run "[ -f /etc/init.d/zippie ] && cp -p /etc/init.d/zippie /etc/zippie/zippie.init.deploy-rollback || true"
+  ssh_run "[ -f /usr/bin/zippie ] && cp -p /usr/bin/zippie /etc/zippie/zippie.wrapper.deploy-rollback || true"
 }
 
 # How many times the rollback has EVER fired, from the append-only marker on
@@ -778,6 +847,15 @@ elif [[ "${CONFIG_WAS}" != "${CONFIG_SHA}" ]]; then
   echo "  that takes effect in seconds - watch /api/status, not just this script."
 fi
 
+# ------------------------------------------- the init script and the wrapper
+# BEFORE the restart, for the config's reason: the restart below goes through
+# both, so it and the running-agent check after it prove the copies just
+# shipped. Installed after it, a broken init script would surface at the next
+# boot instead, which is the one moment nobody is watching.
+say "installing init script and wrapper"
+install_verified "${INIT_SRC}" "${REMOTE_INIT}"
+install_verified "${WRAPPER_SRC}" "${REMOTE_WRAPPER}"
+
 # THE STAMP IS NOT WRITTEN HERE. It used to be, right after the config, and
 # that is zippie#21: from this line until the disarm at the very bottom the
 # armed rollback can still fire and put the PREVIOUS package and config back,
@@ -906,8 +984,9 @@ fi
 
 # ---------------------------------------------------------------- provision it
 #
-# EVERYTHING ABOVE THIS LINE DEPLOYS THE PYTHON PACKAGE. That was the whole of
-# this script until 2026-08-16, and it is why the travel router died on a reboot that day:
+# EVERYTHING ABOVE THIS LINE DEPLOYS THE AGENT: the package, its config, and
+# since #267 the init script and wrapper it runs through. The package was the
+# whole of this script until 2026-08-16, and it is why the travel router died on a reboot that day:
 # the agent bytes were perfect and `/etc/init.d/zippie enable` had never been
 # run, so there was no S99 symlink and the service simply did not start at boot.
 # It had survived 35 hours of uptime because nothing rebooted. The router came
@@ -953,14 +1032,6 @@ for f in "${HELPER_SCRIPTS[@]}"; do
     - that is exactly what this check exists to catch."
   echo "  ${f}: ${got}"
 done
-
-# The wrapper. `/usr/bin/zippie` is what the init script and every operator
-# invocation actually call.
-if [[ -f "${REPO_ROOT}/travel/gl-mt3000/zippie.wrapper" ]]; then
-  ssh_run "cat > /usr/bin/zippie && chmod +x /usr/bin/zippie" \
-    < "${REPO_ROOT}/travel/gl-mt3000/zippie.wrapper" || die "could not write /usr/bin/zippie"
-  echo "  /usr/bin/zippie installed"
-fi
 
 # Web root guard against TESTKEY / throwaway APKs (zippie#241).
 # A TESTKEY APK in /www previously reached production handsets over HTTP.

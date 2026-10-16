@@ -214,7 +214,19 @@ def _install_fakes(monkeypatch: pytest.MonkeyPatch, world: FakeWorld, agent: Bon
         world.routes.append(["cmd"] + list(args))
         return subprocess.CompletedProcess(args, 0, "", "")
 
+    def wg_dump(iface):
+        # A tunnel whose path the world says is alive has handshaked; a dead
+        # one reads latest-handshake 0, which is what WireGuard reports when
+        # the far end never answered. Route mode routes only the first (#267).
+        path = next((p for p in agent.paths if p.wg_iface == iface), None)
+        alive = path is not None and world.path_health.get(path.name, (None, 100.0))[0]
+        handshake = int(time.time()) - 5 if alive else 0
+        rx = 4096 if alive else 0
+        return f"priv\tpub\t51820\toff\npeer\t(none)\t203.0.113.10:51820\t0.0.0.0/0\t{handshake}\t{rx}\t512\t3\n"
+
     def run(args, **kwargs):
+        if args[:2] == ["wg", "show"] and args[3:] == ["dump"]:
+            return subprocess.CompletedProcess(args, 0, stdout=wg_dump(args[2]), stderr="")
         # default gw lookup etc.
         if args[:3] == ["ip", "-j", "route"]:
             return subprocess.CompletedProcess(

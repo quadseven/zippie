@@ -75,6 +75,7 @@ def test_route_mode_still_gets_one_nexthop_per_leg(tmp_path):
     a = _agent(tmp_path, datapath="route")
     for i, p in enumerate(a.paths):
         p.wg_iface = f"pb{i}"
+        p.handshake_completed = True
     hops = a._nexthops()
     assert len(hops) == 2
     assert {h[0] for h in hops} == {"pb0", "pb1"}
@@ -182,6 +183,9 @@ def test_multipath_skips_a_tier_path_whose_tunnel_is_not_up(tmp_path):
     a = _agent(tmp_path, datapath="route")
     a.paths[0].wg_iface = "pb0"
     a.paths[1].wg_iface = None
+    # Both handshaked, so the None filter is what is tested, not the #267 gate.
+    for p in a.paths:
+        p.handshake_completed = True
     hops = policy.multipath_nexthops(a.paths, a.config.policy.mode)
     assert hops == [("pb0", 100)]
     assert all(dev is not None for dev, _ in hops)

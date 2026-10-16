@@ -1945,6 +1945,9 @@ class BondAgent:
         return net.link_gateway(iface)
 
     def _teardown_path(self, path: PathRuntime) -> None:
+        # The next tunnel on this leg starts at latest-handshake 0 and has to
+        # prove itself again before route mode will route into it (#267).
+        path.handshake_completed = False
         conf = self._conf_path(path)
         if conf.exists() or net.dry_run():
             net.wg_quick_down(str(conf), path.wg_iface)
@@ -2317,8 +2320,11 @@ class BondAgent:
 
             # Record the receive counter every pass so liveness can be judged on
             # MOVEMENT rather than on a cumulative total that never decreases.
-            _age, rx_now = net.wg_tunnel_evidence(path.wg_iface)
+            handshake_age, rx_now = net.wg_tunnel_evidence(path.wg_iface)
             self.activity.observe(path.wg_iface, rx_now)
+            # Set, never cleared here: see PathRuntime.handshake_completed.
+            if handshake_age is not None:
+                path.handshake_completed = True
             still_moving = self.activity.is_advancing(path.wg_iface)
 
             # Consecutive probe misses, counted for DIAGNOSIS only: the count
@@ -3517,7 +3523,7 @@ class BondAgent:
         falls back on its own, with no second route for us to install and get
         wrong.
 
-        This replaces a `direct_fallback_candidates()` scan that picked an
+        This replaces a direct-fallback scan that picked an
         interface itself and installed an unmetriced `default dev <if>`. That
         route outranked the real ones and OUTLIVED the agent: it pinned all
         traffic to a metered 4G dongle, and in the kill-switch case a bare

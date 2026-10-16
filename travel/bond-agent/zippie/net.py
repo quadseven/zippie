@@ -992,24 +992,6 @@ def ip_rule_del(fwmark: int, table: int) -> None:
     )
 
 
-def ip_route_replace_default(table: int, dev: str, metric: int = 10) -> None:
-    run_or_dry(
-        [
-            "ip",
-            "route",
-            "replace",
-            "default",
-            "dev",
-            dev,
-            "table",
-            str(table),
-            "metric",
-            str(metric),
-        ],
-        check=True,
-    )
-
-
 # Zippie's default route ALWAYS carries this metric, and nothing else uses it.
 #
 # This is what makes the agent unable to strand the device it runs on. The

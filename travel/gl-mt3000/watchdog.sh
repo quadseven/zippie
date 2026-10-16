@@ -87,7 +87,12 @@ REARM_WINDOW=86400     # 24h
 #: stays dead until a human arrives. Time is the only evidence available in
 #: that state, so time is what this uses.
 SOLE_REARM_AFTER=5     # ~5 minutes
-ZIPPIE_IFACE="${ZIPPIE_IFACE:-pbz0}"
+#: Every interface zippie owns starts with this: pbz0 in packet mode, pb0, pb1,
+#: ... in route mode. The agent's `interface_prefix`, which defaults to "pb".
+ZIPPIE_IFACE_PREFIX="${ZIPPIE_IFACE_PREFIX:-pb}"
+#: While this exists the init script will not start zippie (#267), so the
+#: re-arms below cannot succeed and must not be attempted.
+SAFE_MODE_FLAG="$WD_PERSIST/safe-mode"
 
 # NextDNS anycast: the resolvers this fleet actually uses everywhere else.
 # Two independent addresses so one provider hiccup cannot trip the switch.
@@ -124,8 +129,15 @@ router_reachable() {
 # Asking the routing table rather than enumerating interfaces means this stays
 # correct for any uplink netifd knows about - ethernet, a station radio, an LTE
 # dongle - without this script having to keep a list of them.
+#
+# ROUTE MODE IS OURS TOO (#267). This used to exclude only `dev pbz0`, packet
+# mode's interface. Route mode's default is on pb0, pb1, ..., and with two legs
+# it is a multipath route whose first line, `default metric 1`, names no device
+# at all - so a route-mode bond that was the only uplink read as having a
+# fallback and was torn down anyway. `-o` keeps each route on one line, nexthops
+# included, and the PREFIX excludes every tunnel zippie can own.
 fallback_uplink_exists() {
-    ip route show default 2>/dev/null | grep -qv "dev ${ZIPPIE_IFACE}"
+    ip -o route show default 2>/dev/null | grep -qv "dev ${ZIPPIE_IFACE_PREFIX}"
 }
 
 # Tell Datadog. A bond that is down must never be silent - both 2026-08-01
@@ -192,6 +204,17 @@ fi
 
 why=""
 router_reachable || why="router has no internet"
+
+# SAFE MODE OUTRANKS BOTH RE-ARMS (#267). The operator stopped zippie on
+# purpose and the init script will refuse to start it, so a re-arm can only fail
+# - spending budget and reporting `re-arm FAILED` for a stop that was asked for.
+# Only while zippie is down: a running agent still gets the dead-man switch
+# below, flag or not. The trip marker stays, so the debt is still owed once the
+# flag is removed.
+if [ -f "$TRIPPED_FILE" ] && [ -e "$SAFE_MODE_FLAG" ] && ! zippie_running; then
+    logger -t zippie-watchdog "safe mode ($SAFE_MODE_FLAG): not re-arming; remove the file to resume"
+    exit 0
+fi
 
 if [ -z "$why" ]; then
     rm -f "$FAILS_FILE"

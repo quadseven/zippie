@@ -8,7 +8,6 @@ whatever the route code happened to do.
 from __future__ import annotations
 
 import zippie.agent as agent_mod
-from zippie import policy
 from zippie.models import PathConfig, PathMatch, PathRuntime
 
 
@@ -30,17 +29,6 @@ class FakeLink:
     @property
     def has_v4(self):
         return self._v4
-
-
-def test_fallback_candidates_ranked_by_priority():
-    paths = [_path("dongle", "eth2", 30), _path("hotspot", "apclix0", 20)]
-    assert policy.direct_fallback_candidates(paths) == ["apclix0", "eth2"]
-
-
-def test_paths_without_an_interface_are_not_fallback_candidates():
-    p = _path("ghost", None, 10)
-    p.interface = None
-    assert policy.direct_fallback_candidates([p]) == []
 
 
 class _Agent:

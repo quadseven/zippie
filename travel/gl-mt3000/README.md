@@ -122,7 +122,10 @@ hand-edited constant and therefore cannot be wrong.
 
 The script exists to make that state impossible to reach quietly. It refuses to
 deploy an uncommitted tree without `--allow-dirty`, verifies the bytes on the
-router equal the bytes here **before** restarting anything, re-reads
+router equal the bytes here **before** restarting anything - the package, the
+config, and the init script and wrapper (`/etc/init.d/zippie`,
+`/usr/bin/zippie`), each read back by md5 and the scripts parsed with `sh -n`
+before they replace a working copy - re-reads
 `/api/status` to confirm the RUNNING agent reports the fingerprint it just
 installed, disarms the rollback, and only then records what it installed in
 `/etc/zippie/build.json`. The stamp is last on purpose: until the rollback is
@@ -206,7 +209,9 @@ What it does, in one line each:
 
 - Pings two NextDNS anycast addresses once a minute. Three consecutive failures
   tear zippie down, because netifd's per-WAN routes underneath ours restore
-  service by themselves.
+  service by themselves. It only does that while a default route exists that
+  is not on a zippie tunnel (`pbz0`, or `pb0`, `pb1`, ... in route mode);
+  with nothing underneath, removing the bond cannot restore anything (#188).
 - After a trip it re-arms **automatically** once the internet has been
   reachable for 10 consecutive checks - but at most twice per 24h. Exhausting
   that budget is the genuine flapping case and stays down for a human (#2137).
@@ -225,6 +230,26 @@ real script against stubbed `ping`/`pgrep`/init.d. It is tested that way
 because proving the re-arm by hand means killing the agent, and the agent
 carries the bond that the SSH session driving the test rides on - the test
 kills its own harness.
+
+### Safe mode
+
+The agent starts at every boot and installs the router's default route, so a
+config that leaves it broken comes back on every reboot. While
+`/etc/zippie/safe-mode` exists, `/etc/init.d/zippie start` logs and starts
+nothing, and netifd's own routes carry the box. The file is on overlayfs, so it
+survives the reboot it is usually created for:
+
+```sh
+touch /etc/zippie/safe-mode; reboot                    # enter
+rm /etc/zippie/safe-mode; /etc/init.d/zippie start     # leave
+```
+
+Only enter safe mode when the router has another way out (ethernet, a station
+WAN), or when you are standing next to it. On a box whose only uplink is the
+bond, safe mode leaves it with no uplink at all. While the flag exists the
+watchdog does not try to re-arm, and `scripts/deploy-openwrt.sh` refuses to
+deploy, because it cannot prove a running agent that the init script will not
+start.
 
 ## Who owns the WANs: mwan3 or the agent?
 
