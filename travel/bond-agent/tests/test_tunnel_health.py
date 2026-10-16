@@ -110,6 +110,7 @@ def _path(name="starlink", iface="wlan0", wg="pb0"):
         interface=iface,
     )
     p.wg_iface = wg
+    p.has_ever_answered = True
     return p
 
 
@@ -937,6 +938,7 @@ match = { type = "interface", interface = "eth2" }
         for pc in cfg.paths:
             r = PathRuntime(name=pc.name, config=pc, interface=pc.match.interface)
             r.wg_iface = "pb-" + pc.name
+            r.has_ever_answered = True
             r.effective_weight = 100
             runtimes.append(r)
         hops = policy.multipath_nexthops(runtimes, cfg.policy.mode)

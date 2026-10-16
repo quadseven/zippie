@@ -669,7 +669,13 @@ def paths_in_active_tier(paths: list[PathRuntime]) -> list[PathRuntime]:
 
 
 def multipath_nexthops(paths: list[PathRuntime], mode: BondMode) -> list[tuple[str, int]]:
-    """Return list of (wg_iface, weight) for ip route multipath."""
+    """Return list of (wg_iface, weight) for ip route multipath.
+
+    A tunnel that has never been answered gets no nexthop: its interface exists
+    and its weight may be nonzero, but nothing has proven the far end is there,
+    and a default route into it is a black hole (2026-07-27).
+    """
+    paths = [p for p in paths if p.has_ever_answered]
     usable = [p for p in paths if p.effective_weight > 0 and p.wg_iface]
     if not usable:
         return []

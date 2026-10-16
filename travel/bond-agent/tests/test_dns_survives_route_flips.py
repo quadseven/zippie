@@ -63,6 +63,7 @@ def _agent(tmp_path, **policy):
     agent = BondAgent(parse_config(cfg))
     for path, wg in zip(agent.paths, ("pb0", "pb1")):
         path.wg_iface = wg
+        path.has_ever_answered = True
         path.interface = path.config.match.interface
         path.state = PathState.UP
         path.rtt_ms = 40.0

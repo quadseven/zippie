@@ -226,6 +226,18 @@ because proving the re-arm by hand means killing the agent, and the agent
 carries the bond that the SSH session driving the test rides on - the test
 kills its own harness.
 
+## Safe mode
+
+The bond is this router's only uplink, so a config that blackholes it at boot
+leaves no remote way back. `touch /etc/zippie/safe-mode` (the file is on
+overlayfs and survives a reboot) makes `/etc/init.d/zippie start` log and exit
+without starting the agent, leaving netifd's routes to carry the box. Remove the
+file and run `/etc/init.d/zippie start` to leave safe mode.
+
+Route mode also never points the default route at a tunnel that has not yet
+completed a handshake, and any direct (untunnelled) fallback route must use
+`net.DIRECT_FALLBACK_METRIC`, which sorts below netifd's metric 20/30 routes.
+
 ## Who owns the WANs: mwan3 or the agent?
 
 **Pick one. Do not run both.** They both write default routes and both believe

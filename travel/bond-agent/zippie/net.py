@@ -992,7 +992,11 @@ def ip_rule_del(fwmark: int, table: int) -> None:
     )
 
 
-def ip_route_replace_default(table: int, dev: str, metric: int = 10) -> None:
+def ip_route_replace_default(table: int, dev: str, metric: int) -> None:
+    """Install a direct (untunnelled) default route; the metric is required.
+
+    An implicit one lets the route outrank netifd's, see DIRECT_FALLBACK_METRIC.
+    """
     run_or_dry(
         [
             "ip",
@@ -1029,6 +1033,11 @@ def ip_route_replace_default(table: int, dev: str, metric: int = 10) -> None:
 # no way back in. Observed live: the router became unreachable and needed a
 # physical power-cycle (infra#2065).
 ZIPPIE_ROUTE_METRIC = 1
+
+# Any direct (untunnelled) fallback default route must use at least this metric.
+# netifd's per-WAN routes sit at 20/30, so a fallback below them would outrank
+# the real uplinks and outlive the agent (the 2026-07-27 metered-dongle pin).
+DIRECT_FALLBACK_METRIC = 100
 
 
 def foreign_default_route_exists(

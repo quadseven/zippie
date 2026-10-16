@@ -75,6 +75,7 @@ def test_route_mode_still_gets_one_nexthop_per_leg(tmp_path):
     a = _agent(tmp_path, datapath="route")
     for i, p in enumerate(a.paths):
         p.wg_iface = f"pb{i}"
+        p.has_ever_answered = True
     hops = a._nexthops()
     assert len(hops) == 2
     assert {h[0] for h in hops} == {"pb0", "pb1"}
@@ -153,6 +154,7 @@ def test_entering_packet_mode_tears_down_the_per_leg_tunnels(tmp_path, monkeypat
     a = _agent(tmp_path)
     for i, p in enumerate(a.paths):
         p.wg_iface = f"pb{i}"
+        p.has_ever_answered = True
     a.ensure_tunnels()
     assert sorted(torn) == ["pb0", "pb1"]
 
@@ -181,6 +183,7 @@ def test_multipath_skips_a_tier_path_whose_tunnel_is_not_up(tmp_path):
     that None was interpolated straight into an `ip route` nexthop."""
     a = _agent(tmp_path, datapath="route")
     a.paths[0].wg_iface = "pb0"
+    a.paths[0].has_ever_answered = True
     a.paths[1].wg_iface = None
     hops = policy.multipath_nexthops(a.paths, a.config.policy.mode)
     assert hops == [("pb0", 100)]
@@ -228,6 +231,7 @@ def test_every_leg_sprays_to_the_same_home_port(tmp_path):
     a._transport = FakeTransport()
     for i, p in enumerate(a.paths):
         p.wg_iface = f"pb{i}"
+        p.has_ever_answered = True
     # legs carry DIFFERENT per-path ports, as route mode assigned them
     a.paths[0].port, a.paths[1].port = 51900, 51901
 
@@ -1228,6 +1232,7 @@ def test_route_mode_masquerades_the_per_leg_tunnels_as_before(tmp_path):
     a = _agent(tmp_path, datapath="route")
     for i, p in enumerate(a.paths):
         p.wg_iface = f"pb{i}"
+        p.has_ever_answered = True
         p.effective_weight = 100
     assert sorted(a._masquerade_ifaces()) == ["pb0", "pb1"]
 
@@ -1237,6 +1242,7 @@ def test_a_tunnel_that_is_not_up_is_not_masqueraded(tmp_path):
     it would be interpolated straight into an iptables -o argument."""
     a = _agent(tmp_path, datapath="route")
     a.paths[0].wg_iface = "pb0"
+    a.paths[0].has_ever_answered = True
     a.paths[1].wg_iface = None
     assert a._masquerade_ifaces() == ["pb0"]
 

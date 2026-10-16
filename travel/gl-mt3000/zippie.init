@@ -4,7 +4,17 @@ START=99
 STOP=10
 USE_PROCD=1
 
+# SAFE MODE (#267). The bond is this router's only uplink, so a config that
+# blackholes it at boot leaves no remote way back. While this file exists the
+# agent is not started and netifd's routes alone carry the box. It lives on
+# overlayfs so it survives the reboot it is created for; remove it, then
+# `/etc/init.d/zippie start`, to leave safe mode.
 start_service() {
+  local flag=/etc/zippie/safe-mode
+  if [ -e "$flag" ]; then
+    logger -t zippie-init "safe mode: $flag exists - NOT starting the agent"
+    return 0
+  fi
   procd_open_instance
   procd_set_param command /usr/bin/zippie up --wifi-secrets /etc/zippie/wifi-secrets.json
   procd_set_param respawn 3600 5 0
