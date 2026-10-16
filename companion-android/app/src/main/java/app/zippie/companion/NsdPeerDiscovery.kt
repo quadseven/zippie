@@ -9,10 +9,13 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.Semaphore
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 /**
  * Same-LAN discovery over NSD (#270): register `_zippie._tcp`, discover it,
@@ -45,9 +48,13 @@ class NsdPeerDiscovery(
     private val worker: ExecutorService = Executors.newSingleThreadExecutor()
     private val io: ExecutorService = Executors.newCachedThreadPool()
 
-    /** Verifications of discovered devices, a few at a time. Each is bounded
-     *  by the handshake deadline; the pool bounds how many run at once. */
-    private val verifying: ExecutorService = Executors.newFixedThreadPool(MAX_VERIFYING)
+    /** Verifications of discovered devices, a few at a time, with a bounded
+     *  backlog. Each is bounded by the handshake deadline; the pool bounds how
+     *  many run at once, and a full backlog refuses rather than queueing
+     *  without end behind whatever a hostile network advertises. */
+    private val verifying: ExecutorService = ThreadPoolExecutor(
+        MAX_VERIFYING, MAX_VERIFYING, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(MAX_PENDING_CHECKS),
+    )
 
     /** Bounds the challenges answered at once. Anything on the wifi can
      *  connect, and a thread per connection would let it exhaust the phone. */
@@ -109,7 +116,7 @@ class NsdPeerDiscovery(
         executor.execute(task)
         true
     } catch (e: RejectedExecutionException) {
-        Log.i(TAG, "discovery is closed; dropped a late callback")
+        Log.i(TAG, "dropped work: discovery is closed or its backlog is full")
         false
     }
 
@@ -327,9 +334,12 @@ class NsdPeerDiscovery(
             // This phone's own advertisement comes back to its own browser.
             claimed == pairing.clientId -> roster.lost(service)
             claimed == null || host == null -> settle(service, PeerStanding.Refused("no client id advertised"))
-            else -> check {
-                val standing = PeerVerification.verify(claimed, pairing, crypto) { exchange(host, info.port, it) }
-                post { settle(service, standing) }
+            else -> {
+                val queued = check {
+                    val standing = PeerVerification.verify(claimed, pairing, crypto) { exchange(host, info.port, it) }
+                    post { settle(service, standing) }
+                }
+                if (!queued) settle(service, PeerStanding.Refused("too many devices to check at once"))
             }
         }
     }
@@ -404,5 +414,7 @@ class NsdPeerDiscovery(
         const val MAX_ANSWERING = 8
 
         const val MAX_VERIFYING = 4
+
+        const val MAX_PENDING_CHECKS = 16
     }
 }
