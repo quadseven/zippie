@@ -289,10 +289,10 @@ def projected_idle_mb_per_day(
 ) -> float:
     """Estimate packet-mode idle traffic, including IP/UDP and RTT-hint bytes.
 
-    Each probe request/reply pair costs two transport frames (HEADER_LEN
-    each), two IPv4/UDP headers, and two payload bytes for the RTT hint in the
-    request. The reply has no payload. Periodic WireGuard keepalives are
-    accounted separately below.
+    The `probes` term below charges each request/reply pair as
+    `2 * (HEADER_LEN + _IPV4_UDP_HEADER_BYTES) + 2`: two framed probes and
+    the request's two RTT-hint payload bytes. The reply has no payload.
+    Periodic WireGuard keepalives are accounted separately below.
     """
     if metered_legs <= 0:
         return 0.0

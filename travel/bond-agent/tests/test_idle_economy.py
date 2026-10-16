@@ -177,7 +177,7 @@ def test_idle_projection_docstring_matches_accounted_packet_bytes():
 
     assert documentation is not None
     assert "RTT-hint bytes" in documentation
-    assert "two IPv4/UDP headers" in documentation
+    assert "2 * (HEADER_LEN + _IPV4_UDP_HEADER_BYTES) + 2" in documentation
     assert "accounted separately" in documentation
 
 
