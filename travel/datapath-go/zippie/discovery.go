@@ -40,8 +40,16 @@ import (
 // proof names. A leg built from a verified proof therefore dials the device
 // that holds the key, whoever forwarded the bytes.
 //
-// What this does NOT give: no forward secrecy, and a device whose roster
-// leaks lets its holder verify (not impersonate) the household's devices.
+// What this does NOT give. The discovery key is SYMMETRIC: every roster holds
+// it for every device, so whoever holds a roster - any paired phone, or a
+// stolen bundle - can forge a proof as any other rostered device and name an
+// endpoint of its choosing. A stranger cannot; the household can. The damage
+// is bounded (an operator must adopt the peer, the router dials only private
+// LAN addresses, and a relay leg carries WireGuard ciphertext it cannot read),
+// so the worst case is a bogus leg, not a leak. Closing it needs asymmetric
+// proofs - an Ed25519 key per device and public keys in the roster - which is
+// a different primitive from the ClientRegistry this deliberately reuses.
+// There is also no forward secrecy.
 
 // peerProofDomain separates the discovery key from every other use of a
 // pairing key. Changing it invalidates every provisioned roster.

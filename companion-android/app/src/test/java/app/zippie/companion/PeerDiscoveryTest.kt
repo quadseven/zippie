@@ -253,6 +253,25 @@ class PeerDiscoveryTest {
         }
     }
 
+    /** A per-read timeout alone lets a peer trickle a byte just inside it, for
+     *  hours. The whole message has one deadline. */
+    @Test
+    fun `a peer that trickles past the deadline is cut off`() {
+        var now = 0L
+        val trickle = object : java.io.InputStream() {
+            override fun read(): Int {
+                now += 1_000 // each byte arrives a second after the last
+                return 'a'.code
+            }
+        }
+        try {
+            PeerHandshake.read(trickle, deadlineMs = 4_000, clock = { now })
+            fail("a trickled message was read past its deadline")
+        } catch (expected: PeerHandshakeException) {
+            assertTrue(now <= 5_000)
+        }
+    }
+
     @Test
     fun `the published snapshot offers what the roster would`() {
         val snap = PeerSnapshot(ownClientId = 3, verified = listOf(peer(), peer(3, name = "me")))

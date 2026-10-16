@@ -45,6 +45,10 @@ class NsdPeerDiscovery(
     private val worker: ExecutorService = Executors.newSingleThreadExecutor()
     private val io: ExecutorService = Executors.newCachedThreadPool()
 
+    /** Verifications of discovered devices, a few at a time. Each is bounded
+     *  by the handshake deadline; the pool bounds how many run at once. */
+    private val verifying: ExecutorService = Executors.newFixedThreadPool(MAX_VERIFYING)
+
     /** Bounds the challenges answered at once. Anything on the wifi can
      *  connect, and a thread per connection would let it exhaust the phone. */
     private val answering = Semaphore(MAX_ANSWERING)
@@ -92,11 +96,14 @@ class NsdPeerDiscovery(
         post { stopOnWorker() }
         worker.shutdown()
         io.shutdownNow()
+        verifying.shutdownNow()
     }
 
     private fun post(task: () -> Unit): Boolean = submit(worker, task)
 
     private fun spawn(task: () -> Unit): Boolean = submit(io, task)
+
+    private fun check(task: () -> Unit): Boolean = submit(verifying, task)
 
     private fun submit(executor: ExecutorService, task: () -> Unit): Boolean = try {
         executor.execute(task)
@@ -320,7 +327,7 @@ class NsdPeerDiscovery(
             // This phone's own advertisement comes back to its own browser.
             claimed == pairing.clientId -> roster.lost(service)
             claimed == null || host == null -> settle(service, PeerStanding.Refused("no client id advertised"))
-            else -> spawn {
+            else -> check {
                 val standing = PeerVerification.verify(claimed, pairing, crypto) { exchange(host, info.port, it) }
                 post { settle(service, standing) }
             }
@@ -395,5 +402,7 @@ class NsdPeerDiscovery(
         /** A household has a handful of devices; more simultaneous challenges
          *  than this is something other than a household. */
         const val MAX_ANSWERING = 8
+
+        const val MAX_VERIFYING = 4
     }
 }
