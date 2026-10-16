@@ -1208,11 +1208,12 @@ class BondAgent:
         WireGuard means the whole chain worked - leg, home transport, reorder,
         the lot. Nothing short of that proves the tunnel can carry traffic.
 
-        No deadlock, because the datapath does not need the route to work. The
-        legs dial out with SO_BINDTODEVICE and the home endpoint has its own /32
-        pin, so frames flow, the handshake completes, and delivery starts while
-        the route is still absent. The route follows the evidence rather than
-        creating it.
+        No deadlock, because the datapath does not need the default route to
+        work. Its sockets dial out with SO_BINDTODEVICE, so they can carry
+        frames and prove delivery while the default route is still absent.
+        The /32 pin keeps other main-table traffic to the home address off the
+        tunnel; it is not what lets the transport sockets reach home. The
+        default route follows the evidence rather than creating it.
 
         The failure mode this buys is the right one: a packet datapath that
         cannot deliver simply never gets the route, LAN clients keep using the
