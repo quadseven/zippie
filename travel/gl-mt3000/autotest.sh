@@ -18,10 +18,10 @@
 # ethernet back rather than with an operator holding a dead router.
 set -u
 
-STATE_DIR=/etc/zippie/state
-STATE=$STATE_DIR/autotest
-LOG=$STATE_DIR/autotest.log
-CONSOLE=http://127.0.0.1:8787/api/status
+STATE_DIR="${ZIPPIE_AUTOTEST_STATE_DIR:-/etc/zippie/state}"
+STATE="$STATE_DIR/autotest"
+LOG="$STATE_DIR/autotest.log"
+CONSOLE="${ZIPPIE_AUTOTEST_CONSOLE:-http://127.0.0.1:8787/api/status}"
 
 HOLD_OK=3          # consecutive carrying checks before calling it a PASS
 MAX_RUN_S=600      # 10 min: hard ceiling on how long ethernet may stay down
@@ -33,47 +33,36 @@ log() {
     logger -t zippie-autotest "$*"
 }
 
-# NO DEFAULT ROUTE VIA eth0. A routing fact, and NOT on its own a fault - see
-# we_took_the_wan_down below for why that distinction cost seven days.
-wan_is_down() { ! ip route show default 2>/dev/null | grep -q "dev eth0"; }
-
-# DID *WE* TAKE IT DOWN? (zippie#291)
+# DID AN ACTIVE TEST WITHDRAW THE WAN? (#242, zippie#291)
 #
-# THE BUG THIS CLOSES. The failsafe used to fire on wan_is_down alone. On a
-# router with no ethernet cable there is never a default via eth0 - the bond owns
-# `default dev pbz0` and that is correct operation - so the failsafe read a
-# healthy machine as a broken one and ran `ifup wan` every 60 seconds from
-# 2026-08-17 to 2026-08-24: 2130 firings, 2127 failed restores, on the
-# household's live router, and nothing escalated.
-#
-# A MARKER, NOT AN INFERENCE. The routing table cannot tell "a test withdrew this
-# route" from "this router has no wired uplink and never did". The script that
-# ran ifdown knows, so it writes it down before acting. Written BEFORE the ifdown
-# and cleared only after a proven restore, so every failure mode the header
-# claims still ends with the ethernet back: a crashed script, a reboot mid-test,
-# a corrupt state file and an expired deadline all leave the marker in place.
-#
-# The corollary is the point: with no marker, a down wan is not this script's
-# business, and it does nothing.
-WAN_MARK=$STATE_DIR/autotest-downed-wan
-we_took_the_wan_down() { [ -f "$WAN_MARK" ]; }
+# A down WAN is only our concern if an active test took it down.
+# The routing table cannot tell "a test withdrew this route" from
+# "this router has no wired uplink and never did" - grepping for eth0
+# misreads a healthy bonded router as broken and loops forever.
+# The active test state (marker) records that a test withdrew the WAN.
+WAN_MARK="$STATE_DIR/autotest-downed-wan"
+wan_is_down() { [ -f "$WAN_MARK" ]; }
+we_took_the_wan_down() { wan_is_down; }
 mark_wan_down() { mkdir -p "$STATE_DIR"; date -u +%FT%TZ > "$WAN_MARK"; }
 clear_wan_mark() { rm -f "$WAN_MARK"; }
+
+# Check whether default route via eth0 exists in the routing table.
+wan_route_present() { ip route show default 2>/dev/null | grep -q "dev eth0"; }
 
 # HOW MANY FAILED RESTORES BEFORE THIS STOPS SHOUTING. A recovery mechanism that
 # has never once succeeded is indistinguishable from one that is not wired up,
 # and the old loop logged 2127 identical failures without ever escalating. After
 # this many it says so once and stands down, leaving the marker so a human still
 # sees an unfinished test.
-RESTORE_GIVE_UP=5
-FAIL_COUNT=$STATE_DIR/autotest-restore-fails
+RESTORE_GIVE_UP="${ZIPPIE_AUTOTEST_RESTORE_GIVE_UP:-5}"
+FAIL_COUNT="$STATE_DIR/autotest-restore-fails"
 
 restore() {
     ifup wan >/dev/null 2>&1
     # Read back rather than trust: this is the line the whole design rests on.
     i=0
     while [ $i -lt 20 ]; do
-        if ip route show default 2>/dev/null | grep -q "dev eth0"; then
+        if wan_route_present; then
             log "wan RESTORED"
             clear_wan_mark
             rm -f "$FAIL_COUNT"
@@ -124,7 +113,7 @@ mkdir -p "$STATE_DIR"
 
 # ---- HARD FAILSAFE ------------------------------------------------------
 # Runs before the state machine, unconditionally.
-if wan_is_down && we_took_the_wan_down; then
+if wan_is_down; then
     ok=0
     if [ -f "$STATE" ]; then
         read -r st started deadline hits < "$STATE" 2>/dev/null
@@ -166,7 +155,7 @@ case "$st" in
     if carrying; then
         log "TEST START: phone carrying, taking ethernet down for up to ${MAX_RUN_S}s"
         mark_wan_down
-    ifdown wan >/dev/null 2>&1
+        ifdown wan >/dev/null 2>&1
         echo "running $now $((now + MAX_RUN_S)) 0 0" > "$STATE"
     else
         log "test not started: phone leg is not carrying, nothing to prove"
@@ -185,10 +174,10 @@ case "$st" in
     # The deadline is what bounds this, and it also survives the reboot, so a
     # crash loop cannot hold the ethernet down indefinitely: the moment `now`
     # passes it, the branch below restores and gives up.
-    if ! wan_is_down; then
+    if wan_route_present; then
         log "wan returned mid-test (router reboot?) - re-asserting the cut"
         mark_wan_down
-    ifdown wan >/dev/null 2>&1
+        ifdown wan >/dev/null 2>&1
     fi
     if [ "$now" -ge "$deadline" ]; then
         log "RESULT FAIL: no carrying phone leg by deadline ($((now - started))s) - restoring ethernet"
