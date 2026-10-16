@@ -512,6 +512,13 @@ router will dial is the one *inside* the proof. A relay on the LAN can forward
 a real proof but cannot change that address. As a second fence, the datapath
 refuses any frame carrying `FlagPeerProof`.
 
+The residual risk is inside the household. The discovery key is symmetric and
+every roster holds it, so any paired phone, or a stolen bundle, can forge a
+proof as another rostered device. The worst case is a bogus leg: adoption needs
+an operator's tap, the router dials only private addresses, and a relay leg
+carries WireGuard ciphertext. Closing it needs a per-device Ed25519 key with
+public keys in the roster.
+
 Adopting a verified peer is an ordinary lease, announced with
 `"delegated": true`, because the request comes from the adopting phone and not
 the leg. A delegated announce keeps its claimed host instead of the request's

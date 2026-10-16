@@ -93,13 +93,27 @@ object PeerHandshake {
     fun challengeIn(data: ByteArray): String? = field("challenge", data)
     fun proofIn(data: ByteArray): String? = field("proof", data)
 
-    /** Reads one message: up to a newline or the far end closing, and never
-     *  past [MAX_MESSAGE_BYTES]. The caller sets the socket's read timeout. */
-    fun read(input: InputStream): ByteArray {
+    /** The whole message, however it arrives, within this long. */
+    const val DEADLINE_MS = 4_000L
+
+    /**
+     * Reads one message: up to a newline or the far end closing, never past
+     * [MAX_MESSAGE_BYTES], and never past [deadlineMs] in total. The caller's
+     * socket read timeout bounds one read; this bounds the message, so a peer
+     * trickling a byte just inside the read timeout cannot hold the
+     * connection for hours.
+     */
+    fun read(
+        input: InputStream,
+        deadlineMs: Long = DEADLINE_MS,
+        clock: () -> Long = System::currentTimeMillis,
+    ): ByteArray {
+        val giveUpAt = clock() + deadlineMs
         val out = ByteArrayOutputStream()
         while (out.size() <= MAX_MESSAGE_BYTES) {
             val b = input.read()
             if (b < 0 || b == '\n'.code) return out.toByteArray()
+            if (clock() > giveUpAt) throw PeerHandshakeException("the peer took too long to send its message")
             out.write(b)
         }
         throw PeerHandshakeException("the peer sent more than a handshake message")
