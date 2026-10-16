@@ -319,6 +319,20 @@ targets:
       # to make impossible. Theme.swift has no dependency on anything else in
       # the app target, so it compiles standalone as a second target member.
       - path: ZippieCompanionApp/Design/Theme.swift
+      # AND THE GENERATED TOKENS BESIDE IT. Issue #244's acceptance criterion
+      # is "colours come from the generated tokens so a token change moves the
+      # widget with everything else", and this is the file that makes it true:
+      # design/tokens.json -> design/generate.py -> Tokens.generated.swift.
+      # It is ALSO why the widget view spells its colours `Ink.gen_*` rather
+      # than `Ink.*` - Theme.swift's hand-authored values were recorded from the
+      # built app and have since drifted from the token source, so a colour
+      # change in tokens.json would move the hub and Android but not this
+      # widget.
+      #
+      # Compiles standalone for the same reason Theme.swift does: it is a single
+      # `extension Ink` built from `Color(light:dark:)`, declared in Theme.swift
+      # directly above and therefore already a member of this target.
+      - path: ZippieCompanionApp/Design/Tokens.generated.swift
     dependencies:
       # The same SPM package the app and the tunnel use - WidgetTimeline.build
       # and RelayStatusStore are exactly the two calls this extension makes.

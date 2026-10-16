@@ -196,5 +196,40 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+
+        <!-- THE HOME-SCREEN WIDGET (#244): "is it working, and on what",
+             answered without opening the app. Small and medium only - see
+             RelayWidget.kt for why large and interactivity are both
+             deliberately out of scope.
+
+             EXPORTED, and it has to be: launchers bind to this receiver to
+             render the tile, so a widget nobody else can reach is a widget that
+             never appears. The intent filter is not optional for the same
+             reason - Android finds providers by querying receivers for
+             APPWIDGET_UPDATE, so without it the widget is simply absent from
+             the picker and looks exactly like a build that forgot it.
+
+             NOT directBootAware, unlike BootReceiver. The widget reads records
+             in device-protected storage, but it is placed and redrawn by a
+             person looking at a phone; a boot-complete redraw before anyone has
+             ever opened the app would show a bond snapshot from before the
+             reboot, which is precisely the stale claim this feature is built to
+             avoid. It goes quiet on its own instead, through
+             WidgetBondSnapshot.STALENESS_MS.
+
+             widgetFeatures deliberately absent: `reconfigurable` would open a
+             configuration Activity this feature does not have, and
+             `hide_from_picker` would defeat the point. -->
+        <receiver
+            android:name=".RelayWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/relay_widget_info" />
+        </receiver>
     </application>
 </manifest>
