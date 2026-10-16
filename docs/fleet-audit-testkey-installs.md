@@ -9,7 +9,7 @@ production handset during initial bring-up. The throwaway key created by the CI
 pipeline job was deleted upon job completion, preventing any future upgrade in
 place because Android requires signing certificate continuity across package
 updates. Furthermore, the build was served over plain HTTP from the router web
-root (/www on the travel router at 10.99.0.1).
+root (`/www` on the travel router).
 
 This audit records the status of the handset fleet, the router web root, and the
 verification mechanisms implemented to permanently prevent TESTKEY builds from
@@ -21,16 +21,16 @@ Both production handsets currently enrolled and active as bond legs were audited
 by pulling the installed APK directly from the device and computing the SHA-256
 digest of the APK Signing Block v2 certificate:
 
-| Handset | Serial | Role | Installed Build | Certificate SHA-256 Digest | Status |
-|---|---|---|---|---|---|
-| Handset 1 | pixel-6a-ea83 | Primary bonded uplink | 0.1.0-157-735a31b | ecaaf695e2ac5bee845edf075038437ab8ae668890c07012525640c652e477f7 | Genuine Release Key (PASS) |
-| Handset 2 | pixel-6a-589f | Secondary bonded uplink | 0.1.0-157-735a31b | ecaaf695e2ac5bee845edf075038437ab8ae668890c07012525640c652e477f7 | Genuine Release Key (PASS) |
+| Handset | Role | Installed Build | Certificate SHA-256 Digest | Status |
+|---|---|---|---|---|
+| Handset 1 | Primary bonded uplink | 0.1.0-157-735a31b | ecaaf695e2ac5bee845edf075038437ab8ae668890c07012525640c652e477f7 | Release signer (PASS) |
+| Handset 2 | Secondary bonded uplink | 0.1.0-157-735a31b | ecaaf695e2ac5bee845edf075038437ab8ae668890c07012525640c652e477f7 | Release signer (PASS) |
 
 Findings:
 - Both active Pixel 6a handsets run builds signed with the genuine release key
   (SHA-256: ecaaf695e2ac5bee845edf075038437ab8ae668890c07012525640c652e477f7).
 - Neither handset is running a TESTKEY or throwaway-signed APK.
-- The historical handset (pixel-6a-a554, Headwind h0001) that received the legacy
+- The historical handset that received the legacy
   TESTKEY build was wiped, re-enrolled, and upgraded to the clean release build.
 
 ## 3. Router Web Root Audit Findings

@@ -164,16 +164,10 @@ def test_feed_throwaway_signed_apk_asserts_rejection(tmp_path: Path):
 
     assert proc.returncode != 0, "install path accepted a throwaway-signed APK!"
     combined = proc.stdout + proc.stderr
-    assert digest in combined, (
-        "error output must name the candidate throwaway signer found"
-    )
-    assert RELEASE_SIGNER in combined, (
-        "error output must name the expected pinned release signer"
-    )
+    assert digest in combined, "error output must name the candidate throwaway signer found"
+    assert RELEASE_SIGNER in combined, "error output must name the expected pinned release signer"
     assert "refusing to install TESTKEY or throwaway-signed build" in combined
-    assert "asking fake-router" not in combined, (
-        "preflight should halt before probing the router"
-    )
+    assert "asking fake-router" not in combined, "preflight should halt before probing the router"
 
 
 def test_feed_matching_signer_apk_passes_candidate_preflight(tmp_path: Path):
