@@ -23,6 +23,7 @@ struct DiagnosticsScreen: View {
         Page {
             header
             rows
+            tokenSection
             refresh
         }
         .task { await model.measure() }
@@ -69,6 +70,39 @@ struct DiagnosticsScreen: View {
                 }
                 .padding(.vertical, 2)
             }
+        }
+    }
+
+    private var tokenSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionHead(title: "Write token")
+
+            Readout(label: "On this phone",
+                    value: model.hasToken ? "stored" : "not stored",
+                    tone: model.hasToken ? Ink.primary : Ink.degraded)
+            Hairline()
+            SecretRow(label: "Token", text: $model.tokenEntry)
+
+            HStack(spacing: Space.snug) {
+                ActionButton(title: "Store token", role: .quiet,
+                             enabled: !model.tokenEntry.isEmpty) {
+                    model.saveToken()
+                }
+                if model.hasToken {
+                    ActionButton(title: "Forget", role: .quiet) { model.forgetToken() }
+                }
+            }
+            .padding(.top, Space.snug)
+
+            if let error = model.tokenError {
+                Note(text: error, tone: .warning)
+            }
+
+            Note(text: "Reads are open; writes are not. The router generates "
+               + "this token on first use and keeps it as console_token in its "
+               + "state directory. Without a write token, this phone cannot "
+               + "join the bond. It is held in this phone's keychain and is "
+               + "never shown again once stored.")
         }
     }
 

@@ -275,6 +275,40 @@ final class RelayVerdictTests: XCTestCase {
         XCTAssertNil(decoded.stats.lastRouterInboundAt)
     }
 
+    // MARK: - missing write token
+
+    /// A relay started with no token stored warns the operator. Without a write
+    /// token, the phone cannot announce itself or configure a leg on the router,
+    /// so it cannot join the bond.
+    func testRelayStartedWithNoTokenStoredWarnsOperator() {
+        let starting = RelayVerdict.evaluate(run: .starting, report: nil, hasToken: false)
+        XCTAssertEqual(starting, .noToken)
+        XCTAssertEqual(starting.headline, "No token")
+        XCTAssertEqual(starting.detail(), "No write token is stored. This phone cannot join the bond.")
+        XCTAssertTrue(starting.isDownLeg)
+        XCTAssertFalse(starting.isCarryingLeg)
+
+        let running = RelayVerdict.evaluate(
+            run: .running,
+            report: report { _ in },
+            now: now,
+            hasToken: false
+        )
+        XCTAssertEqual(running, .noToken)
+        XCTAssertEqual(running.headline, "No token")
+        XCTAssertEqual(running.detail(), "No write token is stored. This phone cannot join the bond.")
+        XCTAssertTrue(running.isDownLeg)
+        XCTAssertFalse(running.isCarryingLeg)
+    }
+
+    func testRelayOffOrStoppingWithNoTokenDoesNotWarn() {
+        let off = RelayVerdict.evaluate(run: .off, report: nil, hasToken: false)
+        XCTAssertEqual(off, .off)
+
+        let stopping = RelayVerdict.evaluate(run: .stopping, report: nil, hasToken: false)
+        XCTAssertEqual(stopping, .stopping)
+    }
+
     // MARK: - house voice
 
     func testAllCopyIsAscii() {

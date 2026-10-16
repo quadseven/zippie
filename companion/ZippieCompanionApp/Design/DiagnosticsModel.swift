@@ -13,9 +13,17 @@ final class DiagnosticsModel: ObservableObject {
     @Published private(set) var diagnostics = Diagnostics()
     @Published private(set) var measuring = false
 
+    /// Never prefilled from the keychain. Showing a stored secret back to
+    /// whoever picks up the phone buys nothing - the app can say a token is
+    /// stored without displaying it.
+    @Published var tokenEntry = ""
+    @Published private(set) var hasToken: Bool
+    @Published private(set) var tokenError: String?
+
     private let consoleHost: String?
     private let mdmHost: String
     private let session: URLSession
+    private let token: ConsoleWriteToken
 
     /// NO DEFAULT (#156). This named one specific deployment's MDM in every
     /// build, extractable from the binary. Nothing on iOS writes a real value
@@ -27,16 +35,43 @@ final class DiagnosticsModel: ObservableObject {
     /// the same blank-by-default, skip-when-blank shape.
     init(consoleHost: String?,
          mdmHost: String = "",
-         session: URLSession = .shared) {
+         session: URLSession = .shared,
+         token: ConsoleWriteToken = .shared) {
         self.consoleHost = consoleHost
         self.mdmHost = mdmHost
         self.session = session
+        self.token = token
+        self.hasToken = token.read() != nil
+    }
+
+    // MARK: - the write token
+
+    /// Stores the token and reports whether it landed. The keychain can refuse,
+    /// and a UI that assumed it did not would show a saved token that is not
+    /// there and then blame the router for the 401.
+    @discardableResult
+    func saveToken() -> Bool {
+        guard token.save(tokenEntry) else {
+            tokenError = "The token could not be stored on this phone."
+            return false
+        }
+        tokenEntry = ""
+        tokenError = nil
+        hasToken = true
+        return true
+    }
+
+    func forgetToken() {
+        token.remove()
+        hasToken = token.read() != nil
+        tokenError = nil
     }
 
     func measure() async {
         guard !measuring else { return }
         measuring = true
         defer { measuring = false }
+        hasToken = token.read() != nil
 
         var d = Diagnostics()
         let facts = await NetworkFacts.current()
