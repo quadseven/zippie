@@ -13,8 +13,6 @@ import subprocess
 import time
 from pathlib import Path
 
-import pytest
-
 REPO = Path(__file__).resolve().parents[3]
 AUTOTEST = REPO / "travel/gl-mt3000/autotest.sh"
 AUTOTEST_ARM = REPO / "travel/gl-mt3000/autotest-arm.sh"

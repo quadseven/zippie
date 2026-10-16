@@ -113,7 +113,7 @@ mkdir -p "$STATE_DIR"
 
 # ---- HARD FAILSAFE ------------------------------------------------------
 # Runs before the state machine, unconditionally.
-if wan_is_down; then
+if wan_is_down && we_took_the_wan_down; then
     ok=0
     if [ -f "$STATE" ]; then
         read -r st started deadline hits < "$STATE" 2>/dev/null
