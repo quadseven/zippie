@@ -7,18 +7,13 @@ name: check.leak-scan
 # scanner and its patterns live in quadseven/infra-public; see
 # _reusable.leak-scan.yml there for the mechanism and exit-code contract.
 #
-# WARN MODE (enforce: false), on purpose, for the first rollout. This repo is
-# a network bonding project: private-range addresses appear in its tests,
-# configs and docs by design (tunnel endpoints, lab subnets, placeholder
-# LANs), and scripts/check-no-operator-hosts.sh already polices which of
-# those ranges are permitted. Enforcing the generic rfc1918 shape here would
-# fail most PRs that touch the datapath. A finding is a warning annotation
-# on the run; it does not fail the check. Flip to enforce once the
-# remaining hits are either scrubbed or marked `leak-guard-allow`.
-#
-# Warn mode softens FINDINGS only. A scan that could not run (missing
-# scanner, unresolvable diff, empty diff on a PR with changes) is still a
-# red check.
+# ENFORCING (enforce defaults to true): a finding fails the check. This repo
+# is a network bonding project, so private-range addresses appear in its
+# tests, configs and docs by design (tunnel endpoints, lab subnets,
+# placeholder LANs). A deliberate test or placeholder address is marked
+# `leak-guard-allow` on its line, with a reason; anything else is scrubbed.
+# scripts/check-no-operator-hosts.sh separately polices which ranges are
+# permitted.
 #
 # `edited` is in the trigger list on purpose: a PR body can leak long after
 # the last push.
@@ -37,4 +32,4 @@ jobs:
       contents: read
     with:
       allowed-repo-refs: infra-public, muster
-      enforce: false
+      enforce: true

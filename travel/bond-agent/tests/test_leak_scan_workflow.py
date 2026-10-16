@@ -1,6 +1,6 @@
 """Tests for the shared leak scan caller workflow (.github/workflows/check.leak-scan.yml).
 
-Verifies the workflow structure, triggers, SHA pinning, warn mode configuration,
+Verifies the workflow structure, triggers, SHA pinning, enforcing mode configuration,
 and that out-of-scope mechanisms (such as the runtime deny-list layer) and
 private repository references are not present.
 """
@@ -58,12 +58,12 @@ def test_workflow_calls_pinned_reusable_workflow():
     )
 
 
-def test_workflow_runs_in_warn_mode():
+def test_workflow_runs_in_enforcing_mode():
     data = _load_workflow()
     leak_job = data.get("jobs", {}).get("leak-scan", {})
     with_inputs = leak_job.get("with", {})
-    assert with_inputs.get("enforce") is False, (
-        "enforce must be false for initial warn-mode rollout"
+    assert with_inputs.get("enforce", True) is True, (
+        "enforce must be true (or omitted, true is the default): warn mode is not a guard"
     )
 
 
