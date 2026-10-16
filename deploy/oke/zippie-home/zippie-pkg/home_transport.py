@@ -17,11 +17,15 @@ Provisioning (keys, peers) stays in zippie_home.py; carrying packets is here.
 
 THE THREE THINGS THAT MAKE HOME ROLE DIFFERENT FROM TRAVEL
 ----------------------------------------------------------
-1. ONE listening link on a FIXED port. Travel dials out on ephemeral ports;
+1. ONE listening SOCKET on a FIXED port. Travel dials out on ephemeral ports;
    home must listen on the port the travel router sprays to (default 51901),
    because the travel router cannot know an ephemeral home port.
-2. roam=True. The travel router moves between ISPs, so each frame can arrive
-   from a different source; the link's reply target follows the last source.
+2. roam=True and learn_legs=True. Every travel leg arrives on that one socket,
+   so home learns one endpoint per path_id from the frames themselves and each
+   leg's reply target follows that leg's own source as the router moves between
+   ISPs. Downstream traffic is spread across the learned legs by observed
+   upstream health, so it is not capped at the best single leg (#264). A leg
+   that goes silent is stood down while another is still heard.
 3. wg_peer PRESET. The real wg server never speaks until it receives a
    handshake, and the transport cannot deliver that handshake without already
    knowing where the server is. Travel learns this from its wg client's first
@@ -88,6 +92,7 @@ def build_home_transport(
     *,
     socket_factory=None,
     selector_factory=None,
+    _clock=None,
 ) -> Transport:
     """Construct a home-role Transport. Does NOT start it.
 
@@ -98,6 +103,7 @@ def build_home_transport(
         "reorder_deadline_ms": cfg.reorder_deadline_ms,
         "max_reorder_deadline_ms": cfg.max_reorder_deadline_ms,
         "roam": True,
+        "learn_legs": True,
         "wg_peer": cfg.wg_server,
         # Raises rather than falling back to unauthenticated if the level and
         # the key file disagree, or the key file is group/world readable. A
@@ -111,11 +117,14 @@ def build_home_transport(
         kwargs["socket_factory"] = socket_factory
     if selector_factory is not None:
         kwargs["selector_factory"] = selector_factory
+    if _clock is not None:
+        kwargs["_clock"] = _clock
 
     t = Transport(cfg.local_addr, **kwargs)
-    # ONE link, bound to the public listen port, roaming to the travel source.
-    # The initial remote is a placeholder the first inbound frame corrects; it
-    # is never used to send before then because replies only follow inbound.
+    # The listening link owns the public-port socket. Its remote is a placeholder
+    # and it is not scheduled itself: each travel leg becomes a link of its own
+    # (sharing this socket) when its first frame arrives, so nothing is sent
+    # downstream before the travel router has been heard.
     t.add_link(
         LinkEndpoint(
             path_id=0,
@@ -127,7 +136,7 @@ def build_home_transport(
         )
     )
     log.info(
-        "home transport built: listen %s -> wg server %s (roam on, one link)",
+        "home transport built: listen %s -> wg server %s (roam on, legs learned per path)",
         cfg.listen_addr,
         cfg.wg_server,
     )
