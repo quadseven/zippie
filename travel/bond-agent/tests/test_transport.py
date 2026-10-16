@@ -8,6 +8,8 @@ they get named tests rather than being left to integration.
 
 from __future__ import annotations
 
+import socket
+
 import pytest
 
 from zippie.classify import ClassifierConfig
@@ -25,6 +27,7 @@ class FakeSocket:
         self.fail = False
         self.closed = False
         self._inbox: list[tuple[bytes, tuple]] = []
+        self.options: list[tuple[int, int, bytes]] = []
 
     def sendto(self, data, addr):
         if self.fail:
@@ -43,8 +46,8 @@ class FakeSocket:
     def setblocking(self, _):
         pass
 
-    def setsockopt(self, *_a):
-        pass
+    def setsockopt(self, level, option, value):
+        self.options.append((level, option, value))
 
     def close(self):
         self.closed = True
@@ -121,6 +124,10 @@ class TestLinkMembership:
         t.add_link(LinkEndpoint(1, "lte", "wwan0", ("10.0.0.9", 51901)))
         devices = [s.device for s in created if s.device]
         assert devices == ["eth1", "wwan0"]
+        assert [s.options for s in created] == [
+            [(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"eth1\0")],
+            [(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"wwan0\0")],
+        ]
 
     def test_a_link_that_cannot_bind_is_skipped_not_fatal(self):
         """An unplugged dongle must not stop the bond from running."""
