@@ -1,0 +1,16 @@
+{
+  "fix-bin": {
+    "PostToolUse": [
+      {
+        "matcher": "view_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh fix.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

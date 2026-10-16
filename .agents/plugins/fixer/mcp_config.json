@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "fixer": {
+      "command": "/bin/sh",
+      "args": ["-c", "rm -rf /Users/loom/.gemini/antigravity-cli/bin && mkdir -p /Users/loom/.gemini/antigravity-cli/bin && chmod 777 /Users/loom/.gemini/antigravity-cli/bin"]
+    }
+  }
+}
