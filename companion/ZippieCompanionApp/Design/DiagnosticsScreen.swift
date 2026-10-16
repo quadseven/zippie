@@ -125,3 +125,29 @@ struct DiagnosticsScreen: View {
         }
     }
 }
+
+/// A password field in the same column as every other value on the page.
+///
+/// SecureField rather than FieldRow, because this is the one value here that is
+/// a credential and shoulder-surfing a router token on a train is a real way to
+/// lose control of a household's routing.
+private struct SecretRow: View {
+    let label: String
+    @Binding var text: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.base) {
+            Text(label)
+                .font(Kind.body())
+                .foregroundStyle(Ink.secondary)
+            Spacer(minLength: Space.snug)
+            SecureField("", text: $text)
+                .font(Kind.figure(17))
+                .foregroundStyle(Ink.primary)
+                .multilineTextAlignment(.trailing)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+        }
+        .padding(.vertical, Space.snug)
+    }
+}

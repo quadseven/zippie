@@ -149,6 +149,7 @@ final class WidgetTimelineTests: XCTestCase {
             (.off, .neutral),
             (.starting, .neutral),
             (.stopping, .neutral),
+            (.noToken, .down),
             (.awaitingFirstReport, .neutral),
             (.notReporting, .down),
             (.paused(reason: "Daily cap of 2 GB reached."), .down),
