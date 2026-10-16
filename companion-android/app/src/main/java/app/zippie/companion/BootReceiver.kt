@@ -237,11 +237,31 @@ class BootReceiver : BroadcastReceiver() {
                 .onFailure { Log.w(TAG, "$source: could not refresh boot config mirror", it) }
         }
         val snapshot = BootConfigStore.read(context)
+        val verdict = snapshot.budgetVerdict
+        if (!verdict.isAllowed) {
+            // A local ledger read is free. Do not wake Wi-Fi to probe the
+            // router until the budget's own period can have changed.
+            val delay = BootRelayDecision.budgetRetryAfterMs(verdict)
+            val outcome = BootRelayDecision.decide(
+                RouterProximity.UNREACHABLE,
+                budgetAllowed = false,
+                budgetReason = verdict.reason,
+                budgetRetryDelayMs = delay,
+            ) as BootRelayDecision.Skip
+            val reconsiderAt = System.currentTimeMillis() + delay
+            if (!BootConfigStore.recordBudgetStandDown(context, outcome.reason, reconsiderAt)) {
+                Log.w(TAG, "$source: could not persist budget stand-down status")
+            }
+            BootLog.record(context, TAG, "$source: stood down - ${outcome.reason}; " +
+                "reconsidering at ${java.time.Instant.ofEpochMilli(reconsiderAt)}")
+            scheduleRetry(context, source, attempt, delay)
+            return
+        }
+        BootConfigStore.clearBudgetStandDown(context)
         val (_, proximity) = BondStatusClient.probe(
             snapshot.consoleCandidates,
             wifi = SystemWifiRoute(context),
         )
-        val verdict = snapshot.budgetVerdict
 
         when (val outcome = BootRelayDecision.decide(proximity, verdict.isAllowed, verdict.reason)) {
             is BootRelayDecision.Start -> {
