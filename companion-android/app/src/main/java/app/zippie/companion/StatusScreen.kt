@@ -69,6 +69,8 @@ fun StatusScreen(
     onRefresh: () -> Unit,
     onOpenDiagnostics: () -> Unit = {},
     budgetStandDown: BootConfigStore.BudgetStandDown? = null,
+    onAdoptPeer: (VerifiedPeer) -> Unit = {},
+    onReleasePeer: (VerifiedPeer) -> Unit = {},
 ) {
     Column(
         Modifier
@@ -143,6 +145,10 @@ fun StatusScreen(
                 LegRow(leg)
             }
         }
+
+        // Below the legs, not among them: these are devices that COULD be
+        // legs, and mixing the two would blur the line the list exists to draw.
+        NearbyPeers(state.peers, state.legNames, state.legEndpoints, onAdoptPeer, onReleasePeer)
 
         // WHAT IT COST. A distinct headline stat, matching BondScreen.swift's
         // "Session total" - not folded into the byte counts on the Relay tab,

@@ -604,8 +604,15 @@ def _announce_host_for(body: dict, source: str, warned: dict, name: str) -> str:
     Split out of do_POST rather than inlined because that handler was already
     at the complexity cap, and a request handler that grows a branch per field
     is how the interesting logic ends up somewhere untestable.
+
+    A DELEGATED announce keeps its claim (#270). One phone offering a peer it
+    verified over same-LAN discovery is not the leg, so its own source address
+    is exactly the wrong one to dial. Only a literal JSON true delegates; the
+    claim is still held to a private LAN address by DynamicLegs.announce.
     """
     claimed = str(body.get("host") or "")
+    if body.get("delegated") is True:
+        return claimed
     host = announce_host(claimed, source)
     if claimed and claimed != host:
         # ONCE PER LEG, not once per renewal. A phone renews every 15s and a

@@ -66,12 +66,27 @@ data class BondUiState(
     /** The heading above the connection rows, pre-computed by [BondLegs] so
      *  the screen never has to guess at scope on its own. */
     val legsHeading: String = "What this phone carried",
+    /** Same-LAN discovery (#270): paired devices on this wifi, verified. */
+    val peers: PeerSnapshot = PeerSnapshot(),
+    /** The router's leg names and relay endpoints, so a peer that is already
+     *  a leg is not offered again. Empty while the console is not answering. */
+    val legNames: Set<String> = emptySet(),
+    val legEndpoints: Set<String> = emptySet(),
 )
 
 class BondViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _state = MutableStateFlow(BondUiState())
     val state: StateFlow<BondUiState> = _state.asStateFlow()
+
+    /**
+     * Same-LAN discovery (#270). It publishes from its own thread, so each
+     * snapshot is handed to the main dispatcher before it touches [_state] -
+     * the same thread every other write to it runs on, so none is lost.
+     */
+    private val peers = NsdPeerDiscovery(app, publish = { snapshot ->
+        viewModelScope.launch { _state.value = _state.value.copy(peers = snapshot) }
+    })
 
     /**
      * The rolling window the throughput chart is drawn from.
@@ -113,6 +128,8 @@ class BondViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refresh() {
+        // Cheap when already running; picks up a pairing MDM pushed since.
+        peers.start()
         viewModelScope.launch {
             val context = getApplication<Application>()
             // All three touch disk or the telephony binder, and this runs every
@@ -150,6 +167,9 @@ class BondViewModel(app: Application) : AndroidViewModel(app) {
                         legsHeading = BondLegs.legsHeading(rows, bondReachable = true),
                         datapath = status.datapath,
                         pathsMissing = status.paths == null,
+                        legNames = status.paths.orEmpty().mapNotNull { it.name }.toSet(),
+                        legEndpoints = status.paths.orEmpty()
+                            .mapNotNull { it.relayEndpoint?.takeIf(String::isNotEmpty) }.toSet(),
                         consoleError = null,
                         consoleUrl = config.consoleCandidates.firstOrNull {
                             it.isLocal == (proximity == RouterProximity.LOCAL)
@@ -195,6 +215,8 @@ class BondViewModel(app: Application) : AndroidViewModel(app) {
                         legsHeading = BondLegs.legsHeading(fallback, bondReachable = false),
                         datapath = null,
                         pathsMissing = false,
+                        legNames = emptySet(),
+                        legEndpoints = emptySet(),
                         consoleError = result.message,
                         consoleUrl = config.consoleCandidates.firstOrNull()?.url,
                         fetchedAtMs = _state.value.fetchedAtMs,
@@ -266,6 +288,15 @@ class BondViewModel(app: Application) : AndroidViewModel(app) {
             }
             refresh()
         }
+    }
+
+    /** Offer a verified peer to the router as a leg (#270). */
+    fun adoptPeer(peer: VerifiedPeer) = peers.adopt(peer)
+
+    fun releasePeer(peer: VerifiedPeer) = peers.release(peer)
+
+    override fun onCleared() {
+        peers.close()
     }
 
     companion object {

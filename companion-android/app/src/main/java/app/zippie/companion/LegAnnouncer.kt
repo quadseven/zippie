@@ -61,6 +61,10 @@ class LegAnnouncer(
         val name: String,
         val label: String,
         val listenPort: Int,
+        /** True when this phone announces ANOTHER device - a peer it verified
+         *  over same-LAN discovery (#270). The router otherwise dials the
+         *  request's source address (#252), which here is this phone. */
+        val delegated: Boolean = false,
     ) {
         val isUsable: Boolean
             get() = consoleHost.isNotBlank() && token.isNotEmpty() &&
@@ -74,7 +78,7 @@ class LegAnnouncer(
          */
         override fun toString(): String =
             "LegAnnouncer.Config(consoleHost=$consoleHost, token=<redacted>, " +
-                "name=$name, label=$label, listenPort=$listenPort)"
+                "name=$name, label=$label, listenPort=$listenPort, delegated=$delegated)"
     }
 
     /**
@@ -143,6 +147,9 @@ class LegAnnouncer(
             // Asked for explicitly rather than left to the router's default, so
             // the two ends cannot drift apart silently.
             .put("lease_s", LEASE_S)
+        // Absent rather than false for a phone announcing itself, so the
+        // request it sends is byte for byte the one the router already knows.
+        if (config.delegated) body.put("delegated", true)
         return send(ANNOUNCE_PATH, body, config)
     }
 

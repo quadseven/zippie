@@ -37,6 +37,13 @@ targets:
           - "*.entitlements"
     dependencies:
       - package: ZippieCompanionKit
+      # The Go datapath, for same-LAN discovery (#270): the app verifies
+      # discovered peers with the binding's ClientRegistry rather than a Swift
+      # copy of the trust rule. gomobile builds a STATIC framework, so it links
+      # into this binary and nothing is embedded - the same reason the tunnel
+      # lists it with embed: false.
+      - framework: Frameworks/Zippie.xcframework
+        embed: false
       - package: Datadog
         product: DatadogCore
       - package: Datadog
@@ -84,6 +91,13 @@ targets:
         # confirmed by reading the BUILT plist.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        # Same-LAN discovery of other paired devices (#270). iOS 14+ refuses to
+        # advertise or browse any Bonjour type NOT listed here, and the refusal
+        # is silent: the browser simply never reports a result. Must equal
+        # PeerDiscovery.serviceType; CallSiteWiringTests holds the two together.
+        # An array, so it lives here and not in an INFOPLIST_KEY_ setting.
+        NSBonjourServices:
+          - _zippie._tcp
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.zippie.companion
@@ -129,7 +143,9 @@ targets:
         # refused. An app extension cannot present this prompt at all, so the
         # grant has to be obtained by the app - one more reason the foreground
         # relay stays in the UI.
-        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "Zippie receives frames from the zippie router over the local wifi network and relays them over cellular."
+        # Discovery (#270) uses the same grant: advertising and browsing
+        # _zippie._tcp is local network access too, so the string says so.
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "Zippie receives frames from the zippie router over the local wifi network and relays them over cellular, and finds your other paired zippie devices on the same network."
         # PHASE 2 (ADR 0020). Both the app and the extension carry
         # com.apple.developer.networking.networkextension; the app needs it to
         # drive NETunnelProviderManager, the extension to be loadable as a
