@@ -100,11 +100,15 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 return
             }
             self.setTunnelNetworkSettings(
-                ClientTunnel.networkSettings(config, captureRoutes: state == .capturing),
-                completionHandler: done)
+                ClientTunnel.networkSettings(config, state: state)) { error in
+                if let error {
+                    Self.log.error("client route settings refused: \(error.localizedDescription, privacy: .public)")
+                }
+                done(error)
+            }
         }
 
-        setTunnelNetworkSettings(ClientTunnel.networkSettings(config)) { [weak self] error in
+        setTunnelNetworkSettings(ClientTunnel.networkSettings(config, state: .capturing)) { [weak self] error in
             if let error {
                 Self.log.error("client settings refused: \(error.localizedDescription, privacy: .public)")
                 completionHandler(error)

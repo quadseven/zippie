@@ -42,10 +42,19 @@ final class CallSiteWiringTests: XCTestCase {
         let model = try source("ZippieCompanionApp/Design/BondModel.swift")
         XCTAssertTrue(client.contains("sendKeepalives()"))
         XCTAssertTrue(client.contains("try recovery.observe(statsJSON:"))
-        XCTAssertTrue(client.contains("ipv4.includedRoutes = captureRoutes ?"))
+        XCTAssertTrue(client.contains("ipv4.includedRoutes = state == .capturing ?"))
         XCTAssertTrue(client.contains("ipv4.excludedRoutes = [NEIPv4Route.default()]"))
-        XCTAssertTrue(provider.contains("ClientTunnel.networkSettings(config, captureRoutes:"))
+        XCTAssertTrue(provider.contains("ClientTunnel.networkSettings(config, state: state)"))
         XCTAssertTrue(model.contains("ClientProtectionStore.isReleased"))
+    }
+
+    func testFailedClientRouteSettingsReachRecoveryWithoutClaimingProtection() throws {
+        let provider = try source("ZippieCompanionTunnel/PacketTunnelProvider.swift")
+        let client = try source("ZippieCompanionTunnel/ClientTunnel.swift")
+        XCTAssertTrue(provider.contains("if let error {\n                    Self.log.error(\"client route settings refused:"))
+        XCTAssertTrue(provider.contains("done(error)"))
+        XCTAssertTrue(client.contains("if let error {\n                    Self.log.error(\"client route change failed:"))
+        XCTAssertTrue(client.contains("self.appliedRouteState = desired"))
     }
 
     /// `companion/`, found from this file rather than from the working

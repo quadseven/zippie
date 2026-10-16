@@ -90,7 +90,7 @@ final class ClientTunnel {
     /// seconds of startup silence or seventeen seconds after the last reply,
     /// plus the time iOS takes to apply the new settings.
     static func networkSettings(_ config: ClientConfig,
-                                captureRoutes: Bool = true) -> NEPacketTunnelNetworkSettings {
+                                state: ClientRouteRecovery.State) -> NEPacketTunnelNetworkSettings {
         let s = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: config.homeHost)
 
         let ipv4 = NEIPv4Settings(addresses: [config.tunnelAddress],
@@ -101,7 +101,7 @@ final class ClientTunnel {
         // packet tunnel at a time. A phone in client mode with a full tunnel
         // and no tailnet route cannot reach any of the user's own
         // infrastructure.
-        ipv4.includedRoutes = captureRoutes ? config.routes.map {
+        ipv4.includedRoutes = state == .capturing ? config.routes.map {
             $0.isDefaultRoute ? NEIPv4Route.default()
                               : NEIPv4Route(destinationAddress: $0.address,
                                             subnetMask: $0.mask)
@@ -109,7 +109,7 @@ final class ClientTunnel {
         // The home transport's own address must NOT go through the tunnel, or
         // the datapath's packets to home would be routed into the tunnel that
         // carries them - a loop that presents as total silence.
-        if !captureRoutes {
+        if state == .released {
             ipv4.excludedRoutes = [NEIPv4Route.default()]
         } else if let excluded = config.homeExcludedRoute {
             ipv4.excludedRoutes = [excluded]
@@ -127,7 +127,7 @@ final class ClientTunnel {
         // direction: the phone is still using its own network for everything
         // outside the routed ranges, and hijacking its resolver would break
         // captive portals and local discovery for no benefit.
-        if captureRoutes && !config.dnsServers.isEmpty {
+        if state == .capturing && !config.dnsServers.isEmpty {
             let dns = NEDNSSettings(servers: config.dnsServers)
             dns.matchDomains = config.isFullTunnel ? [""] : ["ts.net"]
             s.dnsSettings = dns
