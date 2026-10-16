@@ -37,6 +37,9 @@ the ones a reader of the resulting measurement has to believe:
 
 from __future__ import annotations
 
+import json
+import random
+
 import pytest
 
 from tools.impairment import (
@@ -752,7 +755,7 @@ def test_a_partially_lossy_leg_is_judged_on_the_loss_it_shows(tmp_path):
     _t, ctl = _control(
         tmp_path, rx_age={0: 0.1, 1: 0.1}, rtt={0: 0.4, 1: 0.4}, loss={0: 10.0, 1: 0.0}
     )
-    for _ in range(2):
+    for _ in range(14):
         ctl.pass_once()
 
     assert ctl.loss_pct()["leg0"] == 10.0, "the measured loss never reached the leg's own record"
@@ -784,6 +787,41 @@ def test_loss_past_the_failover_threshold_takes_the_leg_down(tmp_path):
     )
     assert ctl.weights()["leg0"] == 0
     assert ctl.carrying() == ["leg1"]
+
+
+def test_five_percent_loss_variance_does_not_flap_policy_state(tmp_path):
+    """Seeded 24-probe windows model one true 5% loss rate, not fixed readings."""
+    reports = {}
+    for seed in (7, 90210, 41, 2026):
+        rng = random.Random(seed)
+        _transport, ctl = _control(
+            tmp_path / str(seed),
+            rx_age={0: 0.1, 1: 0.1},
+            rtt={0: 0.4, 1: 0.4},
+        )
+        try:
+            for _ in range(160):
+                lost = sum(rng.random() < 0.05 for _ in range(24))
+                ctl.agent._transport.loss[0] = round(100.0 * lost / 24, 2)
+                ctl.pass_once()
+            reports[seed] = ctl.report()
+        finally:
+            ctl.close()
+
+    # Keep the harness's evidence shape visible in the test: the raw measurement
+    # remains quantized and state_passes exposes every state transition.
+    json_reports = json.loads(json.dumps(reports))
+    dominant = {
+        seed: max(report["state_passes"]["leg0"], key=report["state_passes"]["leg0"].get)
+        for seed, report in json_reports.items()
+    }
+    assert set(dominant.values()) == {"up"}, json.dumps(json_reports, sort_keys=True)
+    assert all(
+        report["state_passes"]["leg0"].get("up", 0)
+        > report["state_passes"]["leg0"].get("degraded", 0)
+        for report in json_reports.values()
+    ), json.dumps(json_reports, sort_keys=True)
+    assert all(report["loss_pct"]["leg0"] in (0.0, 4.17, 8.33, 12.5, 16.67) for report in json_reports.values())
 
 
 def test_a_leg_with_no_loss_evidence_yet_is_not_penalised(tmp_path):

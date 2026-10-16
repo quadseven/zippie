@@ -553,8 +553,23 @@ def test_loss_between_the_two_thresholds_degrades_the_leg(tmp_path):
     strictly between them, which used to be a value classify_state could
     never be handed on this datapath at all."""
     a = _packet_agent(tmp_path, age=0.2, rtt=18.0, loss=10.0)
-    a._probe_packet_leg(a.paths[0])
+    for _ in range(12):
+        a._probe_packet_leg(a.paths[0])
     assert a.paths[0].state is PathState.DEGRADED
+
+
+def test_loss_degradation_clears_after_a_confirmed_healthy_streak(tmp_path):
+    a = _packet_agent(tmp_path, age=0.2, rtt=18.0, loss=10.0)
+    for _ in range(12):
+        a._probe_packet_leg(a.paths[0])
+    assert a.paths[0].state is PathState.DEGRADED
+
+    a._transport.loss = 0.0
+    for _ in range(11):
+        a._probe_packet_leg(a.paths[0])
+    assert a.paths[0].state is PathState.DEGRADED
+    a._probe_packet_leg(a.paths[0])
+    assert a.paths[0].state is PathState.UP
 
 
 def test_loss_past_failover_takes_the_leg_down(tmp_path):
