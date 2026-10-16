@@ -3,9 +3,13 @@ import WidgetKit
 import ZippieCompanionKit
 
 /// Picks small or medium. Nothing else - no large, no interactive buttons,
-/// per the issue's explicit scope. `Theme.swift` is shared straight from the
-/// app target (see project.yml) rather than copied, so `Ink` stays the one
-/// place a colour is defined and a token change moves both surfaces together.
+/// per the issue's explicit scope.
+///
+/// `Theme.swift` is shared straight from the app target (see project.yml)
+/// rather than copied, and so is `Tokens.generated.swift` - which is the one
+/// this view actually takes its COLOURS from, so a change to
+/// `design/tokens.json` moves the widget along with the hub and Android rather
+/// than leaving a home screen behind.
 struct RelayWidgetView: View {
     @Environment(\.widgetFamily) private var family
     let entry: RelayEntry
@@ -41,27 +45,25 @@ struct SmallRelayView: View {
                     // (see Theme.swift) carries the identity of "the state
                     // sentence" without a size this space cannot fit.
                     .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(Ink.primary)
+                    .foregroundStyle(Ink.gen_primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
             Text(content.detail)
                 .font(Kind.caption())
-                .foregroundStyle(Ink.secondary)
+                .foregroundStyle(Ink.gen_secondary)
                 .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
         .padding(Space.base)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .widgetBackground(Ink.ground)
+        .widgetBackground(Ink.gen_ground)
     }
 }
 
-/// Medium: the small content, plus the leg list. "Is MY phone one of the
-/// legs" is the question DESIGN.md says only this list can answer at a
-/// glance - see WidgetLeg's doc comment in the Kit for why this PR's list has
-/// exactly one honest row rather than the router's full bond.
+/// Medium: the small content, plus the leg list. "Is MY phone one of the legs"
+/// is the question DESIGN.md says only this list can answer at a glance.
 struct MediumRelayView: View {
     let content: WidgetContent
 
@@ -71,13 +73,13 @@ struct MediumRelayView: View {
                 StateDot(tone: content.tone)
                 Text(content.headline)
                     .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(Ink.primary)
+                    .foregroundStyle(Ink.gen_primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
             Text(content.detail)
                 .font(Kind.caption())
-                .foregroundStyle(Ink.secondary)
+                .foregroundStyle(Ink.gen_secondary)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -97,40 +99,46 @@ struct MediumRelayView: View {
         }
         .padding(Space.base)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .widgetBackground(Ink.ground)
+        .widgetBackground(Ink.gen_ground)
     }
 }
 
-/// One row of the leg list: label, then the word for its state. The colour
-/// carries the same three-way distinction `LegRow`'s `TrafficBar` uses for a
-/// full leg row (`Ink.live` / `Ink.down` / `Ink.tertiary`) - `.tertiary`
-/// because an idle leg is not news, matching that view's own comment.
+/// One row of the leg list: label, then the word the Kit already chose.
+///
+/// THE COLOUR CARRIES THE THREE-WAY DISTINCTION `LegRow`'s `TrafficBar` uses -
+/// `Ink.gen_live` / `Ink.gen_down` / `Ink.gen_tertiary`. `.tertiary` because an
+/// idle or reserve leg is not news, matching that view's own comment. The
+/// reserve distinction rides the WORD rather than a fourth colour, because the
+/// palette has exactly one accent and spending another one on "deliberately
+/// idle" would spend the accent's meaning.
+///
+/// `leg.word` rather than a switch here: the vocabulary is part of the design
+/// system and belongs where `swift test` can reach it (see `WidgetLeg.word`).
 struct LegLine: View {
     let leg: WidgetLeg
 
     private var dotColor: Color {
         switch leg.state {
-        case .carrying: return Ink.live
-        case .down:     return Ink.down
-        case .idle:     return Ink.tertiary
+        case .carrying: return Ink.gen_live
+        case .down:     return Ink.gen_down
+        // Never the failure colour for a state that has not failed. Reserve
+        // and not-in-the-bond are both the router's decisions rather than
+        // faults, and `reserveIsNotBroken` is the whole point of drawing them
+        // separately from `.down` in the first place.
+        case .reserve, .presentNotCarrying, .notInBond, .idle:
+            return Ink.gen_tertiary
         }
     }
-
-    /// "carrying" / "not carrying" only, matching `BondModel`'s own
-    /// single-phone fallback row - it does not surface "idle" vs "down" as
-    /// words either, only as the dot colour, so this widget does not invent a
-    /// vocabulary the app's own equivalent row does not use.
-    private var stateWord: String { leg.state == .carrying ? "carrying" : "not carrying" }
 
     var body: some View {
         HStack(spacing: Space.hair) {
             Circle().fill(dotColor).frame(width: 6, height: 6)
             Text(leg.label)
                 .font(Kind.caption())
-                .foregroundStyle(Ink.primary)
-            Text(stateWord)
+                .foregroundStyle(Ink.gen_primary)
+            Text(leg.word)
                 .font(Kind.caption())
-                .foregroundStyle(leg.state == .carrying ? Ink.live : Ink.secondary)
+                .foregroundStyle(leg.state == .carrying ? Ink.gen_live : Ink.gen_secondary)
         }
     }
 }
@@ -142,11 +150,11 @@ struct StateDot: View {
 
     private var color: Color {
         switch tone {
-        case .live:    return Ink.live
-        case .down:    return Ink.down
+        case .live:    return Ink.gen_live
+        case .down:    return Ink.gen_down
         // Never the failure colour for a state that has not failed - off,
         // starting, or simply idle all read the same as LegRow's `.idle`.
-        case .neutral: return Ink.tertiary
+        case .neutral: return Ink.gen_tertiary
         }
     }
 

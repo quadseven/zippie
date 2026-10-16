@@ -5,8 +5,8 @@ import Foundation
 /// Read-only and defensive: the console is a developer surface that changes
 /// shape as the agent evolves, and an app that crashes because a field was
 /// renamed is worse than one that shows a dash. Every field is optional.
-public struct BondStatus: Decodable, Sendable, Equatable {
-    public struct Path: Decodable, Sendable, Equatable {
+public struct BondStatus: Codable, Sendable, Equatable {
+    public struct Path: Codable, Sendable, Equatable {
         public let name: String?
         public let state: String?
         public let effectiveWeight: Int?
