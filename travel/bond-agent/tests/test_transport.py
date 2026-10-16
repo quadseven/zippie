@@ -62,6 +62,8 @@ class FakeSocket:
 def _factory(created):
     def make(device=None, bind=None):
         s = FakeSocket(device, bind)
+        if device:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, device.encode() + b"\0")
         created.append(s)
         return s
 
@@ -124,7 +126,7 @@ class TestLinkMembership:
         t.add_link(LinkEndpoint(1, "lte", "wwan0", ("10.0.0.9", 51901)))
         devices = [s.device for s in created if s.device]
         assert devices == ["eth1", "wwan0"]
-        assert [s.options for s in created] == [
+        assert [s.options for s in created if s.device] == [
             [(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"eth1\0")],
             [(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"wwan0\0")],
         ]
