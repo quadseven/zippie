@@ -94,6 +94,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
         let tunnel = ClientTunnel(config: config, packetFlow: packetFlow)
         clientTunnel = tunnel
+        // A refused settings change is logged here and handed to `done`.
+        // `ClientTunnel.probeHome` then keeps the previous route state, so it
+        // does not claim the routes moved, and the next probe tries again.
         tunnel.applyRouteState = { [weak self] state, done in
             guard let self else {
                 done(ClientTunnelError.datapathFailed("provider stopped"))

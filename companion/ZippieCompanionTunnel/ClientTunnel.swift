@@ -109,6 +109,11 @@ final class ClientTunnel {
         // The home transport's own address must NOT go through the tunnel, or
         // the datapath's packets to home would be routed into the tunnel that
         // carries them - a loop that presents as total silence.
+        //
+        // RELEASED excludes EVERYTHING, which covers the home address too: with
+        // no included routes and the default route excluded, every packet
+        // (the datapath's probes home among them) uses the phone's own
+        // network, so the phone keeps internet while the bond is unreachable.
         if state == .released {
             ipv4.excludedRoutes = [NEIPv4Route.default()]
         } else if let excluded = config.homeExcludedRoute {

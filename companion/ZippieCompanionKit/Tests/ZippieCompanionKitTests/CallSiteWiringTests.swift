@@ -55,6 +55,12 @@ final class CallSiteWiringTests: XCTestCase {
         XCTAssertTrue(provider.contains("done(error)"))
         XCTAssertTrue(client.contains("if let error {\n                    Self.log.error(\"client route change failed:"))
         XCTAssertTrue(client.contains("self.appliedRouteState = desired"))
+        // The applied state moves only on success, so a refused change is
+        // retried by the next probe instead of being recorded as done.
+        let probe = client.components(separatedBy: "private func probeHome()").last ?? ""
+        let failure = try XCTUnwrap(probe.range(of: "client route change failed:"))
+        let success = try XCTUnwrap(probe.range(of: "} else {\n                    self.appliedRouteState = desired"))
+        XCTAssertLessThan(failure.lowerBound, success.lowerBound)
     }
 
     /// `companion/`, found from this file rather than from the working
