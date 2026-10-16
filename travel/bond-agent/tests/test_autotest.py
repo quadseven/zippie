@@ -33,30 +33,32 @@ class AutotestHarness:
         self._stub(
             "ip",
             f'[ "$1 $2 $3" = "route show default" ] || exit 0\n'
-            f'[ -f "{tmp}/wan_route" ] && echo "default via 192.0.2.1 dev eth0 proto static metric 10"\n'
-            f'echo "default dev pbz0 scope link metric 1"\n',
+            f'[ -f "{tmp}/wan_route" ] && '
+            'echo "default via 192.0.2.1 dev eth0 proto static metric 10"\n'
+            'echo "default dev pbz0 scope link metric 1"\n',
         )
         self._stub(
             "ifup",
             f'echo "IFUP $*" >> "{self.calls}"\n'
             f'if [ "$1" = "wan" ] && [ ! -f "{tmp}/ifup_fail" ]; then\n'
             f'    touch "{tmp}/wan_route"\n'
-            f'fi\n'
-            f'exit 0\n',
+            f"fi\n"
+            f"exit 0\n",
         )
         self._stub(
             "ifdown",
             f'echo "IFDOWN $*" >> "{self.calls}"\n'
             f'if [ "$1" = "wan" ]; then\n'
             f'    rm -f "{tmp}/wan_route"\n'
-            f'fi\n'
-            f'exit 0\n',
+            f"fi\n"
+            f"exit 0\n",
         )
         self._stub("logger", f'echo "LOG $*" >> "{self.calls}"\n')
         self._stub("sleep", "exit 0\n")
         self._stub(
             "curl",
-            'echo \'{"paths":[{"name":"pixel-6a-a554","effective_weight":64,"link_rx_bytes":1000}]}\'\n',
+            'echo \'{"paths":[{"name":"pixel-6a-a554",'
+            '"effective_weight":64,"link_rx_bytes":1000}]}\'\n',
         )
 
     def _stub(self, name: str, body: str) -> None:
