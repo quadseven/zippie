@@ -3929,6 +3929,9 @@ class BondAgent:
                 "pid": os.getpid(),
                 "config_path": self.config_meta.get("path"),
                 "config_sha256": self.config_meta.get("sha256"),
+                # Excludes per-device [home] values for comparison with the
+                # checked-in template. The raw hash above still checks the stamp.
+                "config_repo_sha256": self.config_meta.get("repo_sha256"),
             }
 
     def write_status_file(self) -> None:
@@ -4939,12 +4942,14 @@ def config_fingerprint(config_path: str | None) -> dict[str, str]:
     import hashlib
 
     from zippie.config import resolve_config_path
+    from zippie import build
 
     try:
         path = resolve_config_path(config_path)
         return {
             "path": str(path),
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "repo_sha256": build.normalized_config_fingerprint(path),
         }
     except FileNotFoundError:
         return {}

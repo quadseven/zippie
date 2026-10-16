@@ -721,6 +721,7 @@ def test_status_carries_runtime_identity(provisioned, monkeypatch):
     tell which config - or which process - was actually live."""
     import hashlib
 
+    from zippie import build
     from zippie.agent import config_fingerprint
 
     world = FakeWorld()
@@ -734,6 +735,7 @@ def test_status_carries_runtime_identity(provisioned, monkeypatch):
     assert status["pid"] == os.getpid()
     assert status["config_path"] == str(cfg_file)
     assert status["config_sha256"] == hashlib.sha256(cfg_file.read_bytes()).hexdigest()
+    assert status["config_repo_sha256"] == build.normalized_config_fingerprint(cfg_file)
 
 
 def test_pin_failure_escalates_renew_then_bounce_with_cooldown(provisioned, monkeypatch):
