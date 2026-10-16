@@ -35,6 +35,7 @@ build/
 
 # WireGuard live confs
 *.conf
+!.loom/validation.conf
 !travel/gl-mt3000/**
 
 # iOS companion. Paths lost their production/zippie/ prefix when zippie moved
