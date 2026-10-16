@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "local-exec": {
+      "command": "/usr/bin/python3",
+      "args": ["/Users/loom/lanes/quadseven.zippie-266/mcp_server.py"]
+    }
+  }
+}
