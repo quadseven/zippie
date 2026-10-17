@@ -159,6 +159,8 @@ final class WidgetTimelineTests: XCTestCase {
             (.notForwarding(detail: nil), .down),
             (.notForwarding(detail: "up: no route to host"), .down),
             (.routerQuiet(silentFor: 40), .neutral),
+            (.routerSeesNothing, .down),
+            (.routerUnreachable, .down),
             (.carrying, .live),
         ]
         for (verdict, tone) in expected {

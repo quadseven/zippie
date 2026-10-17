@@ -66,7 +66,7 @@ class RelayVerdictTest {
         val v = RelayVerdict.evaluate(r, now, routerSeesNothing = true)
 
         assertEquals(RelayVerdict.RouterSeesNothing, v)
-        assertEquals("Not arriving", v.headline)
+        assertEquals("Sending, nothing coming back", v.headline)
         assertFalse("must not claim the bond", v.detail().contains("part of the bond"))
     }
 
