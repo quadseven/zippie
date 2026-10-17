@@ -140,6 +140,10 @@ data class RelayStats(
             isIgnoringBatteryOptimizations = ignoringBatteryOptimizations,
             isContributing = listening,
         )
+
+    /** True when the relay has successfully announced to the router. */
+    val isAnnounced: Boolean
+        get() = announce?.startsWith("Announced") == true
 }
 
 /**
@@ -153,6 +157,9 @@ data class RelayStats(
  * older than the heartbeat means "not reporting", not "idle".
  */
 data class RelayReport(val stats: RelayStats, val updatedAtMs: Long) {
+    val isAnnounced: Boolean
+        get() = stats.isAnnounced
+
     fun isStale(nowMs: Long, thresholdMs: Long = STALENESS_MS): Boolean =
         nowMs - updatedAtMs > thresholdMs
 

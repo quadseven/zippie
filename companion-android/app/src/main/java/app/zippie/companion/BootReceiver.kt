@@ -44,19 +44,15 @@ import kotlinx.coroutines.withTimeoutOrNull
  *    been opened - now running against the REAL, credential-encrypted
  *    RelayConfiguration, which by this broadcast is guaranteed available.
  *
- * WHAT THIS DOES NOT DO. It does not make the relay ANNOUNCE before unlock -
+ * RECOVERY AFTER UNLOCK (#237). It does not make the relay ANNOUNCE before unlock -
  * the router console's write token is deliberately kept out of
  * device-protected storage (BootConfigStore) because it is a credential, not
  * configuration. A relay started by LOCKED_BOOT_COMPLETED forwards bytes but
- * stays invisible to the bond's leg list until the phone is unlocked AND the
- * service happens to (re)load its config with the token present -
- * RelayService reads RelayConfiguration exactly once, at its own start, and
- * this file does not restart an already-running instance to force a reload
- * (doing that safely needs a completion signal RelayService's current public
- * surface - ACTION_STOP plus a fresh start - does not provide, and adding one
- * is a RelayService.kt change outside this file's ownership). So: relays,
- * does not announce, until something else restarts it. Documented, not
- * silently accepted - see the PR for #54.
+ * stays invisible to the bond's leg list until the phone is unlocked.
+ * Once unlocked, a RETRY pass (or BOOT_COMPLETED) triggers credential sync
+ * gated on UserManager.isUserUnlocked, and the second-chance guard tests
+ * announced-ness rather than liveness so the half-started relay receives the
+ * credential token and starts announcing without tearing down the carrying leg.
  *
  * THE FGS-START-FROM-BOOT EXEMPTION IS CONFIRMED, NOT ASSUMED (AC6). Both
  * BOOT_COMPLETED and LOCKED_BOOT_COMPLETED are named explicitly in Android's
@@ -129,20 +125,20 @@ class BootReceiver : BroadcastReceiver() {
             ACTION_RETRY -> runDecision(appContext, RETRY,
                 intent.getIntExtra(EXTRA_ATTEMPT, 1))
             Intent.ACTION_BOOT_COMPLETED -> {
-                if (RelayStatusStore.report.value != null) {
-                    Log.i(TAG, "$BOOT_COMPLETED: relay already running, nothing to do")
+                if (SecondChanceGuard.shouldSkip(RelayStatusStore.report.value)) {
+                    Log.i(TAG, "$BOOT_COMPLETED: relay already running and announcing, nothing to do")
                     return
                 }
                 runDecision(appContext, BOOT_COMPLETED)
             }
 
             // An update is a restart this app was never told about. Treated
-            // like BOOT_COMPLETED, including the "already running" check, so a
-            // replace that somehow left the service alive does not start a
-            // second one.
+            // like BOOT_COMPLETED, including the "already running and announcing" check,
+            // so a replace that somehow left the service alive and announcing does not
+            // re-trigger recovery.
             Intent.ACTION_MY_PACKAGE_REPLACED -> {
-                if (RelayStatusStore.report.value != null) {
-                    Log.i(TAG, "$PACKAGE_REPLACED: relay already running, nothing to do")
+                if (SecondChanceGuard.shouldSkip(RelayStatusStore.report.value)) {
+                    Log.i(TAG, "$PACKAGE_REPLACED: relay already running and announcing, nothing to do")
                     return
                 }
                 runDecision(appContext, PACKAGE_REPLACED)
@@ -226,13 +222,14 @@ class BootReceiver : BroadcastReceiver() {
         // time and the one call that would have fixed it was gated on the name of
         // a broadcast that had already been and gone.
         //
-        // STRICTLY ADDITIVE. If the lock state cannot be read the old rule
-        // applies, so this can only ever create sync opportunities, never remove
-        // one that exists today.
+        // Gated on UserManager.isUserUnlocked (#237):
+        // sync reads credential-encrypted storage, so it must only run when
+        // the user is unlocked. A RETRY pass after unlock delivers the token
+        // without depending on source == BOOT_COMPLETED.
         val unlocked = runCatching {
             context.getSystemService(UserManager::class.java)?.isUserUnlocked
-        }.getOrNull()
-        if (unlocked ?: (source == BOOT_COMPLETED)) {
+        }.getOrDefault(false)
+        if (unlocked) {
             runCatching { BootConfigStore.sync(context) }
                 .onFailure { Log.w(TAG, "$source: could not refresh boot config mirror", it) }
         }
@@ -363,14 +360,19 @@ class BootReceiver : BroadcastReceiver() {
             // Only when the heartbeat has genuinely stopped: restarting a
             // healthy relay would drop the bond's leg for no reason, so
             // RelayLiveness deliberately waits longer than the screen does.
+            val report = RelayStatusStore.report.value
             val liveness = RelayLiveness.evaluate(
-                RelayStatusStore.report.value, System.currentTimeMillis())
+                report, System.currentTimeMillis())
             if (liveness is RelayLiveness.Frozen) {
                 Log.w(TAG, "$source: relay has not reported for ${liveness.quietForMs}ms " +
                     "- stopping before start, because a no-op onStartCommand cannot revive it")
                 context.startService(
                     Intent(context, RelayService::class.java)
                         .setAction(RelayService.ACTION_STOP))
+            } else if (report != null && report.isAnnounced) {
+                // Recovery leaves a running AND announcing relay untouched (#237).
+                Log.i(TAG, "$source: relay already running and announcing, untouched")
+                return
             }
             context.startForegroundService(Intent(context, RelayService::class.java))
             Log.i(TAG, "$source: starting relay, proximity=$proximity, liveness=$liveness")

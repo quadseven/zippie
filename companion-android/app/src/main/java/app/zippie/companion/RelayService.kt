@@ -156,6 +156,9 @@ class RelayService : Service() {
     // cellular (#168). SystemWifiRoute needs a Context, which a Service is.
     private val announcer = LegAnnouncer(HttpConsolePost(SystemWifiRoute(this)))
 
+    /** True while the announcement renewal loop is actively running. */
+    val isAnnouncing: Boolean get() = announcer.isRunning
+
     /** The router's last word on this phone's announcement, in the words the
      *  router used. Null until the first attempt returns. */
     @Volatile private var announceState: String? = null
@@ -194,7 +197,14 @@ class RelayService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        if (running) return START_STICKY
+        if (running) {
+            // #237: If the relay started before unlock, it was running with an empty token
+            // and could not announce. A subsequent start command (from BOOT_COMPLETED
+            // or RETRY) delivers the token from the now-unlocked storage and starts
+            // announcing without tearing down the carrying leg.
+            recoverAnnounceIfUnlocked()
+            return START_STICKY
+        }
 
         // Policy applied here, not just in the UI: this is the path that relays.
         // Reading stored config directly would make an MDM-pushed token configure
@@ -339,6 +349,23 @@ class RelayService : Service() {
             // leave the router dialling the old endpoint.
             address = { LocalAddress.wifiIPv4(this) },
         ) { outcome -> onAnnounced(name, outcome) }
+    }
+
+    /**
+     * If the relay was started before first unlock (e.g. from LOCKED_BOOT_COMPLETED),
+     * it was forwarding bytes without an announcement token. When user unlock occurs,
+     * the token becomes available in credential storage; refresh the config and start
+     * announcing without interrupting the carrying sockets.
+     */
+    internal fun recoverAnnounceIfUnlocked() {
+        if (!isAnnouncing || config.announceToken.isBlank()) {
+            val effective = runCatching { AndroidManagedConfig.effectiveConfig(this) }.getOrNull()
+            val validated = effective?.validated()?.getOrNull()
+            if (validated != null && validated.announceToken.isNotBlank()) {
+                config = validated
+                startAnnouncing()
+            }
+        }
     }
 
     /** Re-announce under the same name with the carrier the radio now reports.

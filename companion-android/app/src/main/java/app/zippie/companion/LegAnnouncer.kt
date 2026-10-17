@@ -115,6 +115,8 @@ class LegAnnouncer(
     }
 
     @Volatile private var running = false
+    /** True while the renewal loop is actively running. */
+    val isRunning: Boolean get() = running
     private var worker: Thread? = null
 
     /** What the renewal loop is currently announcing. Volatile because
