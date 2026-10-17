@@ -66,7 +66,7 @@ class RelayVerdictTest {
         val v = RelayVerdict.evaluate(r, now, routerSeesNothing = true)
 
         assertEquals(RelayVerdict.RouterSeesNothing, v)
-        assertEquals("Not arriving", v.headline)
+        assertEquals("Sending, nothing coming back", v.headline)
         assertFalse("must not claim the bond", v.detail().contains("part of the bond"))
     }
 
@@ -230,6 +230,27 @@ class RelayVerdictTest {
 
         assertEquals(RelayVerdict.Carrying, v)
         assertEquals("Carrying", v.headline)
+    }
+
+    @Test
+    fun `router disagreement says sending but nothing coming back`() {
+        val v = RelayVerdict.evaluate(
+            report { copy(upDatagrams = 12, lastRouterInboundAtMs = now - 1_000) },
+            now,
+            routerSeesNothing = true,
+        )
+
+        assertEquals("Sending, nothing coming back", v.headline)
+    }
+
+    @Test
+    fun `failed router status read is surfaced when local sends exist`() {
+        val v = RelayVerdict.evaluate(
+            report { copy(upDatagrams = 12, lastRouterInboundAtMs = now - 1_000) },
+            now,
+            routerReachable = false,
+        )
+        assertEquals("Sending, router not reachable", v.headline)
     }
 
     // ---- local faults outrank router talk ----

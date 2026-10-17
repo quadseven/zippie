@@ -93,6 +93,9 @@ sealed class RelayVerdict {
      */
     object RouterSeesNothing : RelayVerdict()
 
+    /** Local sends exist, but the console read failed, so the router's view is unknown. */
+    object RouterUnreachable : RelayVerdict()
+
     object Carrying : RelayVerdict()
 
     /** The line at the top of the screen and the notification title. */
@@ -112,7 +115,8 @@ sealed class RelayVerdict {
             // NOT "Carrying, maybe" or "Degraded". The router is not reporting
             // a quality problem - it is reporting that nothing has EVER arrived
             // from this phone, which is a different and more actionable thing.
-            RouterSeesNothing -> "Not arriving"
+            RouterSeesNothing -> "Sending, nothing coming back"
+            RouterUnreachable -> "Sending, router not reachable"
             Carrying -> "Carrying"
             is BatteryOptimizationRestricted -> "Battery optimization restricted"
         }
@@ -172,6 +176,7 @@ sealed class RelayVerdict {
                 "$who has never had anything arrive from this phone. The " +
                     "counters here are real - they count what left, not what " +
                     "landed."
+            RouterUnreachable -> "$who could not be reached for a status check."
             is BatteryOptimizationRestricted -> reason
             Carrying -> "This phone's cellular is part of the bond."
         }
@@ -216,6 +221,7 @@ sealed class RelayVerdict {
              * only ever true when the router actively said so.
              */
             routerSeesNothing: Boolean = false,
+            routerReachable: Boolean = true,
         ): RelayVerdict {
             if (report == null) return Off
             if (report.isStale(nowMs)) return NotReporting
@@ -225,6 +231,8 @@ sealed class RelayVerdict {
             if (!stats.cellularReady) return NoCellular(stats.lastError)
             if (!stats.listening) return NotListening(stats.lastError)
             (stats.batteryExemption as? BatteryExemption.AtRisk)?.let { return BatteryOptimizationRestricted(it.reason) }
+
+            if (stats.upDatagrams > 0 && !routerReachable) return RouterUnreachable
 
             val inbound = stats.lastRouterInboundAtMs
             if (inbound == null) {
@@ -276,6 +284,7 @@ sealed class RelayVerdict {
             NoCellular("cellular unavailable (interface not usable)"),
             Listening,
             RouterSeesNothing,
+            RouterUnreachable,
             NotForwarding(null),
             NotForwarding("up: no route to host"),
             RouterQuiet(40_000),

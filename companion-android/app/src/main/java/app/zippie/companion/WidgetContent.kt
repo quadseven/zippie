@@ -133,8 +133,14 @@ data class WidgetContent(
             nowMs: Long = System.currentTimeMillis(),
             routerName: String? = null,
             bond: WidgetBondSnapshot? = null,
+            routerSeesNothing: Boolean = false,
+            routerReachable: Boolean = true,
         ): WidgetContent {
-            val verdict = RelayVerdict.evaluate(report, nowMs)
+            val verdict = RelayVerdict.evaluate(
+                report, nowMs,
+                routerSeesNothing = routerSeesNothing,
+                routerReachable = routerReachable,
+            )
             return WidgetContent(
                 headline = verdict.headline,
                 detail = verdict.detail(routerName),
@@ -173,6 +179,7 @@ data class WidgetContent(
             // reads - the phone's counters are moving, which is exactly what
             // made the claim look true for hours.
             RelayVerdict.RouterSeesNothing -> Tone.DOWN
+            RelayVerdict.RouterUnreachable -> Tone.DOWN
             // DOWN, not IDLE. Android may freeze this relay with the screen
             // off, so any "carrying" the counters suggest cannot be trusted.
             is RelayVerdict.BatteryOptimizationRestricted -> Tone.DOWN

@@ -174,6 +174,20 @@ final class RelayVerdictTests: XCTestCase {
         XCTAssertEqual(v.headline, "Carrying")
     }
 
+    func testRouterDisagreementOverridesLocalSendingCounters() {
+        let v = RelayVerdict.evaluate(
+            run: .running,
+            report: report {
+                $0.upDatagrams = 12
+                $0.lastRouterInboundAt = self.now.addingTimeInterval(-1)
+            },
+            now: now,
+            routerSeesNothing: true)
+
+        XCTAssertEqual(v, .routerSeesNothing)
+        XCTAssertEqual(v.headline, "Sending, nothing coming back")
+    }
+
     // MARK: - local faults outrank router talk
 
     func testACapReachedIsSaidBeforeAnythingAboutTheRouter() {
