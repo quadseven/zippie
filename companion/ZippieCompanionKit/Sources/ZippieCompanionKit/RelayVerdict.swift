@@ -47,6 +47,8 @@ public enum RelayVerdict: Equatable, Sendable {
     case notForwarding(detail: String?)
     /// The router sent before and has been silent since.
     case routerQuiet(silentFor: TimeInterval)
+    case routerSeesNothing
+    case routerUnreachable
     case carrying
 
     /// How long the router may be silent before the silence is reported.
@@ -69,7 +71,9 @@ public enum RelayVerdict: Equatable, Sendable {
                                 report: RelayStatus?,
                                 now: Date = Date(),
                                 quietAfter: TimeInterval = RelayVerdict.routerQuietAfter,
-                                hasToken: Bool = true)
+                                hasToken: Bool = true,
+                                routerSeesNothing: Bool = false,
+                                routerReachable: Bool = true)
         -> RelayVerdict {
         switch run {
         case .off:      return .off
@@ -84,6 +88,7 @@ public enum RelayVerdict: Equatable, Sendable {
         let stats = report.stats
         if let reason = stats.budgetExhausted { return .paused(reason: reason) }
         guard stats.cellularReady else { return .noCellular(detail: stats.lastError) }
+        if stats.upDatagrams > 0 && !routerReachable { return .routerUnreachable }
 
         guard let inbound = stats.lastRouterInboundAt else {
             // No timestamp. Either nothing has ever arrived - the #44 case - or
@@ -93,6 +98,7 @@ public enum RelayVerdict: Equatable, Sendable {
             // router has not sent anything" there would be a flat lie, so the
             // count decides and the silence goes unreported until the new
             // binary takes over.
+            if stats.upDatagrams > 0 && routerSeesNothing { return .routerSeesNothing }
             return stats.upDatagrams > 0 ? .carrying : .listening
         }
         let silence = now.timeIntervalSince(inbound)
@@ -100,6 +106,7 @@ public enum RelayVerdict: Equatable, Sendable {
         // Inbound proves the router is talking. It does NOT prove this phone
         // got anything out over cellular, and "Carrying" while every upstream
         // send fails is the same fabrication in the other direction.
+        if stats.upDatagrams > 0 && routerSeesNothing { return .routerSeesNothing }
         return stats.upDatagrams > 0 ? .carrying : .notForwarding(detail: stats.lastError)
     }
 
@@ -120,6 +127,8 @@ public enum RelayVerdict: Equatable, Sendable {
         case .listening:           return "Ready"
         case .notForwarding:       return "Not relaying"
         case .routerQuiet:         return "Router quiet"
+        case .routerSeesNothing:   return "Sending, nothing coming back"
+        case .routerUnreachable:  return "Sending, router not reachable"
         case .carrying:            return "Carrying"
         }
     }
@@ -185,6 +194,10 @@ public enum RelayVerdict: Equatable, Sendable {
         case let .routerQuiet(silentFor):
             return "\(Self.routerSubject(router)) stopped sending. Last packet "
                  + "\(Self.ago(silentFor)) ago."
+        case .routerSeesNothing:
+            return "The router says nothing has arrived from this phone."
+        case .routerUnreachable:
+            return "The router status could not be read."
         case .carrying:
             return "This phone's cellular is part of the bond."
         }
@@ -230,7 +243,7 @@ public enum RelayVerdict: Equatable, Sendable {
     /// PHONE cannot get traffic through count as down.
     public var isDownLeg: Bool {
         switch self {
-        case .noToken, .paused, .noCellular, .notForwarding: return true
+        case .noToken, .paused, .noCellular, .notForwarding, .routerSeesNothing, .routerUnreachable: return true
         default: return false
         }
     }
@@ -248,6 +261,7 @@ public enum RelayVerdict: Equatable, Sendable {
         .notForwarding(detail: nil),
         .notForwarding(detail: "up: no route to host"),
         .routerQuiet(silentFor: 40),
+        .routerSeesNothing, .routerUnreachable,
         .carrying,
     ]
 }

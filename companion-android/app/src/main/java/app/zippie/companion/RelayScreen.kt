@@ -107,7 +107,12 @@ private fun RelaySection(
     // during an outage. `isYou` is matched by relay endpoint, not by name, so a
     // relabelled leg still resolves.
     val routerSeesNothing = state.legs.any { it.isYou && it.neverAnswered }
-    val verdict = RelayVerdict.evaluate(report, state.nowMs, routerSeesNothing = routerSeesNothing)
+    val verdict = RelayVerdict.evaluate(
+        report,
+        state.nowMs,
+        routerSeesNothing = routerSeesNothing,
+        routerReachable = state.bondReachable,
+    )
 
     // THE STATE COMES FIRST, matching RelayScreen.swift's `header`. This used
     // to be three sentences below the carrier and wifi-address readout that
