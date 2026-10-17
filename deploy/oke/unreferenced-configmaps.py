@@ -23,10 +23,10 @@ So the safe order is:
      ones, with the reason, before anyone types `kubectl delete`.
 
 To see which ConfigMaps would be pruned (dry run, the default):
-    ./deploy/oke/unreferenced-configmaps.py [--namespace zippie] [--context k8s-oke]
+    ./deploy/oke/unreferenced-configmaps.py [--namespace zippie] [--context NAME]
 
 To actually delete unreferenced ConfigMaps:
-    ./deploy/oke/unreferenced-configmaps.py --prune [--namespace zippie] [--context k8s-oke]
+    ./deploy/oke/unreferenced-configmaps.py --prune [--namespace zippie] [--context NAME]
 
 The --prune flag is DANGEROUS. Only use it after reading the dry-run output
 and confirming no ConfigMap you need is in the "referenced by NOTHING" list.
@@ -43,10 +43,10 @@ migration and its seven orphans went with that namespace.
 Usage:
 
 Dry run (default):
-    ./deploy/oke/unreferenced-configmaps.py [--namespace zippie] [--context k8s-oke]
+    ./deploy/oke/unreferenced-configmaps.py [--namespace zippie] [--context NAME]
 
 Prune mode (DANGEROUS - only use after reading dry-run output):
-    ./deploy/oke/unreferenced-configmaps.py --prune [--namespace zippie] [--context k8s-oke]
+    ./deploy/oke/unreferenced-configmaps.py --prune [--namespace zippie] [--context NAME]
 """
 
 from __future__ import annotations
@@ -112,7 +112,16 @@ def _pod_spec(obj: dict) -> dict:
     return (spec.get("template") or {}).get("spec") or spec
 
 
-def _fetch(namespace: str, context: str) -> list:
+def _kubectl(context: str | None) -> list:
+    """The kubectl prefix. No --context means the kubeconfig's current one.
+
+    The deploy job's kubeconfig comes from `oci ce cluster create-kubeconfig`,
+    which names its context after the cluster OCID, not `k8s-oke` (#278).
+    """
+    return ["kubectl", "--context", context] if context else ["kubectl"]
+
+
+def _fetch(namespace: str, context: str | None) -> list:
     """Every ConfigMap, Pod and ReplicaSet in the namespace, or raise.
 
     A REPORT THAT CANNOT SEE THE CLUSTER MUST NOT SAY "NOTHING IS REFERENCED" -
@@ -120,9 +129,7 @@ def _fetch(namespace: str, context: str) -> list:
     particular tool could have. So this raises and the caller exits non-zero.
     """
     cmd = [
-        "kubectl",
-        "--context",
-        context,
+        *_kubectl(context),
         "-n",
         namespace,
         "get",
@@ -155,11 +162,14 @@ def _report(configmaps: list, live: set, rollback: set) -> list:
     return unreferenced
 
 
-def _print_delete_lines(unreferenced: list, namespace: str, context: str) -> None:
+def _print_delete_lines(
+    unreferenced: list, namespace: str, context: str | None
+) -> None:
     print()
     print("Safe to delete BY HAND, once you have read the list above:")
+    kubectl = " ".join(_kubectl(context))
     for name in unreferenced:
-        print(f"  kubectl --context {context} -n {namespace} delete cm {name}")
+        print(f"  {kubectl} -n {namespace} delete cm {name}")
     print()
     print(
         "This script will not run those for you, deliberately - see the "
@@ -167,12 +177,10 @@ def _print_delete_lines(unreferenced: list, namespace: str, context: str) -> Non
     )
 
 
-def _delete_configmap(configmap_name: str, namespace: str, context: str) -> bool:
+def _delete_configmap(configmap_name: str, namespace: str, context: str | None) -> bool:
     """Delete a single ConfigMap. Returns True on success, False on error."""
     cmd = [
-        "kubectl",
-        "--context",
-        context,
+        *_kubectl(context),
         "-n",
         namespace,
         "delete",
@@ -191,7 +199,10 @@ def _delete_configmap(configmap_name: str, namespace: str, context: str) -> bool
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--namespace", default="zippie")
-    ap.add_argument("--context", default="k8s-oke")
+    ap.add_argument(
+        "--context",
+        help="kubeconfig context to use (default: the current context)",
+    )
     ap.add_argument(
         "--prune",
         action="store_true",
@@ -202,7 +213,9 @@ def main() -> int:
     try:
         items = _fetch(args.namespace, args.context)
     except (OSError, subprocess.CalledProcessError, ValueError) as exc:
-        print(f"could not read the namespace: {exc}", file=sys.stderr)
+        detail = (getattr(exc, "stderr", None) or "").strip()
+        reason = f"{exc} {detail}" if detail else str(exc)
+        print(f"could not read the namespace: {reason}", file=sys.stderr)
         return 2
 
     configmaps = [i for i in items if i["kind"] == "ConfigMap"]

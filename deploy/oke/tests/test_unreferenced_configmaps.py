@@ -561,3 +561,68 @@ def test_prune_reports_failure(monkeypatch, capsys):
 
     assert cm.main() == 2
     assert "Failed to delete" in capsys.readouterr().err
+
+
+# ------------------------------------------------------- which cluster it talks to
+#
+# #278. The deploy job's kubeconfig comes from `oci ce cluster
+# create-kubeconfig`, which names its context `context-<cluster id suffix>`,
+# never `k8s-oke`. A hardcoded `--context k8s-oke` therefore made the very
+# first kubectl call fail, and the scheduled reconcile went red every cycle.
+WORKFLOW = Path(__file__).resolve().parents[3] / (
+    ".github/workflows/deploy.oke-manifests.yml"
+)
+
+
+def _healthy(seen):
+    def record(cmd, *a, **k):
+        seen.append(cmd)
+        items = [
+            _cmobj("mounted"),
+            _pod(volumes=[{"name": "v", "configMap": {"name": "mounted"}}]),
+        ]
+        return type("R", (), {"stdout": json.dumps({"items": items})})()
+
+    return record
+
+
+def test_without_context_it_uses_the_current_kubeconfig_context(monkeypatch):
+    seen = []
+    monkeypatch.setattr(cm.subprocess, "run", _healthy(seen))
+    monkeypatch.setattr("sys.argv", ["x"])
+    assert cm.main() == 0
+    assert "--context" not in seen[0], seen[0]
+
+
+def test_an_explicit_context_is_still_passed_through(monkeypatch):
+    seen = []
+    monkeypatch.setattr(cm.subprocess, "run", _healthy(seen))
+    monkeypatch.setattr("sys.argv", ["x", "--context", "my-ctx"])
+    assert cm.main() == 0
+    assert seen[0][:3] == ["kubectl", "--context", "my-ctx"], seen[0]
+
+
+def test_the_deploy_workflow_does_not_pin_a_context_name():
+    calls = [
+        line
+        for line in WORKFLOW.read_text().splitlines()
+        if "unreferenced-configmaps.py --" in line and not line.lstrip().startswith("#")
+    ]
+    assert calls, "the prune step no longer calls the script - update this test"
+    for line in calls:
+        assert "--context" not in line, (
+            "the job's kubeconfig context is not named k8s-oke; use its current "
+            f"context like every other kubectl call in the job: {line.strip()}"
+        )
+
+
+def test_a_failed_read_shows_what_kubectl_said(monkeypatch, capsys):
+    def boom(*a, **k):
+        raise subprocess.CalledProcessError(
+            1, "kubectl", stderr='error: context "k8s-oke" does not exist'
+        )
+
+    monkeypatch.setattr(cm.subprocess, "run", boom)
+    monkeypatch.setattr("sys.argv", ["x"])
+    assert cm.main() == 2
+    assert 'context "k8s-oke" does not exist' in capsys.readouterr().err
