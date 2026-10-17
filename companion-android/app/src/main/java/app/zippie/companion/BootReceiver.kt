@@ -227,7 +227,7 @@ class BootReceiver : BroadcastReceiver() {
         // the user is unlocked. A RETRY pass after unlock delivers the token
         // without depending on source == BOOT_COMPLETED.
         val unlocked = runCatching {
-            context.getSystemService(UserManager::class.java)?.isUserUnlocked
+            context.getSystemService(UserManager::class.java)?.isUserUnlocked == true
         }.getOrDefault(false)
         if (unlocked) {
             runCatching { BootConfigStore.sync(context) }

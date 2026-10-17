@@ -181,7 +181,7 @@ class SupervisionRecoveryTest {
         // Device is locked, no token in device-protected storage.
         isUserUnlocked = false
         val deviceProtectedToken = ""
-        val credentialEncryptedToken = "console-secret-token"
+        val credentialEncryptedToken = "test-token-AAAA"
 
         // BootReceiver sync: gated on isUserUnlocked. Does not sync because locked.
         if (isUserUnlocked) {
@@ -211,7 +211,7 @@ class SupervisionRecoveryTest {
         if (isUserUnlocked) {
             syncedToken = credentialEncryptedToken
         }
-        assertEquals("console-secret-token", syncedToken)
+        assertEquals("test-token-AAAA", syncedToken)
 
         // Second-chance guard evaluates running relay:
         val reportBeforeRetry = getRelayReport()!!
@@ -238,7 +238,7 @@ class SupervisionRecoveryTest {
         // Assert: the leg announces without human interaction!
         val recoveredReport = getRelayReport()!!
         assertEquals(1, consolePost.calls)
-        assertEquals("console-secret-token", consolePost.lastToken)
+        assertEquals("test-token-AAAA", consolePost.lastToken)
         assertTrue("leg must now be announced", recoveredReport.isAnnounced)
         assertTrue(
             "carrying leg was never torn down during recovery",
