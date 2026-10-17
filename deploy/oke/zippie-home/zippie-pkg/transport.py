@@ -1094,6 +1094,11 @@ class Transport:
     def _send_on(self, path_id: int, wire: bytes) -> bool:
         sock = self._socks.get(path_id)
         link = self._links.get(path_id)
+        # Home has one listening socket shared by every travel path. Its
+        # logical links are keyed by the frame path id, while the socket stays
+        # registered once under path 0.
+        if self._roam and sock is None:
+            sock = self._socks.get(0)
         if sock is None or link is None:
             return False
         # THE CAP BITES HERE, after every scheduling decision, so nothing can
@@ -1208,6 +1213,12 @@ class Transport:
         self.stats.received += 1
         if not self._pass_epoch_gate(frame):
             return []
+
+        # On home, the selector can identify only the one listening socket.
+        # The frame header carries the travel leg identity that controls use
+        # for replies and per-leg accounting. Travel keeps its socket identity.
+        if self._roam and path_id is not None:
+            path_id = frame.path_id
 
         # FOLLOW THE TRAVEL ROUTER AS IT MOVES BETWEEN ISPs - but only now, on
         # the far side of the gate. This used to happen in run_once BEFORE the
@@ -1563,6 +1574,12 @@ class Transport:
         reassigned wholesale via dataclasses.replace to keep it hashable-safe.
         """
         link = self._links.get(path_id)
+        if link is None and self._roam:
+            # The home listener is physically path 0, but each sender path
+            # gets an independent logical endpoint and return address.
+            template = self._links.get(0)
+            if template is not None:
+                link = replace(template, path_id=path_id)
         if link is None or link.remote == addr:
             return
         self._links[path_id] = replace(link, remote=addr)
