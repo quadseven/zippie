@@ -656,10 +656,14 @@ jobs:
         # sees a clean cluster with only the ConfigMaps that the new Deployments
         # reference. The prune uses the tool that proves it never removes a
         # ConfigMap still referenced by a ReplicaSet or running pod.
+        #
+        # No --context, like every other kubectl call in this job: the
+        # generated kubeconfig names its context after the cluster OCID, not
+        # `k8s-oke`, so pinning that name failed every reconcile (#278).
         if: ${{ steps.apply.outcome == 'success' && inputs.preview != true }}
         run: |
           set -euo pipefail
-          python3 deploy/oke/unreferenced-configmaps.py --prune --namespace zippie --context k8s-oke || {
+          python3 deploy/oke/unreferenced-configmaps.py --prune --namespace zippie || {
             echo "::error::prune step failed"
             exit 1
           }
