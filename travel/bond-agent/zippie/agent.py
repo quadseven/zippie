@@ -1211,9 +1211,14 @@ class BondAgent:
         No deadlock, because the datapath does not need the default route to
         work. Its sockets dial out with SO_BINDTODEVICE, so they can carry
         frames and prove delivery while the default route is still absent.
-        The /32 pin keeps other main-table traffic to the home address off the
-        tunnel; it is not what lets the transport sockets reach home. The
-        default route follows the evidence rather than creating it.
+        The prover's evidence traffic reaches the far tunnel address over the
+        `<tunnel_ip>/32 dev pbz0` route that _ensure_packet_tunnel installs
+        when the tunnel comes up. The home-address /32 is a different route:
+        _pin_packet_endpoint installs it (net.pin_host_route, via the best
+        carrying leg) just before the default route goes in, so other
+        main-table traffic to the home address stays off the tunnel once that
+        route exists; it is not what lets the transport sockets reach home.
+        The default route follows the evidence rather than creating it.
 
         The failure mode this buys is the right one: a packet datapath that
         cannot deliver simply never gets the route, LAN clients keep using the
