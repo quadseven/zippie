@@ -93,12 +93,9 @@ fun StatusScreen(
         }
         Text(state.headline, style = Kind.display, color = Ink.primary)
         budgetStandDown?.let { standDown ->
-            val reconsiderAt = java.time.Instant.ofEpochMilli(standDown.reconsiderAtEpochMs)
-                .atZone(java.time.ZoneId.systemDefault())
-                .format(java.time.format.DateTimeFormatter.ofPattern("MMM d, HH:mm z"))
             Spacer(Modifier.height(Space.tight))
             Text(
-                "Relay paused: ${standDown.reason} Rechecking at $reconsiderAt.",
+                standDown.statusLine(),
                 style = Kind.body,
                 color = Ink.degraded,
             )
