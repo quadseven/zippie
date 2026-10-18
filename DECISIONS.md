@@ -1365,6 +1365,21 @@ skips hidden directories by default and the working tree sat under one. A guard
 whose failure mode is a silent pass is worse than no guard, because it is
 trusted. It refuses to report clean from a scan that looked at nothing.
 
+**Hostnames are guarded by the deny-list, not by this script (#38, 2026-10-18).**
+The address allowlist works because an address has a shape; a router nickname
+has none, and it walked back into twelve places with this guard green. Of the
+three options #38 laid out - hash the word in the guard, keep the list out of
+the repo, allowlist by naming convention - the second is the only one that
+holds the property: a short nickname is brute-forced from its hash in seconds,
+and the name that got through fits no convention. Its cost, new infrastructure
+and a list a local run cannot read, was already paid: the estate keeps one SSM
+deny-list for host codenames and other shapeless terms, the shared leak scan
+reads it through a role scoped to that one parameter, and this repo had it
+wired (#193) until a warn-mode rollout dropped it as out of scope (#207). The
+leak scan now passes it again and a test pins all three pieces. It is a
+diff-and-PR-text check, so local runs and the tree scan are unchanged; what
+it cannot see is a term missing from the list.
+
 **A related near-miss, same week.** An earlier check reported zero occurrences in
 the other platform's app because it scanned a directory that does not exist - the
 path had been guessed. An absent target reads exactly like a clean one.

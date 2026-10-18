@@ -258,9 +258,14 @@ for a bare word, so the travel router's own name walked back into
 added AFTER the scrub, by work that was written while the repo was still
 private. It passed CI each time.
 
-Until that gap is closed (#38), the name check is you. Grep before you push, and
-write "the travel router" - which is also what its certificate says, so the
-scrubbed form is the accurate one rather than a euphemism.
+Names are caught by a different check: the leak scan's deny-list layer
+(`.github/workflows/check.leak-scan.yml`, #38) reads host codenames and other
+shapeless terms at run time from SSM, so they never appear in this repo, and
+fails the pull request on a hit. It reads each PR's diff, title and body - not
+the whole tree, and not issue bodies - and it only knows the terms on its list.
+Grep before you push anyway, and write "the travel router" - which is also what
+its certificate says, so the scrubbed form is the accurate one rather than a
+euphemism.
 
 ## There is a shaper on the bond, and its rate is a guess
 
