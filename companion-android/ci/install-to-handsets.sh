@@ -4,6 +4,11 @@
 # to try when it cannot work.
 #
 #   install-to-handsets.sh <apk> [--router <ssh-target>] [--dry-run]
+#   install-to-handsets.sh --audit-signers [--router <ssh-target>]
+#
+# --audit-signers walks the reachable handsets and reports the signing
+# certificate each one carries, against the fleet pin (#185 AC5). It installs
+# nothing.
 #
 # The router is taken from $ZIPPIE_ROUTER when --router is not given. It is
 # never written into this repository: the bond router's address is operator
@@ -37,33 +42,73 @@ set -euo pipefail
 PACKAGE="app.zippie.companion"
 CI_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ADB_PORT_PROBE="$CI_DIR/../mdm/restore/adb-port.py"
+FLEET_SIGNER_SHA256="${ZIPPIE_FLEET_SIGNER:-ecaaf695e2ac5bee845edf075038437ab8ae668890c07012525640c652e477f7}"
+PINNED_RELEASE_SIGNER="$FLEET_SIGNER_SHA256"
 
 fail() { echo "error: $*" >&2; exit 1; }
 
-APK="" ; ROUTER="${ZIPPIE_ROUTER:-}" ; DRY_RUN=""
+APK="" ; ROUTER="${ZIPPIE_ROUTER:-}" ; DRY_RUN="" ; AUDIT=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --router) ROUTER="${2:-}"; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
-        -h|--help) sed -n '2,12p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        --audit-signers) AUDIT=1; shift ;;
+        -h|--help) sed -n '2,14p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) [ -z "$APK" ] || fail "more than one APK given"; APK="$1"; shift ;;
     esac
 done
 
-[ -n "$APK" ] || fail "usage: install-to-handsets.sh <apk> [--router <ssh-target>] [--dry-run]"
-[ -f "$APK" ] || fail "$APK does not exist"
+if [ -n "$AUDIT" ]; then
+    [ -z "$APK" ] || fail "--audit-signers takes no APK"
+else
+    [ -n "$APK" ] || fail "usage: install-to-handsets.sh <apk> [--router <ssh-target>] [--dry-run] | install-to-handsets.sh --audit-signers [--router <ssh-target>]"
+    [ -f "$APK" ] || fail "$APK does not exist"
+fi
 [ -n "$ROUTER" ] || fail "no router: pass --router <ssh-target> or set ZIPPIE_ROUTER"
-command -v adb >/dev/null || fail "adb is not on PATH"
+
+# The fleet trusts exactly one signing certificate. Overridable for a
+# deliberate test install; the default is the pinned fleet certificate.
+# build-signed-apk.sh carries the same pin on the build side - changing the
+# release key means editing both.
+# Both names are honored: #249's tests and ZIPPIE_FLEET_SIGNER above use the
+# short one, and #201 added this line with the long one, which silently threw
+# the short override away.
+FLEET_SIGNER_SHA256="${ZIPPIE_FLEET_SIGNER_SHA256:-${ZIPPIE_FLEET_SIGNER:-ecaaf695e2ac5bee845edf075038437ab8ae668890c07012525640c652e477f7}}"
 
 # ---------------------------------------------------------------------------
 # What we are about to install, read out of the file rather than its name
 # ---------------------------------------------------------------------------
+if [ -z "$AUDIT" ]; then
 eval "$(python3 "$CI_DIR/apk-facts.py" "$APK" | sed 's/^/APK_/')"
 [ "${APK_package:-}" = "$PACKAGE" ] || fail "$APK is package ${APK_package:-none}, not $PACKAGE"
 echo "candidate: $APK"
 echo "  versionCode  $APK_versionCode"
 echo "  versionName  $APK_versionName"
 echo "  signer       $APK_signerSha256"
+
+if [ "${APK_signerSha256:-}" != "$FLEET_SIGNER_SHA256" ]; then
+    fail "candidate APK signer (${APK_signerSha256:-none}) does not match pinned release signer ($FLEET_SIGNER_SHA256) - refusing to install TESTKEY or throwaway-signed build"
+fi
+
+# ---------------------------------------------------------------------------
+# The fleet trusts exactly one signing certificate (#185)
+#
+# A build signed by anything else - a throwaway CI key, a debug key, a key
+# from another project - can never be upgraded to the fleet build: Android
+# refuses the signer change, and the key that signed it is gone, so the only
+# path off is uninstall-then-install, which discards the on-device DataBudget
+# counters. Refuse it here, before touching the network, with the digest that
+# was found named out loud.
+#
+# The DIGEST is compared, never the certificate subject: every key this
+# project has used carries subject "zippie", including the throwaway ones, so
+# a subject check passes a TESTKEY build. A build whose name says TESTKEY in
+# three places still reached the fleet once - naming is not a control.
+# ---------------------------------------------------------------------------
+if [ "$APK_signerSha256" != "$FLEET_SIGNER_SHA256" ]; then
+    fail "refusing $APK: it is signed by certificate $APK_signerSha256, not the fleet certificate $FLEET_SIGNER_SHA256. Installing it would weld the handset to a key that cannot be upgraded (the way off is uninstall first, which discards the on-device budget counters - a decision for a person). Nothing has been changed."
+fi
+fi
 
 # ---------------------------------------------------------------------------
 # Find the handsets by asking the LAN they are on
@@ -80,6 +125,7 @@ echo "$PROBE"
 
 ENDPOINTS="$(echo "$PROBE" | awk '/^connect /{print $2" "$4}')"
 [ -n "$ENDPOINTS" ] || fail "no handset is advertising adb - wireless debugging is off, or every screen is asleep"
+command -v adb >/dev/null || fail "adb is not on PATH"
 
 # ---------------------------------------------------------------------------
 # One tunnel per handset. The LAN is not reachable from here directly; the
@@ -132,6 +178,53 @@ for target in $LOCAL_TARGETS; do
 done
 sleep 2
 
+if [ -n "$AUDIT" ]; then
+# ---------------------------------------------------------------------------
+# Audit: report what each handset is actually signed with (#185 AC5)
+#
+# A TESTKEY-signed build already reached the fleet once, and a handset that
+# took a CI artifact is welded to that run's key - it cannot be upgraded, and
+# nothing on the device says so. This walks the fleet and compares the
+# installed signer against the fleet certificate, out loud, so the finding is
+# recorded instead of discovered at the next failed upgrade. Exits non-zero
+# when any handset does not match.
+# ---------------------------------------------------------------------------
+echo "auditing installed signers against fleet certificate $FLEET_SIGNER_SHA256"
+echo
+BAD=0
+for target in $LOCAL_TARGETS; do
+    state="$(adb devices | awk -v t="$target" '$1==t{print $2}')"
+    if [ "$state" != "device" ]; then
+        echo "$target: not connected (state: ${state:-none}) - UNKNOWN"
+        continue
+    fi
+    serial="$(adb -s "$target" shell getprop ro.serialno | tr -d '\r')"
+    path="$(adb -s "$target" shell pm path "$PACKAGE" | tr -d '\r' | sed 's/^package://' | head -1)"
+    if [ -z "$path" ]; then
+        echo "$target ($serial): $PACKAGE not installed - nothing to check"
+        continue
+    fi
+    tmp="$(mktemp -d)"
+    if ! adb -s "$target" pull "$path" "$tmp/installed.apk" >/dev/null 2>&1; then
+        echo "$target ($serial): could not read the installed APK - UNKNOWN"
+        rm -rf "$tmp"
+        continue
+    fi
+    signer="$(python3 "$CI_DIR/apk-facts.py" "$tmp/installed.apk" | sed -n 's/^signerSha256=//p')"
+    rm -rf "$tmp"
+    if [ "$signer" = "$FLEET_SIGNER_SHA256" ]; then
+        echo "$target ($serial): signer $signer - FLEET"
+    else
+        echo "$target ($serial): signer ${signer:-unreadable} - NOT THE FLEET CERTIFICATE"
+        BAD=$((BAD + 1))
+    fi
+done
+echo
+[ "$BAD" -eq 0 ] || { echo "$BAD handset(s) not on the fleet certificate" >&2; exit 1; }
+echo "all reachable handsets are on the fleet certificate"
+exit 0
+fi
+
 # ---------------------------------------------------------------------------
 # Preflight, then install, then CHECK - per handset, and one handset failing
 # its preflight must not stop the others
@@ -169,10 +262,18 @@ for target in $LOCAL_TARGETS; do
         rm -rf "$tmp"
         echo "  signer       $have_signer"
         if [ "$have_signer" != "$APK_signerSha256" ]; then
-            echo "  SIGNER MISMATCH - REFUSED."
-            echo "  Installing needs an uninstall first, which discards this phone's"
-            echo "  DataBudget counters. That is a decision for a person, so this"
-            echo "  script will not make it. Nothing has been changed on the device."
+            echo "  SIGNER MISMATCH - REFUSED." >&2
+            echo "  device signer:    ${have_signer:-none}" >&2
+            echo "  candidate signer: $APK_signerSha256 (pinned release: $PINNED_RELEASE_SIGNER)" >&2
+            echo "  Installing needs an uninstall first, which discards this phone's" >&2
+            echo "  DataBudget counters. That is a decision for a person, so this" >&2
+            echo "  script will not make it. Nothing has been changed on the device." >&2
+            REFUSED=$((REFUSED + 1)); continue
+        fi
+        if [ "$have_signer" != "$PINNED_RELEASE_SIGNER" ]; then
+            echo "  DEVICE SIGNED BY UNTRUSTED/TESTKEY CERTIFICATE - REFUSED." >&2
+            echo "  device has non-release signer: ${have_signer:-none} (pinned release: $PINNED_RELEASE_SIGNER)" >&2
+            echo "  Device is running a TESTKEY or throwaway build and cannot be upgraded in place." >&2
             REFUSED=$((REFUSED + 1)); continue
         fi
     fi
@@ -186,7 +287,15 @@ for target in $LOCAL_TARGETS; do
     # Exit code deliberately ignored: adb reports failure for installs that
     # succeeded, because the result comes back over a connection the install
     # itself disturbs. The device is asked afterwards instead.
-    adb -s "$target" install -r "$APK" 2>&1 | sed 's/^/    /' || true
+    install_out="$(adb -s "$target" install -r "$APK" 2>&1 || true)"
+    echo "$install_out" | sed 's/^/    /'
+    if echo "$install_out" | grep -q "INSTALL_FAILED_UPDATE_INCOMPATIBLE"; then
+        echo "  ERROR: INSTALL_FAILED_UPDATE_INCOMPATIBLE on $target ($serial)" >&2
+        echo "  The device's installed build was signed with a different key than this APK." >&2
+        echo "  Refusing to retry silently. Loud refusal recorded." >&2
+        REFUSED=$((REFUSED + 1))
+        continue
+    fi
     sleep 3
     adb connect "$target" >/dev/null 2>&1 || true
     now_code="$(adb -s "$target" shell dumpsys package "$PACKAGE" 2>/dev/null | tr -d '\r' \

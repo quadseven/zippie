@@ -13,6 +13,7 @@ import threading
 import time
 
 from zippie.home_transport import HomeTransportConfig, build_home_transport
+from zippie.datapath import FLAG_KEEPALIVE, FLAG_KEEPALIVE_REPLY, Frame
 from zippie.transport import LinkEndpoint, Transport
 
 
@@ -94,3 +95,76 @@ def test_full_round_trip_through_the_home_entrypoint():
         client.close()
         server.close()
         time.sleep(0.1)
+
+
+def test_home_routes_replies_by_the_arriving_frame_path_id():
+    """One home socket must keep distinct return targets for each travel leg."""
+
+    class FakeSocket:
+        def __init__(self):
+            self.sent = []
+
+        def sendto(self, data, addr):
+            self.sent.append((data, addr))
+
+        def close(self):
+            pass
+
+    sockets = []
+
+    def socket_factory(_device, _bind):
+        sock = FakeSocket()
+        sockets.append(sock)
+        return sock
+
+    class FakeSelector:
+        def register(self, *_args):
+            pass
+
+        def unregister(self, *_args):
+            pass
+
+        def close(self):
+            pass
+
+    home = build_home_transport(
+        HomeTransportConfig(
+            listen_addr=("127.0.0.1", 51901),
+            local_addr=("127.0.0.1", 51831),
+            wg_server=("127.0.0.1", 51820),
+        ),
+        socket_factory=socket_factory,
+        selector_factory=FakeSelector,
+    )
+    try:
+        for path_id, source_port in ((3, 40003), (7, 40007)):
+            frame = Frame(
+                seq=path_id,
+                path_id=path_id,
+                payload=b"",
+                flags=FLAG_KEEPALIVE,
+                epoch=10,
+            )
+            home._on_link_data(frame.pack(), path_id=0, addr=("192.0.2.1", source_port))
+
+        replies = [Frame.unpack(data) for data, _addr in sockets[1].sent]
+        assert [reply.path_id for reply in replies] == [3, 7]
+        assert [addr for _data, addr in sockets[1].sent] == [
+            ("192.0.2.1", 40003),
+            ("192.0.2.1", 40007),
+        ]
+        assert {3, 7}.issubset(home._links), "home did not retain one remote per path id"
+
+        home._ka_sent[0] = {99: 100.0}
+        reply = Frame(
+            seq=99,
+            path_id=7,
+            payload=b"",
+            flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
+            epoch=10,
+        )
+        home._on_link_data(reply.pack(), path_id=0, addr=("192.0.2.1", 40007))
+        assert home.link_rtt_ms(7) is None
+        assert home.link_loss_pct(7) is None
+    finally:
+        home.close()

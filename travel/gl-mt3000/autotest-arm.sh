@@ -6,10 +6,10 @@
 # new test, and stops on its own at the campaign deadline. A scheduler that
 # could not stop would keep taking someone's internet away tomorrow.
 set -u
-STATE_DIR=/etc/zippie/state
-END=$STATE_DIR/autotest-until
-STATE=$STATE_DIR/autotest
-LOG=$STATE_DIR/autotest.log
+STATE_DIR="${ZIPPIE_AUTOTEST_STATE_DIR:-/etc/zippie/state}"
+END="$STATE_DIR/autotest-until"
+STATE="$STATE_DIR/autotest"
+LOG="$STATE_DIR/autotest.log"
 
 [ -f "$END" ] || exit 0
 until_ts=$(cat "$END" 2>/dev/null) || exit 0

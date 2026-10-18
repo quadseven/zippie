@@ -45,6 +45,18 @@ class AutoStartDecisionTest {
     }
 
     @Test
+    fun `a delivered managed config cannot auto-start while the local budget is exhausted`() {
+        val decision = AutoStartDecision.decide(
+            managedAutoStart = true,
+            alreadyRunning = false,
+            hasUsableConfig = true,
+            budgetAllowed = false,
+        )
+        assertFalse(decision.shouldStart)
+        assertTrue((decision as AutoStartDecision.Stand).reason.contains("budget"))
+    }
+
+    @Test
     fun `every stand carries a reason, because silence is what hid this bug`() {
         // The handset that found this logged NOTHING - no refusal, no reason -
         // and that absence was the only evidence available.

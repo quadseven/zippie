@@ -161,5 +161,3 @@ were closed before this project started caring, and the evidence is above.
   (proved at the application layer, not over mTLS)
 - #142 - wayfinder map for device identity with no internet
 - `companion-android/mdm/README.md` - the retired AMAPI integration
-- `docs/headwind-to-fleet-migration.md` - parity work, written before doors 1
-  and 2 were known to be closed

@@ -115,13 +115,13 @@ final class BondModel: ObservableObject {
             of: candidates.filter { !$0.isLocal }, timeout: 3)
 
         if let local = await localHit {
-            bond = local
+            publish(local)
             decision = ModeDecision(proximity: .local)
             await refreshSeries()
             return
         }
         if let remote = await remoteHit {
-            bond = remote
+            publish(remote)
             decision = ModeDecision(proximity: .remote)
             await refreshSeries()
             return
@@ -131,6 +131,26 @@ final class BondModel: ObservableObject {
         // saying so is better than leaving the last good snapshot on screen
         // pretending to be current.
         bond = nil
+        WidgetBondStore.clear(from: defaults)
+    }
+
+    /// Record a bond the router actually answered with, for the widget process.
+    ///
+    /// THE WIDGET CANNOT FETCH IT. A WidgetKit extension has no business opening
+    /// a console connection, and more to the point it usually runs when the app
+    /// does not - so this poll is the only thing that can keep that record
+    /// moving, and skipping the write here would leave the medium size showing
+    /// the this-phone row forever.
+    ///
+    /// THE COST, STATED. This record only advances while the app is in the
+    /// foreground, so on a home screen with the app closed the widget finds it
+    /// stale within `WidgetBondSnapshot.stalenessThreshold` and falls back to
+    /// the single this-phone row - see that type's doc comment. Widening it
+    /// would mean polling a router from a background task for the sake of a
+    /// glance, which is a different trade and belongs in its own decision.
+    private func publish(_ status: BondStatus) {
+        bond = status
+        WidgetBondStore.write(status, to: defaults, at: now)
     }
 
     private var isStale: Bool {
@@ -171,20 +191,25 @@ final class BondModel: ObservableObject {
     /// present-but-old report means something died holding it.
     private var localVerdict: RelayVerdict {
         RelayVerdict.evaluate(run: report == nil ? .off : .running,
-                              report: report, now: now)
+                              report: report, now: now,
+                              hasToken: ConsoleWriteToken.shared.read() != nil)
     }
 
-    /// The mode, said plainly. This is the one line that tells the reader which
-    /// of the two opposite jobs the phone is doing, so it is never inferred
-    /// from the leg list - on the router's network the bond has five legs, away
-    /// from it the phone IS the bond, and both can look similar at a glance.
+    /// The mode or released-route warning, said plainly. A client tunnel can
+    /// remain connected after releasing its routes, so the VPN badge alone
+    /// cannot tell the reader whether this phone's traffic is protected.
     ///
     /// Named when the unreachable case fires, for the same reason as
     /// `subhead` above - this is the sentence that used to sit directly under
     /// a fabricated "Connected to the router" and still say "the router",
     /// which read as a claim about the wifi router the phone was actually
     /// joined to.
-    var modeText: String { decision.summary(router: Settings.routerDisplayName) }
+    var modeText: String {
+        if ClientProtectionStore.isReleased(from: defaults) {
+            return "Not protected - the home datapath is unreachable. This phone is using its own network."
+        }
+        return decision.summary(router: Settings.routerDisplayName)
+    }
 
     /// Router name -> human label, for the chart legend. The series keys by
     /// internal name and every other surface shows the label.

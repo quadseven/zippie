@@ -5,9 +5,11 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
@@ -97,6 +99,10 @@ class MainActivity : ComponentActivity() {
                 startService(Intent(this, ZippieVpnService::class.java))
             }
         }
+
+    /** Opens Settings to request battery optimization exemption. */
+    private val batteryExemptionConsent =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {}
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -223,6 +229,9 @@ class MainActivity : ComponentActivity() {
                                         state = state,
                                         onRefresh = model::refresh,
                                         onOpenDiagnostics = { showDiagnostics = true },
+                                        budgetStandDown = remember {
+                                            BootConfigStore.budgetStandDown(this@MainActivity)
+                                        },
                                     )
                                     Destination.RELAY -> RelayScreen(
                                         state = state,
@@ -230,6 +239,7 @@ class MainActivity : ComponentActivity() {
                                         onStopRelay = ::stopContributing,
                                         onStartClient = ::startClientMode,
                                         onSaveToken = model::saveAnnounceToken,
+                                        onRequestExemption = ::requestBatteryExemption,
                                     )
                                 }
                             }
@@ -293,6 +303,7 @@ class MainActivity : ComponentActivity() {
             // A relay with no console cannot announce, so it would forward into
             // the void and report itself healthy. Refusing says more.
             hasUsableConfig = cfg.consoleLanHost.isNotBlank(),
+            budgetAllowed = BootConfigStore.read(context).budgetVerdict.isAllowed,
         )
         // LOGGED EITHER WAY. The handset that exposed this defect wrote NOTHING
         // when it declined - no refusal, no reason - and that absence was the
@@ -343,5 +354,12 @@ class MainActivity : ComponentActivity() {
             return
         }
         startService(Intent(this, ZippieVpnService::class.java))
+    }
+
+    fun requestBatteryExemption() {
+        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+            data = Uri.parse("package:$packageName")
+        }
+        batteryExemptionConsent.launch(intent)
     }
 }

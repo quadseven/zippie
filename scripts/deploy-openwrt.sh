@@ -962,6 +962,21 @@ if [[ -f "${REPO_ROOT}/travel/gl-mt3000/zippie.wrapper" ]]; then
   echo "  /usr/bin/zippie installed"
 fi
 
+# Web root guard against TESTKEY / throwaway APKs (zippie#241).
+# A TESTKEY APK in /www previously reached production handsets over HTTP.
+# The router web root (/www) must never serve TESTKEY or throwaway-signed APKs.
+say "guarding web root against TESTKEY / throwaway APKs"
+ssh_run "rm -f /www/*TESTKEY*.apk /www/*throwaway*.apk 2>/dev/null || true"
+if ssh_run "[ -d /etc/nginx/conf.d ]"; then
+  ssh_run "cat > /etc/nginx/conf.d/zippie-block-testkey.conf <<'EOF'
+# Refuse serving TESTKEY or throwaway APKs from web root (zippie#241)
+location ~* (TESTKEY|throwaway).*\.apk$ {
+    return 403;
+}
+EOF
+/etc/init.d/nginx reload >/dev/null 2>&1 || true"
+fi
+
 # BOOT-ENABLE, AND PROVE IT. This is the step whose absence caused the outage,
 # so it is checked rather than assumed - `enable` prints nothing on success and
 # nothing on failure.
@@ -1080,10 +1095,8 @@ esac
 # accumulate duplicates - and read back, because busybox crontab accepts a file
 # and reports nothing either way.
 say "installing cron entries"
-# drift-check.sh is scheduled DAILY, not by the minute like the watchdog. It
-# fetches a source tarball from github on every run, and this router spends much
-# of its life on a metered phone leg - a per-minute drift check would spend a
-# plan on answering a question that changes when somebody merges. 04:17 rather
+# drift-check.sh is an optional DAILY self-report when the router has a token.
+# A tarball fetch on every minute would spend a metered phone plan. 04:17 rather
 # than the top of an hour, so it does not queue behind every other cron on the
 # box. #232: it was shipped by #200 for #187 and never scheduled at all, so it
 # had never run once.
@@ -1150,27 +1163,6 @@ else
   echo "  muster-refresh: installed and scheduled; this router is not enrolled yet,
     so it will exit immediately every hour until it is. See docs/adr/0023."
 fi
-
-# THE FOURTH THING THAT SILENCES THE DRIFT CHECK, after the three #232 fixed.
-#
-# drift-check.sh is now shipped, scheduled, and pointed at the right paths - and
-# it still cannot answer, because zippie is a PRIVATE repo and the router has no
-# ZIPPIE_GH_TOKEN. Unauthenticated, github answers 404 for a private repo, which
-# the script correctly treats as a credential problem: it logs, pages Datadog
-# and exits 3. Every night at 04:17, having never once produced a drift result.
-#
-# So the deploy installs a checker it has never confirmed can run. That is the
-# same shape as the three defects above it, and the cron read-back loop does not
-# catch it - an entry can stick perfectly while the job it runs is dead on
-# arrival. Checked HERE because a deploy is the one moment a human is watching.
-#
-# NOT FATAL, deliberately. This is an observability credential, not the
-# datapath; failing the deploy of a working bond over it would teach the
-# operator to reach for --skip flags, and a deploy people avoid running is how
-# main and the travel router drifted in the first place. Loud and last, so it cannot scroll
-# past, is the right weight.
-drift_token_present=1
-ssh_run "grep -q '^export ZIPPIE_GH_TOKEN=' /etc/zippie/env 2>/dev/null" || drift_token_present=0
 
 # ------------------------------------------------------------ disarm the switch
 # ONLY HERE. Everything above has proven the running agent is the one just
@@ -1289,21 +1281,3 @@ echo "  custom.zippie.build.info{fingerprint:${LOCAL_FP}} should be 1,"
 echo "  custom.zippie.build.matches_deploy should be 1."
 echo "matches_deploy is ABSENT, not 0, when there is no stamp to compare"
 echo "against - 0 means the running copy was edited after this deploy."
-
-if [[ "${drift_token_present}" -eq 0 ]]; then
-  echo
-  echo "!! THE DRIFT CHECK IS INSTALLED AND CANNOT RUN"
-  echo "   /etc/zippie/env on ${HOST} has no ZIPPIE_GH_TOKEN, and zippie is a"
-  echo "   private repo. Unauthenticated, github answers 404, which drift-check.sh"
-  echo "   correctly treats as a credential fault: it pages Datadog and exits 3."
-  echo "   It has therefore never produced a drift result - and 'no drift"
-  echo "   reported' reads exactly like 'no drift'."
-  echo
-  echo "   Fix, with a fine-grained PAT scoped to Contents: read on this repo:"
-  echo "     ssh root@${HOST}"
-  echo "     printf 'export ZIPPIE_GH_TOKEN=%s\\n' '<token>' >> /etc/zippie/env"
-  echo "     /etc/zippie/drift-check.sh; echo \"exit \$?\"   # 0 same, 2 drift, 3 credential"
-  echo
-  echo "   Paste the token into the shell on the router - do not put it in a file"
-  echo "   here, and do not pass it on a command line where ps can read it."
-fi

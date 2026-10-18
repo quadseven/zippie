@@ -17,7 +17,20 @@ import java.net.URL
  * here.
  */
 sealed class ConsoleResult {
-    data class Ok(val status: BondStatus, val fromLocal: Boolean) : ConsoleResult()
+    /**
+     * @param rawPayload the console's response body, VERBATIM. Carried rather
+     *   than re-encoded because [RelayBondFile] persists the router's own bytes
+     *   for a widget to read in a process that never made this call - see that
+     *   class's doc for why an encoder here would be a second definition of the
+     *   console's shape. Defaulted rather than required so a test can build an
+     *   answer without inventing a body; empty means "no payload available",
+     *   which [RelayBondFile.publish] treats as nothing worth storing.
+     */
+    data class Ok(
+        val status: BondStatus,
+        val fromLocal: Boolean,
+        val rawPayload: String = "",
+    ) : ConsoleResult()
 
     /**
      * The message is shown to the operator verbatim. It is often the only clue
@@ -68,7 +81,7 @@ object BondStatusClient {
             val code = connection.responseCode
             if (code != 200) return@withContext ConsoleResult.Failed("HTTP $code from $url")
             val body = connection.inputStream.bufferedReader().use { it.readText() }
-            ConsoleResult.Ok(BondStatus.decode(body), fromLocal = false)
+            ConsoleResult.Ok(BondStatus.decode(body), fromLocal = false, rawPayload = body)
         } catch (e: IOException) {
             ConsoleResult.Failed(e.message ?: e.javaClass.simpleName)
         } catch (e: RuntimeException) {

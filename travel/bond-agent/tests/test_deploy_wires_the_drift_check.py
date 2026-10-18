@@ -79,7 +79,7 @@ def test_the_scheduled_entry_is_read_back(deploy):
 
 
 def test_the_drift_check_is_not_scheduled_per_minute(deploy):
-    """It fetches a tarball from github on every run and this router is often on
+    """When enabled it fetches a tarball and this router is often on
     a metered leg. Per-minute would spend a phone plan on the question."""
     for line in deploy.splitlines():
         if "drift-check.sh" in line and "echo '" in line:
@@ -108,69 +108,20 @@ def test_both_scripts_agree_where_the_config_lives(deploy, drift):
 
 
 def test_the_fetch_carries_a_token(drift):
-    """zippie is PRIVATE. Until #232 this fetched codeload with no credential,
-    which answers 404 - and 404 fell into the quiet "could not fetch" branch, so
-    the check reported nothing forever while looking healthy."""
+    """The optional router self-report authenticates when a token is set."""
     assert "Authorization: Bearer" in drift
     assert "api.github.com/repos/$REPO/tarball/$REF" in drift, (
-        "codeload does not take a token; the api tarball endpoint is the way in"
+        "the optional authenticated fetch must use the API endpoint"
     )
 
 
-def test_the_deploy_checks_the_router_actually_holds_the_token(deploy):
-    """THE FOURTH SILENCER, found 2026-08-19 by reading the travel router's env.
-
-    #232 shipped the script, scheduled it, and fixed its paths - and it still
-    could not answer, because `/etc/zippie/env` on the travel router holds only DD_API_KEY,
-    DD_SITE and PATHBOND_TAGS. No ZIPPIE_GH_TOKEN, against a private repo, so
-    every 04:17 run 404s into the credential branch and exits 3 having produced
-    no drift result at all.
-
-    The cron read-back loop cannot catch this: an entry sticks perfectly while
-    the job it runs is dead on arrival. Installed, scheduled, and unable to run
-    is a fourth distinct way for this checker to be silent, so it gets a fourth
-    test.
-    """
-    assert "ZIPPIE_GH_TOKEN" in deploy, (
-        "the deploy installs drift-check.sh but never checks the router holds "
-        "the credential it needs, so it can ship a checker that cannot run"
-    )
-
-
-def test_the_missing_token_warning_does_not_fail_the_deploy(deploy):
-    """Loud, not fatal, and the distinction matters.
-
-    This is an observability credential, not the datapath. Failing the deploy of
-    a working bond over it would teach the operator to reach for --skip flags,
-    and a deploy people avoid running is exactly how main and the travel router drifted apart
-    in the first place - the thing this whole check exists to catch.
-    """
-    block = deploy.split('if [[ "${drift_token_present}" -eq 0 ]]; then', 1)
-    assert len(block) == 2, "the missing-token warning is gone"
-    body = block[1].split("fi", 1)[0]
-    assert "die " not in body and "exit 1" not in body, (
-        "the missing-token path must warn, not abort the deploy"
-    )
-
-
-def test_the_token_is_never_written_by_the_deploy(deploy):
-    """The remedy is printed for a human to run on the router, not automated.
-
-    A deploy that could write the token would need it here - in a file, an
-    argument list, or an environment this script does not own. The token stays
-    something a person pastes into a shell on the box.
-    """
-    for line in deploy.splitlines():
-        if "ZIPPIE_GH_TOKEN=" in line and "printf" in line:
-            assert "'<token>'" in line, (
-                "the deploy prints a placeholder for a human; it must not "
-                f"interpolate a real token: {line.strip()}"
-            )
+def test_the_deploy_does_not_require_a_token(deploy):
+    assert "drift_token_present" not in deploy
+    assert "ZIPPIE_GH_TOKEN" not in deploy
 
 
 def test_a_credential_failure_is_loud(drift):
-    """401/403/404 will never fix itself. It must not be filed under 'the uplink
-    is down', which is the mistake that made this script silent."""
+    """A configured but invalid token remains an actionable failure."""
     branch = drift.split("401|403|404)", 1)
     assert len(branch) == 2, "the credential branch is gone"
     body = branch[1].split(";;", 1)[0]

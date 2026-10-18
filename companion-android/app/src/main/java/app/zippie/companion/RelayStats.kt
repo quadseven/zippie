@@ -140,6 +140,10 @@ data class RelayStats(
             isIgnoringBatteryOptimizations = ignoringBatteryOptimizations,
             isContributing = listening,
         )
+
+    /** True when the relay has successfully announced to the router. */
+    val isAnnounced: Boolean
+        get() = announce?.startsWith("Announced") == true
 }
 
 /**
@@ -153,6 +157,9 @@ data class RelayStats(
  * older than the heartbeat means "not reporting", not "idle".
  */
 data class RelayReport(val stats: RelayStats, val updatedAtMs: Long) {
+    val isAnnounced: Boolean
+        get() = stats.isAnnounced
+
     fun isStale(nowMs: Long, thresholdMs: Long = STALENESS_MS): Boolean =
         nowMs - updatedAtMs > thresholdMs
 
@@ -221,6 +228,10 @@ object RelayStatusStore {
         val report = RelayReport(stats, nowMs)
         _report.value = report
         file(context).publish(report)
+        // The home-screen tile reads this same record from disk, in a different
+        // process, and has no other way of learning that it changed. Throttled
+        // inside; see RelayWidgetRefresh for why that is safe.
+        RelayWidgetRefresh.request(context)
     }
 
     /** Called on a clean stop. See the type comment for why this is not a
@@ -228,6 +239,12 @@ object RelayStatusStore {
     fun clear(context: Context) {
         _report.value = null
         file(context).clear()
+        // A clean stop MUST redraw, and MUST NOT WAIT: the tile is currently
+        // holding a record that no longer exists, and "Carrying" over a relay
+        // somebody just stopped is the single most wrong thing this surface
+        // could say. Forced past the throttle because this is the one case
+        // where a delay is a lie rather than a lag.
+        RelayWidgetRefresh.request(context, force = true)
     }
 
     /**

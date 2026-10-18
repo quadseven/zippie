@@ -431,3 +431,198 @@ def test_the_only_kubectl_invocation_is_a_read(monkeypatch):
     assert cm.main() == 0
     assert len(seen) == 1, f"expected exactly one kubectl call, got {seen}"
     assert "get" in seen[0] and "delete" not in seen[0], seen[0]
+
+
+# ------------------------------------------------------------- prune tests
+def test_the_guard_still_catches_a_real_delete_in_prune_mode(tmp_path):
+    """VERIFY THE GUARD FAILS IN PRUNE MODE. The same static check must catch
+    mutating verbs even when --prune is used."""
+    import ast
+
+    # A prune implementation that would be caught by the guard
+    sneaky = tmp_path / "sneaky.py"
+    sneaky.write_text(
+        "import subprocess\n"
+        "def prune(name, namespace, context):\n"
+        "    subprocess.run([\n"
+        "        'kubectl', '--context', context, '-n', namespace,\n"
+        "        'delete', 'cm', name, '--ignore-not-found',\n"
+        "    ], check=True)\n"
+    )
+    tree = ast.parse(sneaky.read_text())
+    hits = [
+        c.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "run"
+        for c in ast.walk(node)
+        if isinstance(c, ast.Constant) and c.value in MUTATING
+    ]
+    assert hits == ["delete"], (
+        "the guard's own detection logic missed a literal kubectl delete in prune"
+    )
+
+
+def test_prune_mode_takes_a_kubectl_delete_path(monkeypatch, capsys):
+    """Prune mode must actually delete by running kubectl delete."""
+    seen = []
+
+    def record(cmd, *a, **k):
+        seen.append(cmd)
+        if "get" in cmd:
+            return type(
+                "R",
+                (),
+                {
+                    "stdout": json.dumps(
+                        {
+                            "items": [
+                                {"kind": "ConfigMap", "metadata": {"name": "orphan"}},
+                                _pod(
+                                    volumes=[
+                                        {"name": "v", "configMap": {"name": "other"}}
+                                    ]
+                                ),
+                                {
+                                    "kind": "ReplicaSet",
+                                    "metadata": {"name": "rs"},
+                                    "spec": {"template": {"spec": {"volumes": []}}},
+                                },
+                            ]
+                        }
+                    ),
+                    "returncode": 0,
+                },
+            )()
+        else:  # delete
+            return type("R", (), {"stdout": "", "returncode": 0})()
+
+    monkeypatch.setattr(cm.subprocess, "run", record)
+    monkeypatch.setattr("sys.argv", ["x", "--prune"])
+    monkeypatch.setattr(cm, "_report", lambda cms, live, rb: ["orphan"])
+    monkeypatch.setattr(cm, "_print_delete_lines", lambda *a: None)
+
+    assert cm.main() == 0
+    assert len(seen) == 2, f"expected two kubectl calls, got {seen}"
+    assert "get" in seen[0] and "delete" not in seen[0], seen[0]
+    assert "delete" in seen[1] and "cm" in seen[1], seen[1]
+
+
+def test_prune_reports_failure(monkeypatch, capsys):
+    """Prune exits non-zero if any delete fails."""
+    call_count = 0
+
+    def record(cmd, *a, **k):
+        nonlocal call_count
+        call_count += 1
+        if "get" in cmd:
+            return type(
+                "R",
+                (),
+                {
+                    "stdout": json.dumps(
+                        {
+                            "items": [
+                                {"kind": "ConfigMap", "metadata": {"name": "orphan1"}},
+                                {"kind": "ConfigMap", "metadata": {"name": "orphan2"}},
+                                _pod(
+                                    volumes=[
+                                        {"name": "v", "configMap": {"name": "other"}}
+                                    ]
+                                ),
+                                {
+                                    "kind": "ReplicaSet",
+                                    "metadata": {"name": "rs"},
+                                    "spec": {"template": {"spec": {"volumes": []}}},
+                                },
+                            ]
+                        }
+                    ),
+                    "returncode": 0,
+                },
+            )()
+        elif "delete" in cmd and call_count == 2:  # First delete fails
+            return type(
+                "R",
+                (),
+                {"stdout": "", "stderr": "not found", "returncode": 1},
+            )()
+        else:  # Other delete calls succeed
+            return type("R", (), {"stdout": "", "returncode": 0})()
+
+    monkeypatch.setattr(cm.subprocess, "run", record)
+    monkeypatch.setattr("sys.argv", ["x", "--prune"])
+
+    def mock_report(cms, live, rb):
+        orphan_names = {c["metadata"]["name"] for c in cms} - live - rb
+        return list(orphan_names)
+
+    monkeypatch.setattr(cm, "_report", mock_report)
+    monkeypatch.setattr(cm, "_print_delete_lines", lambda *a: None)
+
+    assert cm.main() == 2
+    assert "Failed to delete" in capsys.readouterr().err
+
+
+# ------------------------------------------------------- which cluster it talks to
+#
+# #278. The deploy job's kubeconfig comes from `oci ce cluster
+# create-kubeconfig`, which names its context `context-<cluster id suffix>`,
+# never `k8s-oke`. A hardcoded `--context k8s-oke` therefore made the very
+# first kubectl call fail, and the scheduled reconcile went red every cycle.
+WORKFLOW = Path(__file__).resolve().parents[3] / (
+    ".github/workflows/deploy.oke-manifests.yml"
+)
+
+
+def _healthy(seen):
+    def record(cmd, *a, **k):
+        seen.append(cmd)
+        items = [
+            _cmobj("mounted"),
+            _pod(volumes=[{"name": "v", "configMap": {"name": "mounted"}}]),
+        ]
+        return type("R", (), {"stdout": json.dumps({"items": items})})()
+
+    return record
+
+
+def test_without_context_it_uses_the_current_kubeconfig_context(monkeypatch):
+    seen = []
+    monkeypatch.setattr(cm.subprocess, "run", _healthy(seen))
+    monkeypatch.setattr("sys.argv", ["x"])
+    assert cm.main() == 0
+    assert "--context" not in seen[0], seen[0]
+
+
+def test_an_explicit_context_is_still_passed_through(monkeypatch):
+    seen = []
+    monkeypatch.setattr(cm.subprocess, "run", _healthy(seen))
+    monkeypatch.setattr("sys.argv", ["x", "--context", "my-ctx"])
+    assert cm.main() == 0
+    assert seen[0][:3] == ["kubectl", "--context", "my-ctx"], seen[0]
+
+
+def test_the_deploy_workflow_does_not_pin_a_context_name():
+    calls = [
+        line
+        for line in WORKFLOW.read_text().splitlines()
+        if "unreferenced-configmaps.py --" in line and not line.lstrip().startswith("#")
+    ]
+    assert calls, "the prune step no longer calls the script - update this test"
+    for line in calls:
+        assert "--context" not in line, (
+            "the job's kubeconfig context is not named k8s-oke; use its current "
+            f"context like every other kubectl call in the job: {line.strip()}"
+        )
+
+
+def test_a_failed_read_shows_what_kubectl_said(monkeypatch, capsys):
+    def boom(*a, **k):
+        raise subprocess.CalledProcessError(
+            1, "kubectl", stderr='error: context "k8s-oke" does not exist'
+        )
+
+    monkeypatch.setattr(cm.subprocess, "run", boom)
+    monkeypatch.setattr("sys.argv", ["x"])
+    assert cm.main() == 2
+    assert 'context "k8s-oke" does not exist' in capsys.readouterr().err

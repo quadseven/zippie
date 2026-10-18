@@ -221,8 +221,13 @@ object BondLegs {
      * waiting to be called on, and calling it "held in reserve" would be a
      * reassuring lie about a leg that cannot help anyone. Being gated is only
      * good news when the leg would work if it were called.
+     *
+     * INTERNAL, NOT PRIVATE: WidgetContent.legsOfBond reads this too. A widget
+     * that re-derived reserve on its own would be a second switch over the same
+     * fact, and the disagreement between a home screen and the app it summarises
+     * is exactly the class of bug this mapping was extracted to stop.
      */
-    private fun isReserve(p: BondStatus.Path, activeTier: Int?): Boolean =
+    internal fun isReserve(p: BondStatus.Path, activeTier: Int?): Boolean =
         p.isHeldInReserve(activeTier) && p.state != "down" && p.isPresent
 
     private fun shadowNote(p: BondStatus.Path): String? {

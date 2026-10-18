@@ -218,6 +218,9 @@ PACKET_IFACE = "pbz0"
 # tunnel. Evicting a weak-but-working LTE leg is worse than carrying a dead one
 # for an extra three seconds, since the scheduler retransmits around loss.
 PACKET_LINK_STALE_S = 6.0
+# Loss classification runs once per probe pass. Twelve consecutive readings
+# confirm either side of the degraded threshold without changing RTT policy.
+LOSS_STATE_STREAK = 12
 # How long since the reassembler last handed a payload up before the packet
 # default route is withdrawn. Generous relative to the 1s control loop: a quiet
 # tunnel with no client traffic is not a broken one, and WireGuard's own
@@ -284,12 +287,18 @@ _WIREGUARD_EMPTY_TRANSPORT_BYTES = 32
 def projected_idle_mb_per_day(
     metered_legs: int, probe_interval_s: float, keepalive_s: int
 ) -> float:
-    """Upper-bound packet-mode idle floor, including IPv4 and UDP headers."""
+    """Estimate packet-mode idle traffic, including IP/UDP and RTT-hint bytes.
+
+    The `probes` term below charges each request/reply pair as
+    `2 * (HEADER_LEN + _IPV4_UDP_HEADER_BYTES) + 2`: two framed probes and
+    the request's two RTT-hint payload bytes. The reply has no payload.
+    Periodic WireGuard keepalives are accounted separately below.
+    """
     if metered_legs <= 0:
         return 0.0
     seconds_per_day = 86400
     framed_probe = HEADER_LEN + _IPV4_UDP_HEADER_BYTES
-    probes = metered_legs * 2 * framed_probe * seconds_per_day / max(0.2, probe_interval_s)
+    probes = metered_legs * (2 * framed_probe + 2) * seconds_per_day / max(0.2, probe_interval_s)
     keepalives = 0.0
     if keepalive_s > 0:
         keepalives = (
@@ -1199,11 +1208,12 @@ class BondAgent:
         WireGuard means the whole chain worked - leg, home transport, reorder,
         the lot. Nothing short of that proves the tunnel can carry traffic.
 
-        No deadlock, because the datapath does not need the route to work. The
-        legs dial out with SO_BINDTODEVICE and the home endpoint has its own /32
-        pin, so frames flow, the handshake completes, and delivery starts while
-        the route is still absent. The route follows the evidence rather than
-        creating it.
+        No deadlock, because the datapath does not need the default route to
+        work. Its sockets dial out with SO_BINDTODEVICE, so they can carry
+        frames and prove delivery while the default route is still absent.
+        The /32 pin keeps other main-table traffic to the home address off the
+        tunnel; it is not what lets the transport sockets reach home. The
+        default route follows the evidence rather than creating it.
 
         The failure mode this buys is the right one: a packet datapath that
         cannot deliver simply never gets the route, LAN clients keep using the
@@ -2103,6 +2113,32 @@ class BondAgent:
                 return 0.0
         return loss
 
+    def _classify_path_state(
+        self, path: PathRuntime, rtt_ms: float | None, loss_pct: float
+    ) -> PathState:
+        """Confirm loss-driven DEGRADED with a streak; preserve immediate failover."""
+        policy_config = self.config.policy
+        if loss_pct >= policy_config.failover_loss_pct:
+            path.loss_bad_streak = 0
+            path.loss_good_streak = 0
+            path.loss_degraded = False
+            judged_loss = loss_pct
+        elif loss_pct >= policy_config.degraded_loss_pct:
+            path.loss_bad_streak += 1
+            path.loss_good_streak = 0
+            if path.loss_bad_streak >= LOSS_STATE_STREAK:
+                path.loss_degraded = True
+            judged_loss = policy_config.degraded_loss_pct if path.loss_degraded else 0.0
+        else:
+            path.loss_bad_streak = 0
+            if path.loss_degraded:
+                path.loss_good_streak += 1
+                if path.loss_good_streak >= LOSS_STATE_STREAK:
+                    path.loss_degraded = False
+                    path.loss_good_streak = 0
+            judged_loss = policy_config.degraded_loss_pct if path.loss_degraded else 0.0
+        return policy.classify_state(rtt_ms, judged_loss, policy_config, previous=path.state)
+
     def _probe_packet_leg(self, path: PathRuntime) -> None:
         """Judge one packet-mode leg on evidence from the FAR END.
 
@@ -2233,13 +2269,9 @@ class BondAgent:
         # Falls back to the raw sample for the very first probe, when there is
         # no average yet.
         rtt_for_state = path.rtt_ewma_ms if path.rtt_ewma_ms is not None else rtt
-        # path.loss_pct, NOT a second hardcoded 0.0 - it was set two lines
-        # above from the same `loss` reading and classify_state must judge on
-        # what was actually just measured, the same way route mode's own call
-        # site passes the loss it just computed rather than a literal (#115).
-        path.state = policy.classify_state(
-            rtt_for_state, path.loss_pct, self.config.policy, previous=path.state
-        )
+        # Keep the raw reading on path.loss_pct for reporting and weighting;
+        # only the state classifier applies the loss confirmation streak.
+        path.state = self._classify_path_state(path, rtt_for_state, path.loss_pct)
 
     def probe_paths(self) -> None:
         host = self.config.home.endpoint
@@ -2360,7 +2392,7 @@ class BondAgent:
             # flag rather than the current rtt_ms sample for exactly the
             # reason documented on the field itself in models.py.
             path.has_ever_answered = True
-            path.state = policy.classify_state(rtt, loss, self.config.policy, previous=path.state)
+            path.state = self._classify_path_state(path, rtt, loss)
             if path.state != PathState.DOWN:
                 path.last_ok_ms = int(time.time() * 1000)
                 path.last_error = None
@@ -3912,6 +3944,9 @@ class BondAgent:
                 "pid": os.getpid(),
                 "config_path": self.config_meta.get("path"),
                 "config_sha256": self.config_meta.get("sha256"),
+                # Excludes per-device [home] values for comparison with the
+                # checked-in template. The raw hash above still checks the stamp.
+                "config_repo_sha256": self.config_meta.get("repo_sha256"),
             }
 
     def write_status_file(self) -> None:
@@ -4774,6 +4809,9 @@ class BondAgent:
                     self.end_headers()
                     self.wfile.write(body)
                     return
+                if parsed.path.lower().endswith(".apk"):
+                    self.send_error(403, "serving APKs from agent dashboard is forbidden")
+                    return
                 self.send_error(404)
 
         _install_dashboard_listeners(self, Handler)
@@ -4922,12 +4960,14 @@ def config_fingerprint(config_path: str | None) -> dict[str, str]:
     import hashlib
 
     from zippie.config import resolve_config_path
+    from zippie import build
 
     try:
         path = resolve_config_path(config_path)
         return {
             "path": str(path),
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "repo_sha256": build.normalized_config_fingerprint(path),
         }
     except FileNotFoundError:
         return {}

@@ -99,6 +99,44 @@ nothing - worth fixing there.
 - **The home host is resolved on the cellular `Network`**, not with the default
   resolver, for the captive-portal reason above.
 
+## The home-screen widget
+
+A small and a medium tile, on Glance, answering "is it working, and on what"
+without opening the app. Add it from the launcher's widget picker; there is
+nothing to configure.
+
+It renders `RelayVerdict` and derives none of it. `WidgetContent.from` is the one
+place that turns evidence into something readable, and `WidgetContentTest` /
+`WidgetBondTest` hold it honest - the same rule that keeps the app's own screens
+from telling an operator they are connected to a router that has never dialled
+them (#44).
+
+Three things about it are decisions rather than defaults, and each one is a way
+the widget could have lied:
+
+- **It reads from disk, never from memory.** Android starts a fresh process for
+  a widget broadcast far more often than not. `RelayStatusStore.report` is an
+  in-memory `StateFlow` that answers `null` in every process that has not itself
+  published, which would render a confident "Off" while the relay, in its own
+  process, was carrying traffic. `RelayReportFile` exists for that read.
+- **It has two staleness thresholds, not one.** The relay report is rewritten
+  every two seconds by the relay's own heartbeat and stays fresh however long the
+  app is closed. The router's view of the bond is fetched by `BondViewModel`,
+  which only exists while a screen is on top, so it goes stale after
+  `WidgetBondSnapshot.STALENESS_MS` (20s) and the widget falls back to the single
+  "This phone" row. That is the honest answer rather than a defect - the price of
+  not polling a router from a background task for the sake of a glance.
+- **It draws no click target, and says nothing while loading.** The loading
+  layout is deliberately empty. Interactivity is out of scope (#244), and the
+  iOS widget has none either; two surfaces behaving differently about the same
+  fact is the failure the whole feature is guarded against.
+
+Colours come from `design/tokens.json` through `design/Tokens.generated.kt`, so
+a token change moves this tile along with the hub and the iOS app.
+`WidgetPaletteWiringTest` fails if a colour here stops coming from `Tok` - the
+obvious implementation, `GlanceTheme.colors`, is the Material palette and would
+have been the one surface a token change never reached.
+
 ## Announcing
 
 A phone is not a fixed address, so it does not belong in the router's
@@ -163,8 +201,8 @@ carry anything (#2246).
 | workflow | trigger | key | artifact |
 |---|---|---|---|
 | `check.android.yml` | every PR | debug (SDK's shared key) | test reports |
-| `check.android-signing.yml` | every PR | **throwaway**, made and destroyed in the job | `zippie-companion-release-apk-THROWAWAY-KEY` |
-| `app.companion-android.release.yml` | **manual dispatch only** | the real one, from repo secrets | `zippie-companion-release-apk-signed` |
+| `check.android-signing.yml` | every PR | **throwaway**, made and destroyed in the job | `zippie-companion-release-apk-THROWAWAY-KEY` (the `.aab` is built and verified too, never uploaded) |
+| `app.companion-android.release.yml` | **manual dispatch only** | the real one, from repo secrets | `zippie-companion-release-apk-signed`, `zippie-companion-release-aab` |
 
 Both signed builds go through `ci/build-signed-apk.sh`, which is the single
 place the version numbering and the post-build checks live. It refuses to
@@ -384,19 +422,23 @@ which build a given phone carries.
 **The signing certificate was compared on 2026-09-03 and it matches.** Both
 handsets and the release job produce
 `ecaaf695e2ac5bee845edf075038437ab8ae668890c07012525640c652e477f7`, read off
-the APK pulled from each device rather than off a log. That digest is now
-PINNED in `build-signed-apk.sh`, so a real release build signed by anything
-else fails in CI instead of on a handset. The certificate SUBJECT is `zippie`
-on every key this project has used, throwaway keys included, so only the digest
-tells them apart - a build whose file name, version name and artifact name all
-said TESTKEY reached the fleet once anyway. Naming is not a control.
+the APK pulled from each device rather than off a log. That digest is PINNED in
+`build-signed-apk.sh` and in `ci/install-to-handsets.sh`. The certificate SUBJECT
+is `zippie` on every key this project has used, throwaway keys included, so only
+the digest tells them apart - a build whose file name, version name and artifact
+name all said TESTKEY reached the fleet once anyway. Naming is not a control.
+The fleet audit and web root verification are recorded in
+`docs/fleet-audit-testkey-installs.md`.
 
 ## Getting a build onto the handsets
 
     ci/install-to-handsets.sh <apk> --router <ssh-target> [--dry-run]
 
-One command, and it refuses rather than trying when it cannot work. It finds
-the handsets by asking the LAN over mDNS (Android picks a new wireless-debugging
+One command, and it refuses rather than trying when it cannot work. It checks
+the candidate APK signing certificate against the pinned release digest
+`ecaaf695e2ac5bee845edf075038437ab8ae668890c07012525640c652e477f7` immediately
+and refuses with a loud message before touching any handset. It then finds the
+handsets by asking the LAN over mDNS (Android picks a new wireless-debugging
 port whenever debugging is enabled and does not keep it across a reboot, so no
 port can be written down), tunnels to each one through the router, and then
 checks BOTH facts that decide an install, reading each off both sides:
@@ -404,13 +446,15 @@ checks BOTH facts that decide an install, reading each off both sides:
 - **version code**, from the APK's own manifest and from the device - not from
   the file name, which is a claim rather than a fact;
 - **signing certificate**, from the APK and from the copy pulled off the device.
-  On a mismatch it stops and changes nothing: the only way through is an
-  uninstall, which discards that phone's `DataBudget` counters, and that is a
-  decision for a person.
+  On a mismatch or non-release signer it stops and changes nothing: the only way
+  through is an uninstall, which discards that phone's `DataBudget` counters, and
+  that is a decision for a person.
 
 Afterwards it asks the device what it is running, because `adb install` reports
 failure for installs that SUCCEEDED - the result comes back over the connection
-the install itself disturbs, so its exit code is not the answer.
+the install itself disturbs, so its exit code is not the answer. If
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE` occurs, it reports the failure loudly
+instead of retrying silently.
 
 `ci/apk-facts.py <apk>` answers the same questions on their own, with no
 Android SDK: package, version code, version name and signer digest, straight

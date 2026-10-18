@@ -23,6 +23,7 @@ struct DiagnosticsScreen: View {
         Page {
             header
             rows
+            tokenSection
             refresh
         }
         .task { await model.measure() }
@@ -72,6 +73,39 @@ struct DiagnosticsScreen: View {
         }
     }
 
+    private var tokenSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionHead(title: "Write token")
+
+            Readout(label: "On this phone",
+                    value: model.hasToken ? "stored" : "not stored",
+                    tone: model.hasToken ? Ink.primary : Ink.degraded)
+            Hairline()
+            SecretRow(label: "Token", text: $model.tokenEntry)
+
+            HStack(spacing: Space.snug) {
+                ActionButton(title: "Store token", role: .quiet,
+                             enabled: !model.tokenEntry.isEmpty) {
+                    model.saveToken()
+                }
+                if model.hasToken {
+                    ActionButton(title: "Forget", role: .quiet) { model.forgetToken() }
+                }
+            }
+            .padding(.top, Space.snug)
+
+            if let error = model.tokenError {
+                Note(text: error, tone: .warning)
+            }
+
+            Note(text: "Reads are open; writes are not. The router generates "
+               + "this token on first use and keeps it as console_token in its "
+               + "state directory. Without a write token, this phone cannot "
+               + "join the bond. It is held in this phone's keychain and is "
+               + "never shown again once stored.")
+        }
+    }
+
     private var refresh: some View {
         ActionButton(title: model.measuring ? "Measuring..." : "Refresh",
                      role: .quiet, enabled: !model.measuring) {
@@ -89,5 +123,31 @@ struct DiagnosticsScreen: View {
         case .unknown: return Ink.secondary
         case .note:    return Ink.degraded
         }
+    }
+}
+
+/// A password field in the same column as every other value on the page.
+///
+/// SecureField rather than FieldRow, because this is the one value here that is
+/// a credential and shoulder-surfing a router token on a train is a real way to
+/// lose control of a household's routing.
+private struct SecretRow: View {
+    let label: String
+    @Binding var text: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.base) {
+            Text(label)
+                .font(Kind.body())
+                .foregroundStyle(Ink.secondary)
+            Spacer(minLength: Space.snug)
+            SecureField("", text: $text)
+                .font(Kind.figure(17))
+                .foregroundStyle(Ink.primary)
+                .multilineTextAlignment(.trailing)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+        }
+        .padding(.vertical, Space.snug)
     }
 }

@@ -66,7 +66,7 @@ class RelayVerdictTest {
         val v = RelayVerdict.evaluate(r, now, routerSeesNothing = true)
 
         assertEquals(RelayVerdict.RouterSeesNothing, v)
-        assertEquals("Not arriving", v.headline)
+        assertEquals("Sending, nothing coming back", v.headline)
         assertFalse("must not claim the bond", v.detail().contains("part of the bond"))
     }
 
@@ -232,6 +232,27 @@ class RelayVerdictTest {
         assertEquals("Carrying", v.headline)
     }
 
+    @Test
+    fun `router disagreement says sending but nothing coming back`() {
+        val v = RelayVerdict.evaluate(
+            report { copy(upDatagrams = 12, lastRouterInboundAtMs = now - 1_000) },
+            now,
+            routerSeesNothing = true,
+        )
+
+        assertEquals("Sending, nothing coming back", v.headline)
+    }
+
+    @Test
+    fun `failed router status read is surfaced when local sends exist`() {
+        val v = RelayVerdict.evaluate(
+            report { copy(upDatagrams = 12, lastRouterInboundAtMs = now - 1_000) },
+            now,
+            routerReachable = false,
+        )
+        assertEquals("Sending, router not reachable", v.headline)
+    }
+
     // ---- local faults outrank router talk ----
 
     @Test
@@ -376,6 +397,72 @@ class RelayVerdictTest {
     @Test
     fun `an empty router name falls back to the generic phrase`() {
         assertEquals(RelayVerdict.Listening.detail(router = ""), RelayVerdict.Listening.detail(router = null))
+    }
+
+    // ---- battery optimization (#254) ----
+
+    /**
+     * A phone that is not exempt from battery optimization and is meant to
+     * relay must say so, on its own screen and in its verdict, rather than
+     * letting the router infer it from silence.
+     */
+    @Test
+    fun `a phone not exempt from battery optimization says so`() {
+        val r = report {
+            copy(ignoringBatteryOptimizations = false)
+        }
+
+        val v = RelayVerdict.evaluate(r, now)
+
+        assertTrue("expected BatteryOptimizationRestricted, got $v", v is RelayVerdict.BatteryOptimizationRestricted)
+        assertTrue(v.detail().lowercase().contains("battery"))
+    }
+
+    /** A phone that IS exempt says nothing about it - the verdict is about
+     *  what the relay is doing, and exemption is orthogonal to that. */
+    @Test
+    fun `an exempt phone says nothing about battery optimization`() {
+        val r = report {
+            copy(ignoringBatteryOptimizations = true, upDatagrams = 5, lastRouterInboundAtMs = now - 1_000)
+        }
+
+        val v = RelayVerdict.evaluate(r, now)
+
+        assertEquals(RelayVerdict.Carrying, v)
+        assertFalse(v.detail().lowercase().contains("battery"))
+    }
+
+    /** A phone that is not exempt but is not contributing is correct, and
+     *  silent - it is not being asked to relay, so there is nothing to warn
+     *  about. */
+    @Test
+    fun `a non-exempt non-contributing phone is silent`() {
+        val r = report {
+            copy(ignoringBatteryOptimizations = false, listening = false)
+        }
+
+        val v = RelayVerdict.evaluate(r, now)
+
+        assertEquals(RelayVerdict.NotListening(null), v)
+        assertFalse(v.detail().lowercase().contains("battery"))
+    }
+
+    /** The battery warning outranks the router's silence: a phone that is
+     *  at risk of being frozen must not be told it is "carrying" because
+     *  the router has gone quiet. */
+    @Test
+    fun `battery risk outranks router silence`() {
+        val r = report {
+            copy(
+                ignoringBatteryOptimizations = false,
+                upDatagrams = 5,
+                lastRouterInboundAtMs = now - 60_000,
+            )
+        }
+
+        val v = RelayVerdict.evaluate(r, now)
+
+        assertTrue("expected BatteryOptimizationRestricted, got $v", v is RelayVerdict.BatteryOptimizationRestricted)
     }
 
     /** Naming must not leak into states that say nothing about the router. */

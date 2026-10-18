@@ -169,11 +169,11 @@ class NackTracker:
     very next frame -- so genuine loss is asked for at the same 60 ms it always
     was.
 
-    That needs no RTT measurement, so it does not depend on #107 (the phantom
-    RTT on lossy legs), and no clock synchronisation between the ends. The wire
-    format is unchanged; one previously-unused FLAGS BIT is set on retransmits
-    so a resend is not mistaken for its leg making progress, and an end that
-    does not know that bit simply loses the hint. See Transport.FLAG_RETRANSMIT.
+    The progress gate itself needs no RTT measurement. Transport also uses the
+    RTT spread reported by the sender to widen the reorder window before a
+    highly skewed leg hits this tracker's ceiling. A retransmit carries a flag
+    so it is not mistaken for its leg making progress. See
+    Transport.FLAG_RETRANSMIT.
 
     THE TWO BOUNDS THAT KEEP IT HONEST
     ----------------------------------
@@ -282,7 +282,13 @@ class NackTracker:
         caller can tell, because the sender marks the frame; the tracker cannot,
         and is deliberately kept ignorant of wire flags.
         """
-        if self._pending.pop(seq, None) is not None and seq not in self._asked:
+        first_seen = self._pending.pop(seq, None)
+        if first_seen is not None and seq in self._asked:
+            recovery_ms = max(0, round((self._clock() - first_seen) * 1000))
+            self.stats.recovery_count += 1
+            self.stats.recovery_total_ms += recovery_ms
+            self.stats.recovery_max_ms = max(self.stats.recovery_max_ms, recovery_ms)
+        if first_seen is not None and seq not in self._asked:
             # It was missing, we had not asked for it, and here it is: that is
             # reordering absorbed rather than paid for. Under skew this is one
             # for one what `nacks_sent` used to be.
@@ -487,6 +493,9 @@ class NackStats:
     # That is a leg problem (or a reorder-deadline decision), not a loss one,
     # and it looks identical to ordinary recovery from `nacks_sent` alone.
     capped: int = 0
+    recovery_count: int = 0
+    recovery_total_ms: int = 0
+    recovery_max_ms: int = 0
 
     def as_dict(self) -> dict[str, int]:
         return {
@@ -495,4 +504,7 @@ class NackStats:
             "dropped": self.dropped,
             "reordered": self.reordered,
             "capped": self.capped,
+            "recovery_count": self.recovery_count,
+            "recovery_total_ms": self.recovery_total_ms,
+            "recovery_max_ms": self.recovery_max_ms,
         }

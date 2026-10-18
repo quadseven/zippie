@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 from zippie import agent as agent_mod
 from zippie import net
 from zippie.agent import BondAgent, projected_idle_mb_per_day
@@ -182,8 +184,17 @@ def test_console_states_which_bytes_definition_it_reports(tmp_path):
 
 def test_three_metered_idle_legs_project_below_100_mb_per_day():
     achieved = projected_idle_mb_per_day(metered_legs=3, probe_interval_s=2.0, keepalive_s=25)
-    assert round(achieved, 2) == 11.93
+    assert round(achieved, 2) == 12.19
     assert achieved < 100
+
+
+def test_idle_projection_docstring_matches_accounted_packet_bytes():
+    documentation = inspect.getdoc(projected_idle_mb_per_day)
+
+    assert documentation is not None
+    assert "RTT-hint bytes" in documentation
+    assert "2 * (HEADER_LEN + _IPV4_UDP_HEADER_BYTES) + 2" in documentation
+    assert "accounted separately" in documentation
 
 
 def test_live_wireguard_keepalive_is_changed_without_rebuilding(monkeypatch):
