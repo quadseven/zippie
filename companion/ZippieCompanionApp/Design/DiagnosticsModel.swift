@@ -32,6 +32,8 @@ final class DiagnosticsModel: ObservableObject {
     private let token: ConsoleWriteToken
     private let pairing: ConsoleWriteToken
     private let onPairingChanged: () -> Void
+    /// Lets same-LAN discovery announce the peers a missing token held back.
+    private let onTokenChanged: () -> Void
 
     /// NO DEFAULT (#156). This named one specific deployment's MDM in every
     /// build, extractable from the binary. Nothing on iOS writes a real value
@@ -46,7 +48,8 @@ final class DiagnosticsModel: ObservableObject {
          session: URLSession = .shared,
          token: ConsoleWriteToken = .shared,
          pairing: ConsoleWriteToken = PeerDiscoveryService.pairingStore,
-         onPairingChanged: @escaping () -> Void = {}) {
+         onPairingChanged: @escaping () -> Void = {},
+         onTokenChanged: @escaping () -> Void = {}) {
         self.consoleHost = consoleHost
         self.mdmHost = mdmHost
         self.session = session
@@ -55,6 +58,7 @@ final class DiagnosticsModel: ObservableObject {
         self.pairing = pairing
         self.hasPairing = pairing.read() != nil
         self.onPairingChanged = onPairingChanged
+        self.onTokenChanged = onTokenChanged
     }
 
     // MARK: - the pairing bundle (#270)
@@ -99,6 +103,7 @@ final class DiagnosticsModel: ObservableObject {
         tokenEntry = ""
         tokenError = nil
         hasToken = true
+        onTokenChanged()
         return true
     }
 

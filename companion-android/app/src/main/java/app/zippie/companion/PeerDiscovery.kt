@@ -136,6 +136,11 @@ class PeerHandshakeException(message: String) : Exception(message)
 
 /** The gomobile binding's three discovery calls; the real one is GoPeerCrypto. */
 interface PeerCrypto {
+    /** Why this build cannot prove or verify a pairing at all, or null when it
+     *  can. No default: an implementation that forgot to answer must not be
+     *  taken as one that can. */
+    val unavailable: String?
+
     fun newChallenge(): String
     fun proof(credentialJson: String, challengeHex: String, endpoint: String): String
     fun verify(rosterJson: String, claimedId: Long, challengeHex: String, proofHex: String): String
@@ -306,4 +311,50 @@ data class PeerSnapshot(
 
     fun offers(legNames: Set<String>, legEndpoints: Set<String>): List<VerifiedPeer> =
         PeerRoster.offersFrom(verified, ownClientId, legNames, legEndpoints)
+}
+
+/**
+ * What to do with the adopted peers' announcers after a change: which to stop,
+ * which to re-point, and which to start.
+ *
+ * A peer still wanted at a new endpoint is RE-POINTED, never stopped and
+ * started again. Stopping withdraws the leg by name, and that withdraw races
+ * the new announcer's first announce of the same name; if it lands last the
+ * leg is gone until the next renewal. The router takes a changed host:port
+ * under the same name as a move and re-dials.
+ */
+data class AdoptionPlan(
+    val stop: Set<Long>,
+    val repoint: Map<Long, VerifiedPeer>,
+    val start: Map<Long, VerifiedPeer>,
+) {
+    companion object {
+        fun between(running: Map<Long, VerifiedPeer>, desired: Map<Long, VerifiedPeer>) = AdoptionPlan(
+            stop = running.keys - desired.keys,
+            repoint = desired.filter { (id, peer) -> id in running && running[id] != peer },
+            start = desired.filterKeys { it !in running },
+        )
+    }
+}
+
+/**
+ * Whether a refresh keeps discovery as it is, restarts it, or starts it.
+ *
+ * A pairing that differs from the running one - removed or replaced by MDM -
+ * RESTARTS at once, failure or not: a revoked bundle must stop answering and
+ * verifying now, not when the app next dies. A failure is retried, but only
+ * after [RETRY_AFTER_MS], so a fault that persists is a line a minute rather
+ * than one per poll.
+ */
+object PeerLifecycle {
+    enum class Step { KEEP, RESTART, START }
+
+    const val RETRY_AFTER_MS = 60_000L
+
+    fun next(running: Boolean, current: PeerPairing?, found: PeerPairing?, failedAtMs: Long?, nowMs: Long): Step = when {
+        found != current -> Step.RESTART
+        failedAtMs != null -> if (nowMs - failedAtMs >= RETRY_AFTER_MS) Step.START else Step.KEEP
+        running -> Step.KEEP
+        else -> Step.START
+    }
 }

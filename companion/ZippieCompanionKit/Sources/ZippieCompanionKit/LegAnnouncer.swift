@@ -16,7 +16,9 @@ import Foundation
 /// RENEWED FROM THE EXTENSION, NOT THE APP. The relay runs in a Network
 /// Extension precisely so it survives the app being closed; announcing from
 /// the app would mean the leg expiring the moment someone locked their phone
-/// while it was still relaying.
+/// while it was still relaying. The exception is a DELEGATED announcer (#270),
+/// which the app runs for a peer it verified: that lease is the app's to keep,
+/// so it lapses once iOS suspends the app (PeerDiscoveryService).
 public actor LegAnnouncer {
 
     public struct Config: Sendable {

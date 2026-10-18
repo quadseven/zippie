@@ -3,6 +3,7 @@ package app.zippie.companion
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.os.SystemClock
 import android.util.Log
 import java.io.IOException
 import java.net.InetAddress
@@ -63,6 +64,8 @@ class NsdPeerDiscovery(
     private val roster = PeerRoster()
     private var snapshot = PeerSnapshot()
     private var pairing: PeerPairing? = null
+    /** When discovery last stopped on a failure, for [PeerLifecycle]'s retry. */
+    private var failedAtMs: Long? = null
     private var server: ServerSocket? = null
     private var registration: NsdManager.RegistrationListener? = null
     private var discovery: NsdManager.DiscoveryListener? = null
@@ -74,11 +77,13 @@ class NsdPeerDiscovery(
     private val toResolve = ArrayDeque<NsdServiceInfo>()
     private var resolving = false
 
-    private class Adoption(val peer: VerifiedPeer, val announcer: LegAnnouncer)
+    /** [peer] is re-pointed in place when the device moves (AdoptionPlan), and
+     *  read by the announcer's own thread on every renewal. */
+    private class Adoption(@Volatile var peer: VerifiedPeer, val announcer: LegAnnouncer)
 
-    /** Starts if a pairing is present and discovery is not already running.
-     *  Cheap to call repeatedly, so a pairing pushed by MDM later is picked up
-     *  by the next call. */
+    /** Re-reads the pairing and applies [PeerLifecycle]: a pairing MDM pushed,
+     *  replaced or removed since the last call takes effect now, and a failure
+     *  is retried after a pause. Cheap to call on every poll. */
     fun start() {
         post { startOnWorker() }
     }
@@ -123,12 +128,25 @@ class NsdPeerDiscovery(
     // ---- lifecycle, on the worker -----------------------------------------
 
     private fun startOnWorker() {
-        // A failure stays on screen rather than being retried every poll.
-        if (server != null || snapshot.status == PeerSnapshot.Status.FAILED) return
-        val nsd = this.nsd ?: return fail("this phone has no network service discovery")
         val managed = AndroidManagedConfig.read(context)
-        val found = ManagedConfig.peerPairing(managed) ?: return unpaired(managed)
+        val found = ManagedConfig.peerPairing(managed)
+        when (PeerLifecycle.next(server != null, pairing, found, failedAtMs, SystemClock.elapsedRealtime())) {
+            PeerLifecycle.Step.KEEP -> return retryBlocked()
+            PeerLifecycle.Step.RESTART -> stopOnWorker()
+            PeerLifecycle.Step.START -> Unit
+        }
         pairing = found
+        failedAtMs = null
+        if (found == null) return unpaired(managed)
+        launch(found)
+    }
+
+    /** Advertises, answers and browses for [found]. Refuses to advertise from
+     *  a build that cannot answer a challenge: it would invite every peer to
+     *  fail one, and count each of them as unpaired. */
+    private fun launch(found: PeerPairing) {
+        crypto.unavailable?.let { return fail(it) }
+        val nsd = this.nsd ?: return fail("this phone has no network service discovery")
         try {
             val socket = ServerSocket(0)
             server = socket
@@ -139,6 +157,12 @@ class NsdPeerDiscovery(
             return fail("advertising: ${e.message}")
         }
         emit(PeerSnapshot(status = PeerSnapshot.Status.RUNNING, ownClientId = found.clientId))
+    }
+
+    /** Adoptions a missing write token held back are retried on each poll, so
+     *  storing the token is enough; nothing else changes to set them off. */
+    private fun retryBlocked() {
+        if (snapshot.blocker != null) reconcile()
     }
 
     /** No usable pairing. Said differently when MDM pushed one that does not
@@ -154,13 +178,10 @@ class NsdPeerDiscovery(
         server?.close()
         server = null
         // A listener NSD already dropped (after a failure callback) throws
-        // here; that is a log line, not a reason to crash the app.
-        try {
-            registration?.let { nsd?.unregisterService(it) }
-            discovery?.let { nsd?.stopServiceDiscovery(it) }
-        } catch (e: IllegalArgumentException) {
-            Log.w(TAG, "NSD teardown: ${e.message}")
-        }
+        // here; that is a log line, not a reason to crash the app. One try
+        // each, so a stale registration cannot leave the browser running.
+        registration?.let { teardown("advertising") { nsd?.unregisterService(it) } }
+        discovery?.let { teardown("browsing") { nsd?.stopServiceDiscovery(it) } }
         registration = null
         discovery = null
         toResolve.clear()
@@ -170,9 +191,20 @@ class NsdPeerDiscovery(
         reconcile()
     }
 
+    private fun teardown(what: String, stop: () -> Unit) {
+        try {
+            stop()
+        } catch (e: IllegalArgumentException) {
+            Log.w(TAG, "NSD teardown of $what: ${e.message}")
+        }
+    }
+
+    /** Logged once per distinct reason: a fault that outlives its retry would
+     *  otherwise repeat itself every [PeerLifecycle.RETRY_AFTER_MS]. */
     private fun fail(reason: String) {
-        Log.w(TAG, "peer discovery stopped: $reason")
+        if (snapshot.failure != reason) Log.w(TAG, "peer discovery stopped: $reason")
         stopOnWorker()
+        failedAtMs = SystemClock.elapsedRealtime()
         emit(PeerSnapshot(status = PeerSnapshot.Status.FAILED, failure = reason))
     }
 
@@ -333,7 +365,8 @@ class NsdPeerDiscovery(
         when {
             // This phone's own advertisement comes back to its own browser.
             claimed == pairing.clientId -> roster.lost(service)
-            claimed == null || host == null -> settle(service, PeerStanding.Refused("no client id advertised"))
+            claimed == null -> settle(service, PeerStanding.Refused("no client id advertised"))
+            host == null -> settle(service, PeerStanding.Refused("resolved without an address"))
             else -> {
                 val queued = check {
                     val standing = PeerVerification.verify(claimed, pairing, crypto) { exchange(host, info.port, it) }
@@ -364,8 +397,10 @@ class NsdPeerDiscovery(
      *  rest, then publish. Called after every change. */
     private fun reconcile() {
         val desired = roster.verifiedPeers.filter { it.clientId in adopted }.associateBy { it.clientId }
-        stopStale(desired)
-        val blocker = startMissing(desired)
+        val plan = AdoptionPlan.between(running.mapValues { it.value.peer }, desired)
+        plan.stop.forEach { running.remove(it)?.announcer?.stop() }
+        // Nothing left to announce is nothing blocked, even if something was.
+        val blocker = if (plan.repoint.isEmpty() && plan.start.isEmpty()) null else announce(plan)
         emit(
             snapshot.copy(
                 verified = roster.verifiedPeers,
@@ -376,27 +411,23 @@ class NsdPeerDiscovery(
         )
     }
 
-    private fun stopStale(desired: Map<Long, VerifiedPeer>) {
-        val stale = running.filter { (id, adoption) -> desired[id] != adoption.peer }
-        for ((id, adoption) in stale) {
-            running.remove(id)
-            adoption.announcer.stop()
-        }
-    }
-
-    /** Starts what is missing; returns why nothing could start, if anything. */
-    private fun startMissing(desired: Map<Long, VerifiedPeer>): String? {
-        val pending = desired.filterKeys { it !in running }
-        if (pending.isEmpty()) return null
+    /** Re-points the moved peers and starts the new ones; returns why nothing
+     *  could, if anything. */
+    private fun announce(plan: AdoptionPlan): String? {
         val config = AndroidManagedConfig.effectiveConfig(context)
         if (config.announceToken.isEmpty() || config.consoleLanHost.isBlank()) {
             return "Set the router write token on the Relay tab to add a device as a leg."
         }
-        for ((id, peer) in pending) {
-            val announcer = LegAnnouncer(HttpConsolePost(SystemWifiRoute(context)))
-            running[id] = Adoption(peer, announcer)
-            announcer.start(peer.announcerConfig(config.consoleLanHost, config.announceToken), { peer.host }) { outcome ->
-                post { emit(snapshot.copy(outcomes = snapshot.outcomes + (id to outcome))) }
+        for ((id, peer) in plan.repoint) {
+            val adoption = running.getValue(id)
+            adoption.peer = peer
+            adoption.announcer.reconfigure(peer.announcerConfig(config.consoleLanHost, config.announceToken))
+        }
+        for ((id, peer) in plan.start) {
+            val adoption = Adoption(peer, LegAnnouncer(HttpConsolePost(SystemWifiRoute(context))))
+            running[id] = adoption
+            adoption.announcer.start(peer.announcerConfig(config.consoleLanHost, config.announceToken), { adoption.peer.host }) { outcome ->
+                post { if (id in running) emit(snapshot.copy(outcomes = snapshot.outcomes + (id to outcome))) }
             }
         }
         return null

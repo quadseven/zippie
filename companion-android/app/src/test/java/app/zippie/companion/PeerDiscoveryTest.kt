@@ -36,6 +36,7 @@ class PeerDiscoveryTest {
     private class FakeCrypto(
         private val verifyResult: () -> String = { throw IllegalStateException("refused by fake") },
     ) : PeerCrypto {
+        override val unavailable: String? = null
         var verifiedClaim: Long? = null
         var verifiedRoster: String? = null
         var provedEndpoint: String? = null
@@ -277,5 +278,74 @@ class PeerDiscoveryTest {
         val snap = PeerSnapshot(ownClientId = 3, verified = listOf(peer(), peer(3, name = "me")))
         assertEquals(listOf(peer()), snap.offers(emptySet(), emptySet()))
         assertEquals(emptyList<VerifiedPeer>(), snap.offers(emptySet(), setOf("10.99.0.57:51999")))
+    }
+
+    // ---- keeping adopted legs in step -------------------------------------
+
+    @Test
+    fun `a peer that moved is re-pointed, not withdrawn and announced again`() {
+        // Stopping withdraws the leg by name, and that withdraw races the new
+        // announcer's first announce of the SAME name: if it lands last, the
+        // leg is gone until the next renewal.
+        val moved = peer(host = "10.99.0.58")
+        val plan = AdoptionPlan.between(running = mapOf(7L to peer()), desired = mapOf(7L to moved))
+        assertEquals(mapOf(7L to moved), plan.repoint)
+        assertEquals(emptySet<Long>(), plan.stop)
+        assertEquals(emptyMap<Long, VerifiedPeer>(), plan.start)
+    }
+
+    @Test
+    fun `adoptions start, stop, and are left alone exactly when they should be`() {
+        val nine = peer(9, name = "tablet")
+        val plan = AdoptionPlan.between(
+            running = mapOf(7L to peer(), 8L to peer(8, name = "old")),
+            desired = mapOf(7L to peer(), 9L to nine),
+        )
+        assertEquals(setOf(8L), plan.stop)
+        assertEquals(mapOf(9L to nine), plan.start)
+        assertEquals(emptyMap<Long, VerifiedPeer>(), plan.repoint)
+    }
+
+    // ---- when discovery (re)starts ----------------------------------------
+
+    private fun next(
+        running: Boolean = false,
+        current: PeerPairing? = null,
+        found: PeerPairing? = null,
+        failedAtMs: Long? = null,
+        nowMs: Long = 1_000_000,
+    ) = PeerLifecycle.next(running, current, found, failedAtMs, nowMs)
+
+    @Test
+    fun `a pairing MDM removed or replaced stops the old session at once`() {
+        // Revoking a bundle must take effect now, not when the app next dies:
+        // the old key would keep answering and the old roster keep verifying.
+        assertEquals(PeerLifecycle.Step.RESTART, next(running = true, current = pairing(), found = null))
+        val replaced = pairing().copy(rosterJson = "[]")
+        assertEquals(PeerLifecycle.Step.RESTART, next(running = true, current = pairing(), found = replaced))
+    }
+
+    @Test
+    fun `a pairing change clears a failure rather than waiting it out`() {
+        assertEquals(PeerLifecycle.Step.RESTART, next(current = pairing(), found = null, failedAtMs = 999_999))
+    }
+
+    @Test
+    fun `a running session with the same pairing is kept`() {
+        assertEquals(PeerLifecycle.Step.KEEP, next(running = true, current = pairing(), found = pairing()))
+    }
+
+    @Test
+    fun `a failure is retried, but not on every poll`() {
+        val failed = 1_000_000L
+        val soon = failed + PeerLifecycle.RETRY_AFTER_MS - 1
+        val later = failed + PeerLifecycle.RETRY_AFTER_MS
+        assertEquals(PeerLifecycle.Step.KEEP, next(current = pairing(), found = pairing(), failedAtMs = failed, nowMs = soon))
+        assertEquals(PeerLifecycle.Step.START, next(current = pairing(), found = pairing(), failedAtMs = failed, nowMs = later))
+    }
+
+    @Test
+    fun `nothing running and nothing failed starts`() {
+        assertEquals(PeerLifecycle.Step.START, next())
     }
 }

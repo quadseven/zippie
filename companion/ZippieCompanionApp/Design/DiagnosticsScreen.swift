@@ -15,9 +15,11 @@ struct DiagnosticsScreen: View {
 
     @StateObject private var model: DiagnosticsModel
 
-    init(consoleHost: String?, onPairingChanged: @escaping () -> Void = {}) {
+    init(consoleHost: String?, onPairingChanged: @escaping () -> Void = {},
+         onTokenChanged: @escaping () -> Void = {}) {
         _model = StateObject(wrappedValue: DiagnosticsModel(consoleHost: consoleHost,
-                                                            onPairingChanged: onPairingChanged))
+                                                            onPairingChanged: onPairingChanged,
+                                                            onTokenChanged: onTokenChanged))
     }
 
     var body: some View {

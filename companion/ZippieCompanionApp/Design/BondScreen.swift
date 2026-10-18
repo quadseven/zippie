@@ -49,7 +49,8 @@ struct BondScreen: View {
                                 consoleHost: Settings.consoleCandidates
                                     .compactMap { URL(string: $0.url)?.host }
                                     .first,
-                                onPairingChanged: { discovery.restart() })
+                                onPairingChanged: { discovery.restart() },
+                                onTokenChanged: { discovery.retryAdoptions() })
                         } label: {
                             Image(systemName: "stethoscope")
                                 .accessibilityLabel("Diagnostics")

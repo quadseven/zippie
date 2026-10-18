@@ -523,14 +523,22 @@ Adopting a verified peer is an ordinary lease, announced with
 `"delegated": true`, because the request comes from the adopting phone and not
 the leg. A delegated announce keeps its claimed host instead of the request's
 source address. The claim is still held to a private LAN address. The adopting
-phone renews the lease only while the peer is still advertised and verified.
+phone renews the lease only while the peer is still advertised and verified,
+and only while the app itself runs: the extension renews a phone's own leg, but
+an adopted peer's lease is the app's, so on iOS it lapses once the app is
+suspended. A peer that moves is re-pointed under the same leg name rather than
+withdrawn and announced again, because the router takes a changed host:port as
+a move.
 
 The pairing material (this device's `client_id`/`key_hex` plus the discovery
 roster) arrives as one JSON bundle: stored in the keychain from Diagnostics on iOS,
 pushed as the `peerPairing` managed-configuration key on Android. That is a
 stand-in for the pairing ceremony (#31). On Android the Go binding is reached
-reflectively until `zippie.aar` is a build dependency, so until then every
-Android check fails closed and nothing is offered.
+reflectively until `zippie.aar` is a build dependency. Until then Android
+discovery stops before advertising and says the build has no binding, rather
+than inviting challenges it cannot answer and counting every peer as unpaired.
+A pairing that MDM replaces or removes takes effect on the next refresh: the
+old key stops answering and the old roster stops verifying.
 
 ## 11. The relay, and the phone's own honesty
 

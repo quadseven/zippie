@@ -19,6 +19,11 @@ import Zippie
 /// delegated `LegAnnouncer` for it, renewed only while the peer is still
 /// advertised and verified. When it leaves the wifi the announcer withdraws
 /// it; when it comes back verified, renewing resumes without another tap.
+///
+/// RENEWED BY THE APP, not the tunnel extension, so only while the app runs.
+/// Once iOS suspends it, an adopted peer's lease lapses on the router within
+/// `LegAnnouncer.leaseSeconds` and renewing resumes when the app is next
+/// active.
 @MainActor
 final class PeerDiscoveryService: ObservableObject {
     enum Status: Equatable {
@@ -57,6 +62,13 @@ final class PeerDiscoveryService: ObservableObject {
     private var listener: NWListener?
     private var browser: NWBrowser?
     private var running: [UInt32: Adoption] = [:]
+    /// Verifications in flight, each one socket, capped at `maxChecking`.
+    private var checking = 0
+
+    /// A household has a handful of devices; more simultaneous checks than
+    /// this is something other than a household, and each one is a socket.
+    /// The same 16 Android holds in its verification backlog.
+    static let maxChecking = 16
 
     init(crypto: PeerCrypto = GoPeerCrypto()) {
         self.crypto = crypto
@@ -97,8 +109,15 @@ final class PeerDiscoveryService: ObservableObject {
     /// browser failing; without this the app would stay deaf to peers - and
     /// stop renewing adopted legs - until it was relaunched.
     func resumeIfStopped() {
-        guard case .failed = status else { return }
+        guard case .failed = status else { return retryAdoptions() }
         restart()
+    }
+
+    /// Retries adoptions a missing write token held back, for after the
+    /// operator stores one: nothing else changes to set them off.
+    func retryAdoptions() {
+        guard adoptionBlocker != nil else { return }
+        reconcile()
     }
 
     /// Re-reads the pairing bundle, for after the operator stores or forgets
@@ -135,36 +154,45 @@ final class PeerDiscoveryService: ObservableObject {
         for peer in roster.verifiedPeers where adopted.contains(peer.clientID) {
             desired[peer.clientID] = peer
         }
-        stopStale(keeping: desired)
-        startMissing(desired)
-    }
-
-    private func stopStale(keeping desired: [UInt32: VerifiedPeer]) {
-        for (id, adoption) in running where desired[id] != adoption.peer {
-            running[id] = nil
+        let plan = AdoptionPlan(running: running.mapValues(\.peer), desired: desired)
+        for id in plan.stop {
+            guard let adoption = running.removeValue(forKey: id) else { continue }
             Task { await adoption.announcer.stop(adoption.config) }
         }
+        // Nothing left to announce is nothing blocked, even if something was.
+        adoptionBlocker = plan.announcesNothing ? nil : announce(plan)
     }
 
-    private func startMissing(_ desired: [UInt32: VerifiedPeer]) {
-        let pending = desired.filter { running[$0.key] == nil }
-        guard !pending.isEmpty else { return }
+    /// Re-points the moved peers and starts the new ones; returns why nothing
+    /// could, if anything. Re-pointing is `start` on the SAME announcer, which
+    /// replaces its renewal without the withdraw `stop` would send.
+    private func announce(_ plan: AdoptionPlan) -> String? {
         let console = Settings.consoleLANHost.trimmingCharacters(in: .whitespaces)
         guard let token = ConsoleWriteToken.shared.read(), !console.isEmpty else {
-            adoptionBlocker = "Store the router's write token on Diagnostics to add a device as a leg."
-            return
+            return "Store the router's write token on Diagnostics to add a device as a leg."
         }
-        adoptionBlocker = nil
-        for (id, peer) in pending {
-            let config = peer.announcerConfig(consoleHost: console, token: token)
-            let announcer = LegAnnouncer()
-            running[id] = Adoption(peer: peer, announcer: announcer, config: config)
-            let host = peer.host
-            let report: @Sendable (LegAnnouncer.Outcome) -> Void = { [weak self] outcome in
-                Task { @MainActor in self?.lastOutcome[id] = outcome }
+        for (id, peer) in plan.repoint {
+            guard let announcer = running[id]?.announcer else { continue }
+            renew(id, peer, announcer, peer.announcerConfig(consoleHost: console, token: token))
+        }
+        for (id, peer) in plan.start {
+            renew(id, peer, LegAnnouncer(), peer.announcerConfig(consoleHost: console, token: token))
+        }
+        return nil
+    }
+
+    private func renew(_ id: UInt32, _ peer: VerifiedPeer, _ announcer: LegAnnouncer,
+                       _ config: LegAnnouncer.Config) {
+        running[id] = Adoption(peer: peer, announcer: announcer, config: config)
+        let host = peer.host
+        let report: @Sendable (LegAnnouncer.Outcome) -> Void = { [weak self] outcome in
+            Task { @MainActor in
+                // A report that lands after `release` must not bring it back.
+                guard let self, self.running[id] != nil else { return }
+                self.lastOutcome[id] = outcome
             }
-            Task { await announcer.start(config, address: { host }, report: report) }
         }
+        Task { await announcer.start(config, address: { host }, report: report) }
     }
 
     // MARK: - advertising this phone
@@ -213,7 +241,10 @@ final class PeerDiscoveryService: ObservableObject {
             case .removed(let result):
                 roster.lost(service: Self.key(result))
             case .changed(old: let old, new: let new, flags: _):
-                roster.lost(service: Self.key(old))
+                // The same service with new metadata (a TXT record or an
+                // interface) is checked again KEEPING its standing meanwhile:
+                // dropping it would withdraw an adopted leg on every change.
+                if Self.key(old) != Self.key(new) { roster.lost(service: Self.key(old)) }
                 found(new)
             case .identical:
                 continue
@@ -236,6 +267,10 @@ final class PeerDiscoveryService: ObservableObject {
         // This phone's own advertisement comes back to its own browser.
         guard claimed != pairing.clientID else { return }
         roster.found(service: service)
+        guard checking < Self.maxChecking else {
+            return settle(service, .refused("too many devices to check at once"))
+        }
+        checking += 1
         let endpoint = result.endpoint
         let queue = self.queue
         Task { [crypto] in
@@ -243,6 +278,7 @@ final class PeerDiscoveryService: ObservableObject {
                                                          crypto: crypto) { message in
                 try await PeerWire.exchange(message, with: endpoint, queue: queue)
             }
+            self.checking -= 1
             self.settle(service, standing)
         }
     }

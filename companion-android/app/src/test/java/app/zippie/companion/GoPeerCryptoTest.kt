@@ -1,6 +1,7 @@
 package app.zippie.companion
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -25,6 +26,16 @@ class GoPeerCryptoTest {
         val pairing = PeerPairing.parse("""{"client_id": 3, "key_hex": "${"42".repeat(32)}", "roster": []}""")!!
         val standing = PeerVerification.verify(7, pairing, crypto) { it }
         assertTrue("$standing", standing is PeerStanding.Refused)
+    }
+
+    /** Said BEFORE anything is advertised, so a build that cannot answer a
+     *  challenge neither offers one nor blames every other device for failing
+     *  a check it could never have passed. */
+    @Test
+    fun `a build without the binding says so up front`() {
+        val missing = GoPeerCrypto(bindingClass = "no.such.Binding").unavailable
+        assertTrue("$missing", missing?.contains("no datapath binding") == true)
+        assertNull(GoPeerCrypto(bindingClass = FakeMobileBinding::class.java.name).unavailable)
     }
 
     @Test

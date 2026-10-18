@@ -240,4 +240,28 @@ final class PeerDiscoveryTests: XCTestCase {
         }
         XCTAssertEqual(r.offers(ownClientID: 3, legNames: [], legEndpoints: []).count, 1)
     }
+
+    // MARK: - keeping adopted legs in step
+
+    /// Stopping withdraws the leg by name, and that withdraw races the new
+    /// announcer's first announce of the SAME name: if it lands last, the leg
+    /// is gone until the next renewal.
+    func testAPeerThatMovedIsRepointedNotWithdrawnAndAnnouncedAgain() {
+        let moved = peer(host: "10.99.0.58")
+        let plan = AdoptionPlan(running: [7: peer()], desired: [7: moved])
+        XCTAssertEqual(plan.repoint, [7: moved])
+        XCTAssertEqual(plan.stop, [])
+        XCTAssertEqual(plan.start, [:])
+    }
+
+    func testAdoptionsStartStopAndAreLeftAloneExactlyWhenTheyShould() {
+        let nine = peer(9, name: "tablet")
+        let plan = AdoptionPlan(running: [7: peer(), 8: peer(8, name: "old")],
+                                desired: [7: peer(), 9: nine])
+        XCTAssertEqual(plan.stop, [8])
+        XCTAssertEqual(plan.start, [9: nine])
+        XCTAssertEqual(plan.repoint, [:])
+        XCTAssertFalse(plan.announcesNothing)
+        XCTAssertTrue(AdoptionPlan(running: [7: peer()], desired: [7: peer()]).announcesNothing)
+    }
 }

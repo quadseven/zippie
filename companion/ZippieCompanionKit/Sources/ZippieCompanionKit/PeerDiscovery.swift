@@ -268,3 +268,26 @@ public struct PeerRoster: Sendable, Equatable {
             .filter { !legNames.contains($0.legName) && !legEndpoints.contains($0.endpoint) }
     }
 }
+
+/// What to do with the adopted peers' announcers after a change: which to
+/// stop, which to re-point, and which to start.
+///
+/// A peer still wanted at a new endpoint is RE-POINTED, never stopped and
+/// started again. Stopping withdraws the leg by name, and that withdraw races
+/// the new announcer's first announce of the same name; if it lands last the
+/// leg is gone until the next renewal. The router takes a changed host:port
+/// under the same name as a move and re-dials.
+public struct AdoptionPlan: Equatable, Sendable {
+    public let stop: Set<UInt32>
+    public let repoint: [UInt32: VerifiedPeer]
+    public let start: [UInt32: VerifiedPeer]
+
+    public init(running: [UInt32: VerifiedPeer], desired: [UInt32: VerifiedPeer]) {
+        stop = Set(running.keys).subtracting(desired.keys)
+        repoint = desired.filter { id, peer in running[id].map { $0 != peer } ?? false }
+        start = desired.filter { id, _ in running[id] == nil }
+    }
+
+    /// Nothing to announce: no adoption is waiting on a write token.
+    public var announcesNothing: Bool { repoint.isEmpty && start.isEmpty }
+}
