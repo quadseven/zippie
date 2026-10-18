@@ -35,6 +35,11 @@ open. Writes need a token.
 **announce** - how a phone tells the router it exists. The relay POSTs to the
 console every 15s with a 45s lease. No announce, no leg.
 
+**pairing** - how a phone plugged in by ethernet gets the console token it
+needs to announce. It asks, shows a code, the operator approves the code, and
+the phone's next ask collects the token. Router side only so far; see
+ARCHITECTURE.md section 10.
+
 > Both platforms announce. PROVEN 2026-09-01, morning and again in the
 > evening, on the live router and the live handsets: 15s cadence in the
 > router's log, bytes moving on both Android legs and on the handset's own
