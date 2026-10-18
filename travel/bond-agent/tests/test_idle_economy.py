@@ -182,6 +182,36 @@ def test_console_states_which_bytes_definition_it_reports(tmp_path):
     assert bond.status_dict()["economy"]["bytes_definition"] == (LINK_BYTES_DEFINITION)
 
 
+def _console_economy_keys() -> set[str]:
+    """Every `e.<key>` the console's economy line reads from the status JSON.
+
+    The console is dashboard/static/index.html, served by the agent itself;
+    it is the only reader of status_dict()["economy"] outside the tests."""
+    import re
+    from pathlib import Path
+
+    html = (Path(__file__).resolve().parents[3] / "dashboard" / "static" / "index.html").read_text()
+    start = html.index("if (s.economy) {")
+    end = html.index("economy.hidden = false;", start)
+    return set(re.findall(r"\be\.([a-z_]+)", html[start:end]))
+
+
+def test_console_page_renders_the_bytes_definition(tmp_path):
+    """#183 AC4, end to end: the field existing in the status JSON is not the
+    console stating it. The page must actually render it, and every key the
+    page reads must still exist (a renamed key reads `undefined` silently)."""
+    bond = _agent(tmp_path)
+    bond._transport = _IdleTransport()
+    bond._transport_ids = {"cell": 0, "wan": 1}
+    bond._transport_links = {0, 1}
+    served = set(bond.status_dict()["economy"])
+
+    read = _console_economy_keys()
+
+    assert "bytes_definition" in read
+    assert read <= served, f"console reads keys the agent no longer serves: {sorted(read - served)}"
+
+
 def test_three_metered_idle_legs_project_below_100_mb_per_day():
     achieved = projected_idle_mb_per_day(metered_legs=3, probe_interval_s=2.0, keepalive_s=25)
     assert round(achieved, 2) == 12.19
@@ -387,4 +417,8 @@ def test_idle_day_measures_emitted_wire_bytes():
     t = _idle_transport()
     measured, probes_sent = _simulate_idle_day(t)
     assert probes_sent == _IDLE_LEGS * int(86400 / _IDLE_PROBE_S)
-    assert round(measured / 1_000_000, 2) == 11.66
+    # 11.66 MB/day until #232 (skew-aware NACK delay) began carrying the
+    # leg's 2-byte RTT in every probe once that leg has an RTT sample:
+    # 3 legs x 43,200 probes x 2 bytes = 0.26 MB/day. A deliberate wire-format
+    # change, re-pinned on purpose - the case this test exists to surface.
+    assert round(measured / 1_000_000, 2) == 11.92
