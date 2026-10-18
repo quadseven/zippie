@@ -453,7 +453,9 @@
       whereEl.className = "link-where";
       // Keep the identifier and interface visible but secondary -- when a
       // link misbehaves you need to know WHICH interface, not just its nickname.
-      const ident = [p.label && p.label !== p.name ? p.name : null, p.ssid, p.interface]
+      // The carrier and plan name say which LINE it is, when someone typed them.
+      const ident = [p.label && p.label !== p.name ? p.name : null, p.ssid, p.interface,
+                     p.carrier, p.plan_name]
         .filter(Boolean).join(" · ");
       whereEl.textContent = ident || "—";
       const pill = document.createElement("span");
