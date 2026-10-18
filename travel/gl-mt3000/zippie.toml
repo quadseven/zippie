@@ -51,7 +51,7 @@ transport_port = 51830
 home_port = 51902
 probe_interval_ms = 1000
 # Automatic idle economy (#260). At three legs this reduces the zippie probe
-# floor to about 51 transport bytes/s (3 legs x a 19 B request and 17 B reply
+# floor to about 54 transport bytes/s (3 legs x a 19 B request and 17 B reply
 # every 2 s), or 12.19 MB/day including IPv4/UDP headers and one 25 s
 # WireGuard keepalive. Two missed probes still fit inside the existing 6 s
 # stale window, while real WireGuard data restores the 1 s cadence.
