@@ -37,7 +37,7 @@ def _config(tmp_path, **path_extra):
             "home": {
                 "endpoint": "home.example:51900",
                 "server_public_key": "c2VydmVy",
-                "address_cidr": "10.66.0.10/24",
+                "address_cidr": "192.0.2.10/24",
                 "ports": [51900],
             },
             "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
