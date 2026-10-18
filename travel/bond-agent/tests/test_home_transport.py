@@ -9,6 +9,7 @@ runner is exercised, not just the primitive underneath it.
 from __future__ import annotations
 
 import socket
+import struct
 import threading
 import time
 
@@ -23,6 +24,44 @@ def _free_port() -> int:
     p = s.getsockname()[1]
     s.close()
     return p
+
+
+class _RecordingSocket:
+    def __init__(self):
+        self.sent = []
+
+    def sendto(self, data, addr):
+        self.sent.append((data, addr))
+
+    def close(self):
+        pass
+
+
+class _FakeSelector:
+    def register(self, *_args):
+        pass
+
+    def unregister(self, *_args):
+        pass
+
+    def close(self):
+        pass
+
+
+def _fake_home():
+    sockets = []
+
+    def socket_factory(_device, _bind):
+        sock = _RecordingSocket()
+        sockets.append(sock)
+        return sock
+
+    home = build_home_transport(
+        HomeTransportConfig(listen_addr=("127.0.0.1", 51901)),
+        socket_factory=socket_factory,
+        selector_factory=_FakeSelector,
+    )
+    return home, sockets
 
 
 def test_home_role_is_constructed_correctly():
@@ -166,5 +205,123 @@ def test_home_routes_replies_by_the_arriving_frame_path_id():
         home._on_link_data(reply.pack(), path_id=0, addr=("192.0.2.1", 40007))
         assert home.link_rtt_ms(7) is None
         assert home.link_loss_pct(7) is None
+    finally:
+        home.close()
+
+
+def test_home_splits_downstream_packets_across_learned_legs():
+    home, sockets = _fake_home()
+    try:
+        for path_id, source_port in ((3, 40003), (7, 40007)):
+            frame = Frame(seq=path_id, path_id=path_id, payload=b"", flags=FLAG_KEEPALIVE, epoch=10)
+            home._on_link_data(frame.pack(), path_id=0, addr=("192.0.2.1", source_port))
+        sockets[1].sent.clear()
+
+        home.send_keepalives()
+        assert {addr for _data, addr in sockets[1].sent} == {
+            ("192.0.2.1", 40003),
+            ("192.0.2.1", 40007),
+        }
+        sockets[1].sent.clear()
+
+        for _ in range(200):
+            assert home.send_payload(b"short reply") == 1
+
+        targets = [addr for _data, addr in sockets[1].sent]
+        assert targets.count(("192.0.2.1", 40003)) >= 50
+        assert targets.count(("192.0.2.1", 40007)) >= 50
+        assert len(targets) == 200
+
+        for path_id, source_port, rtt_ms in ((3, 40003, 50), (7, 40007, 250)):
+            frame = Frame(
+                seq=path_id,
+                path_id=path_id,
+                payload=struct.pack("!H", rtt_ms),
+                flags=FLAG_KEEPALIVE,
+                epoch=10,
+            )
+            home._on_link_data(frame.pack(), path_id=0, addr=("192.0.2.1", source_port))
+        sockets[1].sent.clear()
+        for _ in range(120):
+            home.send_payload(b"reply")
+        targets = [addr for _data, addr in sockets[1].sent]
+        assert targets.count(("192.0.2.1", 40003)) >= 80
+        assert targets.count(("192.0.2.1", 40007)) >= 15
+    finally:
+        home.close()
+
+
+def _assert_downstream_targets(home, sent, expected):
+    sent.clear()
+    for _ in range(40):
+        assert home.send_payload(b"reply") == 1
+    assert {addr for _data, addr in sent} == expected
+
+
+def _keepalive_probes(sent, target):
+    probes = []
+    for data, addr in sent:
+        if addr == target:
+            frame = Frame.unpack(data)
+            if frame.flags == FLAG_KEEPALIVE:
+                probes.append(frame)
+    return probes
+
+
+def test_home_stands_down_a_silent_leg_and_recovers_when_it_returns():
+    home, sockets = _fake_home()
+    now = [home._clock()]
+    home._clock = lambda: now[0]
+    sources = {3: ("192.0.2.1", 40003), 7: ("192.0.2.1", 40007)}
+
+    def arrive(path_id):
+        frame = Frame(seq=path_id, path_id=path_id, payload=b"", flags=FLAG_KEEPALIVE, epoch=10)
+        home._on_link_data(frame.pack(), path_id=0, addr=sources[path_id])
+
+    try:
+        arrive(3)
+        arrive(7)
+        now[0] += 31
+        arrive(7)
+        home.tick()
+        _assert_downstream_targets(home, sockets[1].sent, {sources[7]})
+
+        arrive(3)
+        _assert_downstream_targets(home, sockets[1].sent, set(sources.values()))
+
+        for _ in range(5):
+            now[0] += 2
+            arrive(3)
+            arrive(7)
+            sockets[1].sent.clear()
+            home.tick()
+            probes = _keepalive_probes(sockets[1].sent, sources[7])
+            assert probes, "home did not probe the downstream path"
+            probe3 = next(iter(_keepalive_probes(sockets[1].sent, sources[3])))
+            reply = Frame(
+                seq=probes[-1].seq,
+                path_id=7,
+                payload=b"",
+                flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
+                epoch=10,
+            )
+            home._on_link_data(reply.pack(), path_id=0, addr=sources[7])
+
+        _assert_downstream_targets(home, sockets[1].sent, {sources[7]})
+
+        arrive(3)
+        sockets[1].sent.clear()
+        assert home.send_payload(b"reply") == 1
+        assert sockets[1].sent[0][1] == sources[7]
+
+        reply = Frame(
+            seq=probe3.seq,
+            path_id=3,
+            payload=b"",
+            flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
+            epoch=10,
+        )
+        home._on_link_data(reply.pack(), path_id=0, addr=sources[3])
+        _assert_downstream_targets(home, sockets[1].sent, set(sources.values()))
     finally:
         home.close()
