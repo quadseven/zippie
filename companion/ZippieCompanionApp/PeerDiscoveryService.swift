@@ -64,11 +64,21 @@ final class PeerDiscoveryService: ObservableObject {
     private var running: [UInt32: Adoption] = [:]
     /// Verifications in flight, each one socket, capped at `maxChecking`.
     private var checking = 0
+    /// Devices waiting for a check slot, in arrival order, one entry per
+    /// service. Past `maxChecking` a device waits rather than be refused: a
+    /// refusal stands until it re-advertises, so a flood could lock a genuine
+    /// peer out. Only past `maxAwaiting` is a device refused.
+    private var awaitingCheck: [NWBrowser.Result] = []
+    /// Bumped by `stop()`. A verdict from an earlier session - made against a
+    /// roster since revoked - is dropped, never recorded.
+    private var session = 0
 
     /// A household has a handful of devices; more simultaneous checks than
     /// this is something other than a household, and each one is a socket.
     /// The same 16 Android holds in its verification backlog.
     static let maxChecking = 16
+    /// Past this many waiting as well, the wifi is not a household.
+    static let maxAwaiting = 64
 
     init(crypto: PeerCrypto = GoPeerCrypto()) {
         self.crypto = crypto
@@ -100,6 +110,8 @@ final class PeerDiscoveryService: ObservableObject {
         listener = nil
         browser?.cancel()
         browser = nil
+        session += 1
+        awaitingCheck = []
         roster = PeerRoster()
         reconcile()
     }
@@ -240,6 +252,7 @@ final class PeerDiscoveryService: ObservableObject {
                 found(result)
             case .removed(let result):
                 roster.lost(service: Self.key(result))
+                awaitingCheck.removeAll { Self.key($0) == Self.key(result) }
             case .changed(old: let old, new: let new, flags: _):
                 // The same service with new metadata (a TXT record or an
                 // interface) is checked again KEEPING its standing meanwhile:
@@ -267,20 +280,28 @@ final class PeerDiscoveryService: ObservableObject {
         // This phone's own advertisement comes back to its own browser.
         guard claimed != pairing.clientID else { return }
         roster.found(service: service)
-        guard checking < Self.maxChecking else {
-            return settle(service, .refused("too many devices to check at once"))
-        }
+        guard checking < Self.maxChecking else { return park(result, service) }
         checking += 1
         let endpoint = result.endpoint
         let queue = self.queue
+        let started = session
         Task { [crypto] in
             let standing = await PeerVerification.verify(claimedID: claimed, pairing: pairing,
                                                          crypto: crypto) { message in
                 try await PeerWire.exchange(message, with: endpoint, queue: queue)
             }
             self.checking -= 1
-            self.settle(service, standing)
+            if started == self.session { self.settle(service, standing) }
+            if !self.awaitingCheck.isEmpty { self.found(self.awaitingCheck.removeFirst()) }
         }
+    }
+
+    private func park(_ result: NWBrowser.Result, _ service: String) {
+        awaitingCheck.removeAll { Self.key($0) == service }
+        guard awaitingCheck.count < Self.maxAwaiting else {
+            return settle(service, .refused("too many devices to check at once"))
+        }
+        awaitingCheck.append(result)
     }
 
     private func settle(_ service: String, _ standing: PeerStanding) {

@@ -51,8 +51,8 @@ class NsdPeerDiscovery(
 
     /** Verifications of discovered devices, a few at a time, with a bounded
      *  backlog. Each is bounded by the handshake deadline; the pool bounds how
-     *  many run at once, and a full backlog refuses rather than queueing
-     *  without end behind whatever a hostile network advertises. */
+     *  many sockets are open at once. Past a full backlog a device waits in
+     *  [awaitingCheck] - held, not connected to - until a check finishes. */
     private val verifying: ExecutorService = ThreadPoolExecutor(
         MAX_VERIFYING, MAX_VERIFYING, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(MAX_PENDING_CHECKS),
     )
@@ -76,6 +76,16 @@ class NsdPeerDiscovery(
      *  are queued and run one at a time. */
     private val toResolve = ArrayDeque<NsdServiceInfo>()
     private var resolving = false
+
+    /** Resolved devices waiting for a verification slot, one entry per
+     *  service. A full backlog makes a device wait rather than be refused: a
+     *  refusal stands until it re-advertises, so a flood could lock a genuine
+     *  peer out. Only past [MAX_AWAITING] is a device refused. */
+    private val awaitingCheck = ArrayDeque<NsdServiceInfo>()
+
+    /** Bumped by [stopOnWorker]. A verdict from an earlier session - made
+     *  against a roster since revoked - is dropped, never recorded. */
+    private var session = 0
 
     /** [peer] is re-pointed in place when the device moves (AdoptionPlan), and
      *  read by the announcer's own thread on every renewal. */
@@ -184,7 +194,9 @@ class NsdPeerDiscovery(
         discovery?.let { teardown("browsing") { nsd?.stopServiceDiscovery(it) } }
         registration = null
         discovery = null
+        session += 1
         toResolve.clear()
+        awaitingCheck.clear()
         // The operator's choices in [adopted] are kept, as on iOS: a restart
         // resumes announcing them once they verify again.
         roster.clear()
@@ -316,6 +328,7 @@ class NsdPeerDiscovery(
             override fun onServiceLost(info: NsdServiceInfo) {
                 post {
                     roster.lost(info.serviceName)
+                    awaitingCheck.removeAll { it.serviceName == info.serviceName }
                     reconcile()
                 }
             }
@@ -367,14 +380,29 @@ class NsdPeerDiscovery(
             claimed == pairing.clientId -> roster.lost(service)
             claimed == null -> settle(service, PeerStanding.Refused("no client id advertised"))
             host == null -> settle(service, PeerStanding.Refused("resolved without an address"))
-            else -> {
-                val queued = check {
-                    val standing = PeerVerification.verify(claimed, pairing, crypto) { exchange(host, info.port, it) }
-                    post { settle(service, standing) }
-                }
-                if (!queued) settle(service, PeerStanding.Refused("too many devices to check at once"))
+            else -> verifyLater(info, service, claimed, host, pairing)
+        }
+    }
+
+    /** Queues one verification, or parks the device until a slot frees. */
+    private fun verifyLater(info: NsdServiceInfo, service: String, claimed: Long, host: InetAddress, pairing: PeerPairing) {
+        val started = session
+        val queued = check {
+            val standing = PeerVerification.verify(claimed, pairing, crypto) { exchange(host, info.port, it) }
+            post {
+                if (started == session) settle(service, standing)
+                awaitingCheck.removeFirstOrNull()?.let { resolved(it) }
             }
         }
+        if (!queued) park(info, service)
+    }
+
+    private fun park(info: NsdServiceInfo, service: String) {
+        awaitingCheck.removeAll { it.serviceName == service }
+        if (awaitingCheck.size >= MAX_AWAITING) {
+            return settle(service, PeerStanding.Refused("too many devices to check at once"))
+        }
+        awaitingCheck.addLast(info)
     }
 
     private fun exchange(host: InetAddress, port: Int, message: ByteArray): ByteArray =
@@ -447,5 +475,8 @@ class NsdPeerDiscovery(
         const val MAX_VERIFYING = 4
 
         const val MAX_PENDING_CHECKS = 16
+
+        /** Past this many waiting as well, the wifi is not a household. */
+        const val MAX_AWAITING = 64
     }
 }
