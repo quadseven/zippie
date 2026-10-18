@@ -251,6 +251,23 @@ def test_home_splits_downstream_packets_across_learned_legs():
         home.close()
 
 
+def _assert_downstream_targets(home, sent, expected):
+    sent.clear()
+    for _ in range(40):
+        assert home.send_payload(b"reply") == 1
+    assert {addr for _data, addr in sent} == expected
+
+
+def _keepalive_probes(sent, target):
+    probes = []
+    for data, addr in sent:
+        if addr == target:
+            frame = Frame.unpack(data)
+            if frame.flags == FLAG_KEEPALIVE:
+                probes.append(frame)
+    return probes
+
+
 def test_home_stands_down_a_silent_leg_and_recovers_when_it_returns():
     home, sockets = _fake_home()
     now = [home._clock()]
@@ -267,16 +284,10 @@ def test_home_stands_down_a_silent_leg_and_recovers_when_it_returns():
         now[0] += 31
         arrive(7)
         home.tick()
-        sockets[1].sent.clear()
-        for _ in range(40):
-            assert home.send_payload(b"reply") == 1
-        assert {addr for _data, addr in sockets[1].sent} == {sources[7]}
+        _assert_downstream_targets(home, sockets[1].sent, {sources[7]})
 
         arrive(3)
-        sockets[1].sent.clear()
-        for _ in range(40):
-            assert home.send_payload(b"reply") == 1
-        assert {addr for _data, addr in sockets[1].sent} == set(sources.values())
+        _assert_downstream_targets(home, sockets[1].sent, set(sources.values()))
 
         for _ in range(5):
             now[0] += 2
@@ -284,17 +295,9 @@ def test_home_stands_down_a_silent_leg_and_recovers_when_it_returns():
             arrive(7)
             sockets[1].sent.clear()
             home.tick()
-            probes = [
-                Frame.unpack(data)
-                for data, addr in sockets[1].sent
-                if addr == sources[7] and Frame.unpack(data).flags == FLAG_KEEPALIVE
-            ]
+            probes = _keepalive_probes(sockets[1].sent, sources[7])
             assert probes, "home did not probe the downstream path"
-            probe3 = next(
-                Frame.unpack(data)
-                for data, addr in sockets[1].sent
-                if addr == sources[3] and Frame.unpack(data).flags == FLAG_KEEPALIVE
-            )
+            probe3 = next(iter(_keepalive_probes(sockets[1].sent, sources[3])))
             reply = Frame(
                 seq=probes[-1].seq,
                 path_id=7,
@@ -304,10 +307,7 @@ def test_home_stands_down_a_silent_leg_and_recovers_when_it_returns():
             )
             home._on_link_data(reply.pack(), path_id=0, addr=sources[7])
 
-        sockets[1].sent.clear()
-        for _ in range(40):
-            assert home.send_payload(b"reply") == 1
-        assert {addr for _data, addr in sockets[1].sent} == {sources[7]}
+        _assert_downstream_targets(home, sockets[1].sent, {sources[7]})
 
         arrive(3)
         sockets[1].sent.clear()
@@ -322,9 +322,6 @@ def test_home_stands_down_a_silent_leg_and_recovers_when_it_returns():
             epoch=10,
         )
         home._on_link_data(reply.pack(), path_id=0, addr=sources[3])
-        sockets[1].sent.clear()
-        for _ in range(40):
-            assert home.send_payload(b"reply") == 1
-        assert {addr for _data, addr in sockets[1].sent} == set(sources.values())
+        _assert_downstream_targets(home, sockets[1].sent, set(sources.values()))
     finally:
         home.close()
