@@ -15,17 +15,18 @@ zippie package. The running transport IS the zippie package (transport.py et
 al.), so it lives here and is deployed as the package, same as the travel agent.
 Provisioning (keys, peers) stays in zippie_home.py; carrying packets is here.
 
-THE THREE THINGS THAT MAKE HOME ROLE DIFFERENT FROM TRAVEL
+THE FOUR THINGS THAT MAKE HOME ROLE DIFFERENT FROM TRAVEL
 ----------------------------------------------------------
-1. ONE listening link on a FIXED port. Travel dials out on ephemeral ports;
-   home must listen on the port the travel router sprays to (default 51901),
-   because the travel router cannot know an ephemeral home port.
-2. roam=True. The travel router moves between ISPs, so each frame can arrive
-   from a different source; the link's reply target follows the last source.
+1. ONE listening socket on a FIXED port. Travel dials out on ephemeral ports;
+   home must listen on the port the travel router sprays to (default 51901).
+   Each received path id becomes a logical link sharing that socket.
+2. roam=True. Each logical link's reply target follows its latest source.
 3. wg_peer PRESET. The real wg server never speaks until it receives a
    handshake, and the transport cannot deliver that handshake without already
    knowing where the server is. Travel learns this from its wg client's first
    datagram; home must be told (the loopback wg-server endpoint).
+4. Downstream uses one copy per packet, split across learned paths. Health is
+   learned from upstream frames and home-originated keepalive replies.
 
 The wg server itself is unchanged WireGuard: point its peer's Endpoint at this
 transport's local socket, and it sees one stable peer (the transport) no matter
@@ -39,6 +40,7 @@ import threading
 from dataclasses import dataclass
 
 from zippie.auth import AuthLevel, build_identity, parse_auth_level
+from zippie.classify import ClassifierConfig
 from zippie.transport import LinkEndpoint, Transport
 
 log = logging.getLogger("zippie.home_transport")
@@ -98,6 +100,8 @@ def build_home_transport(
         "reorder_deadline_ms": cfg.reorder_deadline_ms,
         "max_reorder_deadline_ms": cfg.max_reorder_deadline_ms,
         "roam": True,
+        "home_downstream": True,
+        "classifier": ClassifierConfig(duplicate_enabled=False),
         "wg_peer": cfg.wg_server,
         # Raises rather than falling back to unauthenticated if the level and
         # the key file disagree, or the key file is group/world readable. A
@@ -113,9 +117,9 @@ def build_home_transport(
         kwargs["selector_factory"] = selector_factory
 
     t = Transport(cfg.local_addr, **kwargs)
-    # ONE link, bound to the public listen port, roaming to the travel source.
-    # The initial remote is a placeholder the first inbound frame corrects; it
-    # is never used to send before then because replies only follow inbound.
+    # One physical listener; received path ids become logical downstream links.
+    # The initial remote is a placeholder. Hold it out of scheduling until an
+    # inbound frame proves where the path lives.
     t.add_link(
         LinkEndpoint(
             path_id=0,
@@ -126,8 +130,9 @@ def build_home_transport(
             listen=cfg.listen_addr,
         )
     )
+    t.set_link_health(0, False)
     log.info(
-        "home transport built: listen %s -> wg server %s (roam on, one link)",
+        "home transport built: listen %s -> wg server %s (per-path roaming)",
         cfg.listen_addr,
         cfg.wg_server,
     )

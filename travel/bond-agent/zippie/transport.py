@@ -440,6 +440,10 @@ _KA_LOSS_WINDOW = 40
 # and much faster than the 60 s stats line, so the first report after the
 # peer vanishes already says so.
 PEER_SILENT_S = 30.0
+# Home tests the return direction independently. Three unanswered probes over
+# six seconds stand a path down even if it still sends frames upstream.
+HOME_PROBE_INTERVAL_S = 2.0
+HOME_STANDDOWN_S = 6.0
 
 # WireGuard's public wire format leaves its message type and total length
 # visible. That is enough to separate its own handshakes and empty transport
@@ -653,6 +657,7 @@ class Transport:
         # reorder_deadline_ms itself - see ADAPT_MAX_DEADLINE_MULTIPLIER.
         max_reorder_deadline_ms: int | None = None,
         roam: bool = False,
+        home_downstream: bool = False,
         wg_peer: tuple[str, int] | None = None,
         socket_factory=make_udp_socket,
         # Injectable for the same reason socket_factory is: the real
@@ -710,13 +715,12 @@ class Transport:
         self._epoch = int.from_bytes(os.urandom(4), "big") if epoch is None else epoch
         self._peer_epoch: int | None = None
         self._socket_factory = socket_factory
-        # ENDPOINT ROAMING. The home end has one physical link but hears the
-        # travel router across whichever ISP delivered last; setting a link's
-        # reply target to the source of each received frame is what makes
-        # per-packet failover work with zero routing churn - the home mirror of
-        # the travel side dialling out. Off by default: the travel side dials
-        # fixed remotes and must NOT roam to a spoofed source.
+        # ENDPOINT ROAMING. Home hears every travel leg on one socket but keeps
+        # a separate return target for each path id. Off by default: travel
+        # dials fixed remotes and must not roam to a spoofed source.
         self._roam = roam
+        self._home_downstream = home_downstream
+        self._last_home_probe_at = self._clock()
         self.scheduler = Scheduler(duplicate_fanout=duplicate_fanout)
         self.reassembler = Reassembler(reorder_deadline_ms=reorder_deadline_ms, _clock=_clock)
         self.retransmit = RetransmitBuffer(retransmit, _clock=_clock)
@@ -959,7 +963,12 @@ class Transport:
         demoted once could never produce the evidence needed to come back, and
         a bond that cannot recover a recovered link is not a bond.
         """
-        for path_id in list(self._socks):
+        paths = self._links if self._home_downstream else self._socks
+        for path_id in list(paths):
+            # Home's path 0 starts with the listen address as a placeholder.
+            # Probe only paths that have actually sent a frame upstream.
+            if self._home_downstream and path_id not in self._link_rx_bytes:
+                continue
             self._ka_probe += 1
             probe = self._ka_probe
             # The probe's OWN identifier, where a data frame carries its
@@ -1102,9 +1111,8 @@ class Transport:
     def _send_on(self, path_id: int, wire: bytes) -> bool:
         sock = self._socks.get(path_id)
         link = self._links.get(path_id)
-        # Home has one listening socket shared by every travel path. Its
-        # logical links are keyed by the frame path id, while the socket stays
-        # registered once under path 0.
+        # Home has one listening socket shared by every travel path. Logical
+        # links are keyed by path id; the socket stays registered under 0.
         if self._roam and sock is None:
             sock = self._socks.get(0)
         if sock is None or link is None:
@@ -1137,7 +1145,7 @@ class Transport:
         """Frame a WireGuard datagram and put it on the wire. Returns copies sent."""
         healthy = self.scheduler.healthy_paths
         client_bytes = _wireguard_client_bytes_estimate(payload)
-        overhead = client_bytes is None
+        overhead = client_bytes is None and not self._home_downstream
         if client_bytes is not None:
             self._last_client_payload_at = self._clock()
         mode = self.classifier.mode_for(
@@ -1240,7 +1248,7 @@ class Transport:
             return []
 
         # The frame's OWN path_id, not the socket it turned up on. Home listens
-        # on one link and every travel leg sprays to it, so the arriving socket
+        # on one socket and every travel leg sprays to it, so the arriving socket
         # says "wan" for all of them; the sender's leg id is the only per-leg
         # identity this end has, and it is what the forward-progress rule in
         # NackTracker.due is keyed on.
@@ -1412,7 +1420,15 @@ class Transport:
         # frame silently dropped, while the wg server was visibly replying
         # on loopback. The bond looked alive from both ends and moved
         # nothing.
-        self.scheduler.set_healthy(path_id, True)
+        if not self._home_downstream or not self._home_probe_overdue(path_id):
+            self.scheduler.set_healthy(path_id, True)
+
+    def _home_probe_overdue(self, path_id: int) -> bool:
+        outstanding = self._ka_sent.get(path_id, {})
+        return (
+            len(outstanding) >= 3
+            and self._clock() - next(iter(outstanding.values())) >= HOME_STANDDOWN_S
+        )
 
     def _answer_control(self, frame: Frame, path_id: int | None) -> bool:
         """CONTROL-FRAME REPLIES: NACK answers and keepalives. Owns the
@@ -1437,10 +1453,13 @@ class Transport:
                 self._note_keepalive_reply(frame.seq, path_id)
         elif path_id is not None:
             if len(frame.payload) == 2:
-                self._peer_rtt[frame.path_id] = (
-                    struct.unpack("!H", frame.payload)[0],
-                    self._clock(),
-                )
+                rtt_ms = struct.unpack("!H", frame.payload)[0]
+                self._peer_rtt[frame.path_id] = (rtt_ms, self._clock())
+                if self._home_downstream:
+                    # Travel measured this path's round trip. Give slow paths
+                    # a smaller share while retaining a positive recovery
+                    # share for every path still sending frames upstream.
+                    self.scheduler.set_weight(path_id, max(1, 5000 // max(50, rtt_ms)))
             # Answer on the SAME leg it arrived on. Replying over whichever
             # link the scheduler happens to like would measure that link
             # instead, and the answer would prove nothing about the leg
@@ -1471,6 +1490,8 @@ class Transport:
             return
         self._link_rtt[path_id] = (self._clock() - sent) * 1000.0
         self._note_ka_outcome(path_id, lost=False)
+        if self._home_downstream:
+            self.scheduler.set_healthy(path_id, True)
         # Anything older than the probe just answered is LOST, not
         # merely slow - the far end answers in order on a given
         # leg. Dropping them stops a stale timestamp being matched
@@ -1588,6 +1609,7 @@ class Transport:
             template = self._links.get(0)
             if template is not None:
                 link = replace(template, path_id=path_id)
+                self.scheduler.add_path(PathState(path_id, link.name, weight=link.weight))
         if link is None or link.remote == addr:
             return
         self._links[path_id] = replace(link, remote=addr)
@@ -1614,6 +1636,13 @@ class Transport:
 
     def tick(self) -> None:
         """Time-driven work: release stalled reorder gaps, send due NACKs."""
+        if self._home_downstream:
+            if self._clock() - self._last_home_probe_at >= HOME_PROBE_INTERVAL_S:
+                self.send_keepalives()
+                self._last_home_probe_at = self._clock()
+            for path_id in self._links:
+                if not self._heard_recently(path_id) or self._home_probe_overdue(path_id):
+                    self.scheduler.set_healthy(path_id, False)
         self._deliver_to_wireguard(self.reassembler.tick())
         for seq in self.nacks.due():
             self._send_nack(seq)
