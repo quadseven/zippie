@@ -54,6 +54,8 @@ object BootConfigStore {
     private const val KEY_LISTEN_PORT = "listenPort"
     private const val KEY_DAILY_BUDGET = "dailyBudgetBytes"
     private const val KEY_MONTHLY_BUDGET = "monthlyBudgetBytes"
+    private const val KEY_STAND_DOWN_REASON = "budgetStandDownReason"
+    private const val KEY_STAND_DOWN_AT = "budgetStandDownAt"
 
     /**
      * THE SAME LITERAL KEY RelayService uses for its ledger inside
@@ -112,6 +114,25 @@ object BootConfigStore {
             }
     }
 
+    data class BudgetStandDown(val reason: String, val reconsiderAtEpochMs: Long)
+
+    fun recordBudgetStandDown(context: Context, reason: String, reconsiderAtEpochMs: Long): Boolean =
+        store(context).edit()
+            .putString(KEY_STAND_DOWN_REASON, reason)
+            .putLong(KEY_STAND_DOWN_AT, reconsiderAtEpochMs)
+            .commit()
+
+    fun clearBudgetStandDown(context: Context) {
+        store(context).edit().remove(KEY_STAND_DOWN_REASON).remove(KEY_STAND_DOWN_AT).apply()
+    }
+
+    fun budgetStandDown(context: Context): BudgetStandDown? {
+        val prefs = store(context)
+        val reason = prefs.getString(KEY_STAND_DOWN_REASON, null) ?: return null
+        if (!prefs.contains(KEY_STAND_DOWN_AT)) return null
+        return BudgetStandDown(reason, prefs.getLong(KEY_STAND_DOWN_AT, 0L))
+    }
+
     /**
      * Refreshes the mirror from the real, credential-encrypted configuration.
      * Only ever called from MainActivity, which cannot run before unlock -
@@ -136,6 +157,20 @@ object BootConfigStore {
             .putLong(KEY_MONTHLY_BUDGET, config.monthlyBudgetBytes)
         if (ledgerRaw != null) editor.putString(KEY_LEDGER_MIRROR, ledgerRaw) else editor.remove(KEY_LEDGER_MIRROR)
         editor.apply()
+    }
+
+    /**
+     * Preserve a capped ledger for the next locked boot. Partial spending stays
+     * in credential-protected storage; mirroring only an exhausted ledger keeps
+     * boot from resetting a cap without expanding the locked-storage policy.
+     */
+    fun persistExhaustedLedger(context: Context, ledgerRaw: String): Boolean {
+        val snapshot = read(context)
+        val ledger = BudgetLedgerCodec.decode(ledgerRaw, snapshot.budget) ?: return false
+        if (ledger.verdict().isAllowed) return false
+        return store(context).edit()
+            .putString(KEY_LEDGER_MIRROR, ledgerRaw)
+            .commit()
     }
 
     /**

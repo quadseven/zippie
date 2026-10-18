@@ -32,6 +32,8 @@ public enum RelayVerdict: Equatable, Sendable {
     case off
     case starting
     case stopping
+    /// Running, but no write token is stored on this phone.
+    case noToken
     /// Running, but nothing has reported yet.
     case awaitingFirstReport
     /// A report exists and has gone quiet - the relay was killed and its
@@ -45,6 +47,8 @@ public enum RelayVerdict: Equatable, Sendable {
     case notForwarding(detail: String?)
     /// The router sent before and has been silent since.
     case routerQuiet(silentFor: TimeInterval)
+    case routerSeesNothing
+    case routerUnreachable
     case carrying
 
     /// How long the router may be silent before the silence is reported.
@@ -66,20 +70,25 @@ public enum RelayVerdict: Equatable, Sendable {
     public static func evaluate(run: RelayRun,
                                 report: RelayStatus?,
                                 now: Date = Date(),
-                                quietAfter: TimeInterval = RelayVerdict.routerQuietAfter)
+                                quietAfter: TimeInterval = RelayVerdict.routerQuietAfter,
+                                hasToken: Bool = true,
+                                routerSeesNothing: Bool = false,
+                                routerReachable: Bool = true)
         -> RelayVerdict {
         switch run {
         case .off:      return .off
-        case .starting: return .starting
+        case .starting: return hasToken ? .starting : .noToken
         case .stopping: return .stopping
         case .running:  break
         }
+        guard hasToken else { return .noToken }
         guard let report else { return .awaitingFirstReport }
         if report.isStale(asOf: now) { return .notReporting }
 
         let stats = report.stats
         if let reason = stats.budgetExhausted { return .paused(reason: reason) }
         guard stats.cellularReady else { return .noCellular(detail: stats.lastError) }
+        if stats.upDatagrams > 0 && !routerReachable { return .routerUnreachable }
 
         guard let inbound = stats.lastRouterInboundAt else {
             // No timestamp. Either nothing has ever arrived - the #44 case - or
@@ -89,6 +98,7 @@ public enum RelayVerdict: Equatable, Sendable {
             // router has not sent anything" there would be a flat lie, so the
             // count decides and the silence goes unreported until the new
             // binary takes over.
+            if stats.upDatagrams > 0 && routerSeesNothing { return .routerSeesNothing }
             return stats.upDatagrams > 0 ? .carrying : .listening
         }
         let silence = now.timeIntervalSince(inbound)
@@ -96,6 +106,7 @@ public enum RelayVerdict: Equatable, Sendable {
         // Inbound proves the router is talking. It does NOT prove this phone
         // got anything out over cellular, and "Carrying" while every upstream
         // send fails is the same fabrication in the other direction.
+        if stats.upDatagrams > 0 && routerSeesNothing { return .routerSeesNothing }
         return stats.upDatagrams > 0 ? .carrying : .notForwarding(detail: stats.lastError)
     }
 
@@ -105,6 +116,7 @@ public enum RelayVerdict: Equatable, Sendable {
         case .off:                 return "Off"
         case .starting:            return "Connecting"
         case .stopping:            return "Stopping"
+        case .noToken:             return "No token"
         case .awaitingFirstReport: return "Starting"
         case .notReporting:        return "Not reporting"
         case .paused:              return "Paused"
@@ -115,6 +127,8 @@ public enum RelayVerdict: Equatable, Sendable {
         case .listening:           return "Ready"
         case .notForwarding:       return "Not relaying"
         case .routerQuiet:         return "Router quiet"
+        case .routerSeesNothing:   return "Sending, nothing coming back"
+        case .routerUnreachable:  return "Sending, router not reachable"
         case .carrying:            return "Carrying"
         }
     }
@@ -151,6 +165,8 @@ public enum RelayVerdict: Equatable, Sendable {
             return "Bringing the tunnel up."
         case .stopping:
             return "Taking the tunnel down."
+        case .noToken:
+            return "No write token is stored. This phone cannot join the bond."
         case .awaitingFirstReport:
             return "The tunnel is up. Waiting for the relay's first report."
         case .notReporting:
@@ -178,6 +194,10 @@ public enum RelayVerdict: Equatable, Sendable {
         case let .routerQuiet(silentFor):
             return "\(Self.routerSubject(router)) stopped sending. Last packet "
                  + "\(Self.ago(silentFor)) ago."
+        case .routerSeesNothing:
+            return "The router says nothing has arrived from this phone."
+        case .routerUnreachable:
+            return "The router status could not be read."
         case .carrying:
             return "This phone's cellular is part of the bond."
         }
@@ -223,7 +243,7 @@ public enum RelayVerdict: Equatable, Sendable {
     /// PHONE cannot get traffic through count as down.
     public var isDownLeg: Bool {
         switch self {
-        case .paused, .noCellular, .notForwarding: return true
+        case .noToken, .paused, .noCellular, .notForwarding, .routerSeesNothing, .routerUnreachable: return true
         default: return false
         }
     }
@@ -233,7 +253,7 @@ public enum RelayVerdict: Equatable, Sendable {
     /// mean there is no single instance per case, and a rule that only checked
     /// the payload-free cases would miss exactly the sentences that vary.
     static let allCasesForCopyReview: [RelayVerdict] = [
-        .off, .starting, .stopping, .awaitingFirstReport, .notReporting,
+        .off, .starting, .stopping, .noToken, .awaitingFirstReport, .notReporting,
         .paused(reason: "Daily cap of 2 GB reached."),
         .noCellular(detail: nil),
         .noCellular(detail: "cellular unavailable (interface not usable)"),
@@ -241,6 +261,7 @@ public enum RelayVerdict: Equatable, Sendable {
         .notForwarding(detail: nil),
         .notForwarding(detail: "up: no route to host"),
         .routerQuiet(silentFor: 40),
+        .routerSeesNothing, .routerUnreachable,
         .carrying,
     ]
 }

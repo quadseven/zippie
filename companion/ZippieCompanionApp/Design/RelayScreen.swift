@@ -144,13 +144,15 @@ struct RelayScreen: View {
     /// 2026-08-07) - derived from `cellularReady`, which is a fact about this
     /// phone's own radio and says nothing whatsoever about the far end.
     private var verdict: RelayVerdict {
+        let hasToken = ConsoleWriteToken.shared.read() != nil
         if foregroundRunning {
             // In-process counters, so they are current by construction: there
             // is no second binary here that could have died holding them, which
             // is the entire reason RelayStatus carries a timestamp at all.
             return RelayVerdict.evaluate(
                 run: .running,
-                report: RelayStatus(stats: foregroundStats, updatedAt: Date()))
+                report: RelayStatus(stats: foregroundStats, updatedAt: Date()),
+                hasToken: hasToken)
         }
         let run: RelayRun
         switch tunnel.status {
@@ -159,7 +161,7 @@ struct RelayScreen: View {
         case .disconnecting:            run = .stopping
         default:                        run = .off
         }
-        return RelayVerdict.evaluate(run: run, report: tunnel.report)
+        return RelayVerdict.evaluate(run: run, report: tunnel.report, hasToken: hasToken)
     }
 
     // MARK: - the one control

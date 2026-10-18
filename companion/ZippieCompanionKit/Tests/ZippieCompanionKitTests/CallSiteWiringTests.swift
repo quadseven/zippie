@@ -28,6 +28,41 @@ import XCTest
 /// Written 2026-08-10 for #48.
 final class CallSiteWiringTests: XCTestCase {
 
+    func testRelayTunnelNeverCapturesPhoneTraffic() throws {
+        let provider = try source("ZippieCompanionTunnel/PacketTunnelProvider.swift")
+        let inert = provider.components(separatedBy: "static func inertNetworkSettings()").last?
+            .components(separatedBy: "return settings").first ?? ""
+        XCTAssertEqual(inert.components(separatedBy: "includedRoutes").count - 1, 1)
+        XCTAssertTrue(inert.contains("ipv4.includedRoutes = []"))
+    }
+
+    func testClientRecoveryIsConnectedToSettingsAndVisibleInApp() throws {
+        let client = try source("ZippieCompanionTunnel/ClientTunnel.swift")
+        let provider = try source("ZippieCompanionTunnel/PacketTunnelProvider.swift")
+        let model = try source("ZippieCompanionApp/Design/BondModel.swift")
+        XCTAssertTrue(client.contains("sendKeepalives()"))
+        XCTAssertTrue(client.contains("try recovery.observe(statsJSON:"))
+        XCTAssertTrue(client.contains("ipv4.includedRoutes = state == .capturing ?"))
+        XCTAssertTrue(client.contains("ipv4.excludedRoutes = [NEIPv4Route.default()]"))
+        XCTAssertTrue(provider.contains("ClientTunnel.networkSettings(config, state: state)"))
+        XCTAssertTrue(model.contains("ClientProtectionStore.isReleased"))
+    }
+
+    func testFailedClientRouteSettingsReachRecoveryWithoutClaimingProtection() throws {
+        let provider = try source("ZippieCompanionTunnel/PacketTunnelProvider.swift")
+        let client = try source("ZippieCompanionTunnel/ClientTunnel.swift")
+        XCTAssertTrue(provider.contains("if let error {\n                    Self.log.error(\"client route settings refused:"))
+        XCTAssertTrue(provider.contains("done(error)"))
+        XCTAssertTrue(client.contains("if let error {\n                    Self.log.error(\"client route change failed:"))
+        XCTAssertTrue(client.contains("self.appliedRouteState = desired"))
+        // The applied state moves only on success, so a refused change is
+        // retried by the next probe instead of being recorded as done.
+        let probe = client.components(separatedBy: "private func probeHome()").last ?? ""
+        let failure = try XCTUnwrap(probe.range(of: "client route change failed:"))
+        let success = try XCTUnwrap(probe.range(of: "} else {\n                    self.appliedRouteState = desired"))
+        XCTAssertLessThan(failure.lowerBound, success.lowerBound)
+    }
+
     /// `companion/`, found from this file rather than from the working
     /// directory - `swift test` is run from the package directory in CI and
     /// from anywhere at all locally.
@@ -205,6 +240,8 @@ final class CallSiteWiringTests: XCTestCase {
                     "saving the fields never enables the configured resolver")
         assertCalls(settings, ".onChange(of: scenePhase)",
                     "status stays stale after the user enables DNS in iOS Settings")
+        assertCalls(settings, "controller.status.detail",
+                    "the screen words status itself, so the tested preemption text never shows")
 
         let entitlements = try source("ZippieCompanionApp/ZippieCompanion.entitlements")
         assertCalls(entitlements, "<string>dns-settings</string>",
@@ -659,4 +696,74 @@ final class CallSiteWiringTests: XCTestCase {
         }
     }
 
+    /// #244 rule 3, and the one acceptance criterion that is a build
+    /// configuration rather than a behaviour: the widget's colours must come
+    /// from the GENERATED tokens, so a change to `design/tokens.json` moves the
+    /// widget along with the hub and Android.
+    ///
+    /// This is a trap with a live history. `Tokens.generated.swift` sat in the
+    /// app target since 2026-08-06 with zero call sites anywhere in the repo -
+    /// the app drew from Theme.swift's hand-authored `Ink`, which had already
+    /// drifted from the token source. So "the widget shares Theme.swift with
+    /// the app" is not evidence of anything: both halves can drift together and
+    /// pass every check.
+    ///
+    /// Both halves are asserted. The file has to be IN the widget target, or the
+    /// `Ink.gen_*` names do not resolve and the app build is red; and the view
+    /// has to actually use them, or the file is shipped and ignored.
+    func testTheWidgetDrawsWithTheGeneratedTokensAndHasThemInItsTarget() throws {
+        let spec = try source("project.yml")
+        guard let start = spec.range(of: "\n  ZippieCompanionWidgetExtension:") else {
+            return XCTFail("ZippieCompanionWidgetExtension target is gone from project.yml - "
+                         + "if it moved, move this check")
+        }
+        // To the end of the file: the widget target is the last top-level key.
+        let block = codeOnly(String(spec[start.lowerBound..<spec.endIndex]), commentPrefix: "#")
+        assertCalls(block, "ZippieCompanionApp/Design/Tokens.generated.swift",
+                    "the widget target cannot see the generated tokens, so a token change moves "
+                  + "the hub and Android but leaves the home screen behind")
+
+        let view = try source("ZippieCompanionWidget/RelayWidgetView.swift")
+        assertCalls(view, "Ink.gen_live",
+                    "the widget's accent is the whole product signal; if it is not the generated "
+                  + "one, the surface people believe without opening anything is the one "
+                  + "surface a token change will miss")
+        assertCalls(view, "Ink.gen_primary", "widget text is not taking the generated token")
+        assertCalls(view, "Ink.gen_ground", "the widget background is not taking the generated token")
+        // Hand-authored siblings would compile - they are in the same extension
+        // - so this is the half the compiler cannot catch.
+        assertDoesNotContain(codeOnly(view, commentPrefix: "//"), "Ink.live",
+                             "the widget is back on Theme.swift's hand-authored accent, which has "
+                           + "drifted from design/tokens.json")
+        assertDoesNotContain(codeOnly(view, commentPrefix: "//"), "Ink.primary",
+                             "the widget is back on Theme.swift's hand-authored text colour")
+    }
+
+    /// A widget that cannot see the bond shows the this-phone row forever, and
+    /// the failure is invisible: the row is still correct, just less of it. So
+    /// both ends of the handoff are pinned - the app must WRITE the record, and
+    /// the provider must READ it.
+    ///
+    /// Without the writer this would look exactly like a working widget, which
+    /// is the same shape as #48's `ClientConfig`: 34 passing tests and a value
+    /// with no producer.
+    func testTheAppPublishesTheBondSnapshotTheWidgetReads() throws {
+        let model = try source("ZippieCompanionApp/Design/BondModel.swift")
+        assertCalls(model, "WidgetBondStore.write(",
+                    "nothing writes the bond snapshot, so the medium size can only ever show the "
+                  + "this-phone row and the widget looks fine while being half-blind")
+        assertCalls(model, "WidgetBondStore.clear(",
+                    "a console that stops answering leaves the last good bond on disk, and the "
+                  + "widget's own staleness gate then ages it out slowly instead of saying at "
+                  + "once that the bond is unobservable")
+
+        let provider = try source("ZippieCompanionWidget/RelayWidgetProvider.swift")
+        assertCalls(provider, "WidgetBondStore.read(from: defaults)",
+                    "the provider never reads what the app writes, so the two halves of the "
+                  + "handoff can drift apart with nothing failing")
+        assertCalls(provider, "WidgetTimeline.build(",
+                    "the provider is assembling content somewhere other than the tested function")
+    }
+
 }
+

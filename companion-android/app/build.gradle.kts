@@ -190,6 +190,32 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.4")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
 
+    // THE HOME-SCREEN WIDGET (#244), on Glance rather than RemoteViews.
+    //
+    // Glance is Compose's own widget toolkit, and this app is Compose-only -
+    // there is no XML layout anywhere in it and no AppCompatActivity. The
+    // alternative, a RemoteViews AppWidgetProvider, would mean the widget
+    // becomes the one surface in the app written in a different UI system from
+    // every other one, which is the same "keep them consistent by discipline"
+    // failure design/tokens.json exists to end.
+    //
+    // NOT BOM-MANAGED, and deliberately pinned. The compose-bom above governs
+    // Compose; Glance publishes its own version line and is not in it. 1.1.1 is
+    // the latest stable and declares minSdk 21, well under this app's 29. Its
+    // own compile deps on compose 1.1.1 are floors, not ceilings - Gradle
+    // conflict resolution takes the BOM's 1.8.x and nothing is downgraded.
+    //
+    // NO glance-material3. That artifact exists only to bridge an existing M3
+    // ColorScheme into Glance's, which is precisely the wrong thing here: the
+    // whole point is that this widget draws from design/tokens.json and not
+    // from a Material palette. See WidgetPalette in RelayWidget.kt.
+    implementation("androidx.glance:glance-appwidget:1.1.1")
+    // RelayWidgetRefresh calls GlanceAppWidget.updateAll, which is suspend and
+    // therefore needs a scope. Declared for the same reason as animation-core
+    // above: a direct use gets a direct dependency, even though coroutines
+    // already arrives transitively through lifecycle-runtime-ktx.
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+
     // The gomobile-built datapath. Absent until #2246 produces it, which is
     // why client mode is a skeleton and the relay path is not.
     // implementation(files("libs/zippie.aar"))

@@ -1,5 +1,9 @@
 package app.zippie.companion
 
+import android.content.Intent
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -52,6 +56,7 @@ fun RelayScreen(
     onStopRelay: () -> Unit,
     onStartClient: () -> Unit,
     onSaveToken: (String) -> Unit,
+    onRequestExemption: () -> Unit,
 ) {
     Column(
         Modifier
@@ -59,7 +64,7 @@ fun RelayScreen(
             .padding(horizontal = Space.margin, vertical = Space.roomy),
     ) {
         SectionTitle("This phone")
-        RelaySection(state, onStartRelay, onStopRelay, onSaveToken)
+        RelaySection(state, onStartRelay, onStopRelay, onSaveToken, onRequestExemption)
 
         Spacer(Modifier.height(Space.section))
         SectionTitle("Client mode")
@@ -84,6 +89,7 @@ private fun RelaySection(
     onStartRelay: () -> Unit,
     onStopRelay: () -> Unit,
     onSaveToken: (String) -> Unit,
+    onRequestExemption: () -> Unit,
 ) {
     val report = state.relay
     val stats = report?.stats
@@ -101,7 +107,12 @@ private fun RelaySection(
     // during an outage. `isYou` is matched by relay endpoint, not by name, so a
     // relabelled leg still resolves.
     val routerSeesNothing = state.legs.any { it.isYou && it.neverAnswered }
-    val verdict = RelayVerdict.evaluate(report, state.nowMs, routerSeesNothing = routerSeesNothing)
+    val verdict = RelayVerdict.evaluate(
+        report,
+        state.nowMs,
+        routerSeesNothing = routerSeesNothing,
+        routerReachable = state.bondReachable,
+    )
 
     // THE STATE COMES FIRST, matching RelayScreen.swift's `header`. This used
     // to be three sentences below the carrier and wifi-address readout that
@@ -121,6 +132,39 @@ private fun RelaySection(
         style = Kind.caption,
         color = if (alarmed) Ink.down else Ink.secondary,
     )
+
+    // THE EXEMPTION WARNING, orthogonal to the verdict (#178 AC2, #267). The
+    // decision and the data existed; nothing displayed them, so a phone one
+    // setting away from a dead leg said nothing on its own screen. Shown only
+    // for the at-risk combination - Granted and NotNeeded stay silent - and
+    // never alters the headline above it.
+    stats?.batteryExemption?.let { exemption ->
+        BatteryExemption.warningLine(exemption)?.let { warning ->
+            Spacer(Modifier.height(Space.base))
+            Text(warning, style = Kind.caption, color = Ink.down)
+        }
+    }
+
+    Spacer(Modifier.height(Space.base))
+
+    // BATTERY OPTIMIZATION EXEMPTION WARNING AND PROMPT
+    // Only show if the report is live and the phone is contributing but not exempt
+    val batteryExemption = stats?.batteryExemption
+    if (batteryExemption?.isAtRisk == true) {
+        Spacer(Modifier.height(Space.base))
+        Text(
+            BatteryExemption.AT_RISK_REASON,
+            style = Kind.caption,
+            color = Ink.down,
+        )
+        Spacer(Modifier.height(Space.base))
+        OutlinedButton(
+            onClick = onRequestExemption,
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = Ink.live),
+        ) {
+            Text("Open Battery Settings", style = Kind.label)
+        }
+    }
 
     Spacer(Modifier.height(Space.base))
     // ONE CONTROL, decided by the verdict already computed above.

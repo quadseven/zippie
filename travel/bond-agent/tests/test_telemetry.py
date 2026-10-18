@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import queue
+import threading
 import time
 
 import zippie.telemetry as tel
@@ -342,7 +344,16 @@ class TestDatapathObservability:
                 "stream_restarts": 1,
             },
             "retransmit": {"resent": 4, "expired": 9, "unanswerable": 0, "refused": 0},
-            "nacks": {"nacks_sent": 2, "abandoned": 0, "dropped": 0, "reordered": 11, "capped": 1},
+            "nacks": {
+                "nacks_sent": 2,
+                "abandoned": 0,
+                "dropped": 0,
+                "reordered": 11,
+                "capped": 1,
+                "recovery_count": 1,
+                "recovery_total_ms": 80,
+                "recovery_max_ms": 80,
+            },
             "links": 2,
             "healthy": 2,
         }
@@ -382,6 +393,9 @@ class TestDatapathObservability:
             # deadline left no room to keep waiting.
             "nacks.reordered",
             "nacks.capped",
+            "nacks.recovery_count",
+            "nacks.recovery_total_ms",
+            "nacks.recovery_max_ms",
             "transport.links",
             "transport.healthy",
         ):
@@ -553,16 +567,55 @@ class TestTelemetryNeverBlocksTheControlLoop:
     3 keepalives in 50 seconds, which is 50/15.
     """
 
+    def setup_method(self):
+        self._emitters = []
+
+    def teardown_method(self):
+        for t, released in self._emitters:
+            self._retire(t, released)
+
+    @staticmethod
+    def _retire(t, released):
+        """Stop the worker for good. `close()` cannot: its flush times out on a
+        backlog and the sentinel then hits a full queue. So discard the backlog,
+        send the sentinel, and release the post in flight."""
+        while True:
+            try:
+                t._q.get_nowait()
+            except queue.Empty:
+                break
+        t._q.put_nowait(None)
+        released.set()
+        t._worker.join(timeout=2.0)
+
     def _slow_emitter(self, monkeypatch, delay):
         started = []
+        released = threading.Event()
 
         def slow_urlopen(req, timeout=0):
             started.append(time.monotonic())
-            time.sleep(delay)
+            released.wait(delay)
             raise OSError("unreachable, exactly like a broken default route")
 
         monkeypatch.setattr(tel.urllib.request, "urlopen", slow_urlopen)
-        return tel.DatadogApiTelemetry(api_key="k"), started
+        t = tel.DatadogApiTelemetry(api_key="k")
+        self._emitters.append((t, released))
+        return t, started
+
+    def test_a_backlog_does_not_outlive_its_test(self, monkeypatch):
+        """A worker left holding a backlog keeps draining after its test ends,
+        and every post looks `urlopen` up afresh - so it posts into whatever
+        fake the NEXT test installed. On CI that put stale 0.0 dropped_delta
+        samples into TestDroppedBatchDelta's sink and failed it."""
+        t, _ = self._slow_emitter(monkeypatch, 5.0)
+        for _ in range(tel._QUEUE_MAX + 5):
+            t.emit_status({"mode": "aggregate", "paths": []})
+        self._retire(*self._emitters[-1])
+        late = []
+        monkeypatch.setattr(tel.urllib.request, "urlopen", lambda req, timeout=0: late.append(req))
+        t._worker.join(timeout=1.0)
+        assert not t._worker.is_alive(), "the worker outlived its test"
+        assert late == [], f"{len(late)} stale batches reached the next test's sink"
 
     def test_a_hanging_datadog_does_not_stall_the_caller(self, monkeypatch):
         t, _ = self._slow_emitter(monkeypatch, 2.0)

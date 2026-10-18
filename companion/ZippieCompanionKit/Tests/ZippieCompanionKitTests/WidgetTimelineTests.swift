@@ -149,6 +149,7 @@ final class WidgetTimelineTests: XCTestCase {
             (.off, .neutral),
             (.starting, .neutral),
             (.stopping, .neutral),
+            (.noToken, .down),
             (.awaitingFirstReport, .neutral),
             (.notReporting, .down),
             (.paused(reason: "Daily cap of 2 GB reached."), .down),
@@ -158,6 +159,8 @@ final class WidgetTimelineTests: XCTestCase {
             (.notForwarding(detail: nil), .down),
             (.notForwarding(detail: "up: no route to host"), .down),
             (.routerQuiet(silentFor: 40), .neutral),
+            (.routerSeesNothing, .down),
+            (.routerUnreachable, .down),
             (.carrying, .live),
         ]
         for (verdict, tone) in expected {

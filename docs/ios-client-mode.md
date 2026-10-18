@@ -44,7 +44,7 @@ Read out of this repository, not remembered.
 | `ClientConfig` | BUILT and tested in the Kit. PRODUCER WIRED 2026-08-10 (#48): `TunnelController` installs `TunnelProfile(plan:)`, which writes the `client` key. Nothing can mint a `ClientConfig` yet - that is #31. |
 | Go datapath for the phone | BUILT, not wired (#26). |
 | Interface pinning in Go | BUILT. `dial_darwin.go` sets `IP_BOUND_IF` (25 at `IPPROTO_IP`, 125 at `IPPROTO_IPV6`) from the interface INDEX looked up by NAME. |
-| Multi-client home | BUILT IN GO, NOT DEPLOYED. `clients.go` + `clienthome.go` exist. `deploy.oke-manifests.yml` records, verified 2026-08-07, that there is no `zippie-clienthome` workload in the `pathbond` namespace, that the target is dispatch-only, and that its `clients.json` is a committed placeholder. #24 is open. |
+| Multi-client home | BUILT IN GO, NOT DEPLOYED. `clients.go` + `clienthome.go` exist, and keep every piece of stream state per client in both directions - stream, epoch, NACK tracker, retransmit ring, reply target (#210). `deploy.oke-manifests.yml` records, verified 2026-08-07, that there is no `zippie-clienthome` workload in the `pathbond` namespace, that the target is dispatch-only, and that its `clients.json` is a committed placeholder. #24 is open. |
 | Mode decision | BUILT AND ACTED ON since 2026-08-10 (#48). `BondModel` still computes one every five seconds; the Relay tab now hands it to `TunnelController.startTunnel`, which resolves it through `TunnelPlan.decide`. |
 | Pairing ceremony | NOT BUILT (#31). Nothing can mint a client id or key. |
 
@@ -252,9 +252,35 @@ attached to a profile that is now the opposite mode.
   lookup leaves over the hotel wifi in the clear while the traffic goes home.
 - **Client, split tunnel** (the default, `[.tailnet]`): `matchDomains =
   ["ts.net"]`, so captive portals and local discovery keep working.
-- **#25's `NEDNSSettingsManager`** is a separate system setting another app can
-  preempt. The interaction has NOT been tested; this is design intent, not a
-  measurement.
+- **#25's `NEDNSSettingsManager`** is a separate, system-wide setting: the
+  per-user NextDNS DoH URL `https://dns.nextdns.io/<profile>/<device>`. Apple's
+  rule for combining the two (WWDC20 "Enable encrypted DNS"): "if a VPN is
+  active, resolution within the VPN tunnel will use the VPN's DNS settings and
+  not your system-wide settings." So, per mode, with the per-user setting
+  selected:
+
+  | Mode | Who resolves | Lands in the user's own NextDNS profile? |
+  |---|---|---|
+  | No tunnel (any wifi, cellular) | per-user DoH | yes |
+  | Contribute (no `dnsSettings`) | per-user DoH | yes |
+  | Client, split tunnel | tunnel for `ts.net`, per-user DoH for the rest | yes, except tailnet names |
+  | Client, full tunnel (`matchDomains = [""]`) | tunnel's resolver | no - home's resolver sees them |
+
+  On the travel router's wifi the per-user DoH goes to NextDNS over HTTPS
+  through the bond, not to the router's own resolver, so the router's shared
+  profile never sees these queries. Full-tunnel attribution needs home to
+  forward per client (ADR 0022); until then that mode reports to home's profile.
+
+  iOS keeps one DNS configuration selected at a time and saving never selects
+  it, so `isEnabled` is false both before the user turns it on and after another
+  VPN or DNS app is selected over it. The settings screen says so, with the
+  path to fix it (`DNSSettingsController.Status.detail`).
+
+  The table is Apple's documented behaviour, not yet a measurement. To check it
+  on a phone: set a profile and device name, select Zippie under Settings >
+  General > VPN & Device Management > DNS, browse once on the travel router's
+  wifi and once on cellular with wifi off, and confirm both appear in that
+  profile's NextDNS logs under the device name.
 
 ## Two dependencies that bound what client mode can claim
 

@@ -68,6 +68,7 @@ fun StatusScreen(
     state: BondUiState,
     onRefresh: () -> Unit,
     onOpenDiagnostics: () -> Unit = {},
+    budgetStandDown: BootConfigStore.BudgetStandDown? = null,
 ) {
     Column(
         Modifier
@@ -91,6 +92,17 @@ fun StatusScreen(
             }
         }
         Text(state.headline, style = Kind.display, color = Ink.primary)
+        budgetStandDown?.let { standDown ->
+            val reconsiderAt = java.time.Instant.ofEpochMilli(standDown.reconsiderAtEpochMs)
+                .atZone(java.time.ZoneId.systemDefault())
+                .format(java.time.format.DateTimeFormatter.ofPattern("MMM d, HH:mm z"))
+            Spacer(Modifier.height(Space.tight))
+            Text(
+                "Relay paused: ${standDown.reason} Rechecking at $reconsiderAt.",
+                style = Kind.body,
+                color = Ink.degraded,
+            )
+        }
         Spacer(Modifier.height(Space.tight))
         Text(state.subhead, style = Kind.body, color = Ink.secondary)
         Spacer(Modifier.height(Space.hair))

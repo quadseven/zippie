@@ -20,6 +20,13 @@ struct RelayEntry: TimelineEntry {
 /// which is how the wrong string shipped before). This file's only jobs are
 /// I/O (read the shared defaults) and scheduling (ask WidgetKit to try again
 /// later).
+///
+/// TWO RECORDS, NOT ONE, AND THAT IS THE POINT. `RelayStatusStore` is written
+/// every two seconds by the tunnel extension and is fresh as long as the relay
+/// runs. `WidgetBondStore` is written every five seconds by the APP and goes
+/// stale the moment the app is backgrounded. Both are handed to
+/// `WidgetTimeline.build` and gated independently there, so this file does not
+/// have to know which is which - it just passes what it found.
 struct RelayTimelineProvider: TimelineProvider {
 
     /// Cheap and synchronous - a UserDefaults read, no network - so reusing it
@@ -52,7 +59,10 @@ struct RelayTimelineProvider: TimelineProvider {
             return RelayEntry(date: now, content: WidgetTimeline.build(report: nil, now: now))
         }
         let report = RelayStatusStore.read(from: defaults)
-        let content = WidgetTimeline.build(report: report, now: now, router: routerDisplayName(from: defaults))
+        let content = WidgetTimeline.build(report: report,
+                                            now: now,
+                                            router: routerDisplayName(from: defaults),
+                                            bond: WidgetBondStore.read(from: defaults))
         return RelayEntry(date: now, content: content)
     }
 

@@ -1,12 +1,8 @@
 #!/bin/sh
 # Does the agent running on this router still equal what is on main?
 #
-# WHY THE ROUTER ASKS, AND NOT CI. The obvious design is a workflow that curls
-# this router's console. Nothing in .github reaches the tailnet today, so that
-# would ship on an unverified assumption about runner networking - the exact
-# "configured but absent" shape this project keeps finding. The router can reach
-# github (verified 2026-08-17, HTTP 200), it already holds Datadog credentials,
-# and it is the only machine that definitely knows what it is running.
+# Optional self-report for a router that is outside the control plane's tailnet.
+# The control plane compares reachable devices without a device credential.
 #
 # WHY FINGERPRINT AND NOT COMMIT. A commit comparison alarms on every docs-only
 # merge. Measured 2026-08-17: the router sat on 08d4368 while main was a2f6c47,
@@ -28,12 +24,10 @@ REF="${ZIPPIE_REF:-main}"
 # these two drift apart again.
 PKG_LOCAL="${ZIPPIE_PKG:-/opt/zippie-agent/zippie}"
 CONFIG_LOCAL="${ZIPPIE_CONFIG:-/etc/zippie/zippie.toml}"
-WORK="$(mktemp -d 2>/dev/null || echo /tmp/drift.$$)"
 PERSIST="${ZIPPIE_WATCHDOG_PERSIST_DIR:-/etc/zippie}"
 
 log() { logger -t zippie-drift "$*"; echo "$(date -u +%FT%TZ) $*"; }
 cleanup() { rm -rf "$WORK"; }
-trap cleanup EXIT
 
 dd_event() {   # title, text, alert_type
     (
@@ -49,6 +43,15 @@ dd_event() {   # title, text, alert_type
     ) || true
 }
 
+[ -f "$PERSIST/env" ] && . "$PERSIST/env" 2>/dev/null
+GH_TOKEN="${ZIPPIE_GH_TOKEN:-}"
+if [ -z "$GH_TOKEN" ]; then
+    log "token absent; skipping optional router drift self-report"
+    exit 0
+fi
+WORK="$(mktemp -d 2>/dev/null || echo /tmp/drift.$$)"
+trap cleanup EXIT
+
 # What is on disk here, right now. Recomputed rather than read from build.json,
 # because the stamp is the one part a deploy can lie about.
 local_fp=$(PYTHONPATH="$(dirname "$PKG_LOCAL")" python3 -c "
@@ -61,43 +64,43 @@ if [ -z "$local_fp" ]; then
     exit 1
 fi
 
+# Web root guard against TESTKEY / throwaway APKs (zippie#241).
+# A TESTKEY APK in /www previously reached production handsets over HTTP.
+# Purge and alarm if found in the web root.
+for apk in /www/*TESTKEY*.apk /www/*throwaway*.apk; do
+    if [ -f "$apk" ]; then
+        log "FOUND TESTKEY/throwaway APK IN /www ($apk) - REMOVING"
+        rm -f "$apk" 2>/dev/null || true
+        dd_event "TESTKEY APK found in router web root" \
+            "drift-check.sh found and removed $apk from /www. Web root must not serve throwaway builds." \
+            "error"
+    fi
+done
+
 # Fetch the tree as $REF has it. One tarball request; listing files
 # individually would be many requests on a metered uplink.
 #
-# THIS REPO IS PRIVATE, so the request needs a token. Until #232 it had none and
-# used codeload directly, which answers 404 for a private repo - and the handler
-# below treated that as "could not fetch", which is a QUIET exit 0. So the check
-# would have reported nothing, forever, while looking like it was working. The
-# api.github.com tarball endpoint is the documented way to do this with a token;
+# The api.github.com tarball endpoint accepts the optional token;
 # it redirects to a signed URL, and curl does not forward the Authorization
 # header across hosts, so the token is not handed to the storage backend.
-[ -f "$PERSIST/env" ] && . "$PERSIST/env" 2>/dev/null
-GH_TOKEN="${ZIPPIE_GH_TOKEN:-}"
-
 mkdir -p "$WORK/src"
-if [ -n "$GH_TOKEN" ]; then
-    http_code=$(curl -sSL --connect-timeout 10 -m 120 \
-        -H "Authorization: Bearer $GH_TOKEN" \
-        -H "Accept: application/vnd.github+json" \
-        -o "$WORK/src.tar.gz" -w '%{http_code}' \
-        "https://api.github.com/repos/$REPO/tarball/$REF" 2>/dev/null) || http_code=""
-else
-    http_code=$(curl -sSL --connect-timeout 10 -m 120 \
-        -o "$WORK/src.tar.gz" -w '%{http_code}' \
-        "https://api.github.com/repos/$REPO/tarball/$REF" 2>/dev/null) || http_code=""
-fi
+http_code=$(curl -sSL --connect-timeout 10 -m 120 \
+    -H "Authorization: Bearer $GH_TOKEN" \
+    -H "Accept: application/vnd.github+json" \
+    -o "$WORK/src.tar.gz" -w '%{http_code}' \
+    "https://api.github.com/repos/$REPO/tarball/$REF" 2>/dev/null) || http_code=""
 
 case "${http_code:-000}" in
   200)
     ;;
   401|403|404)
     # NOT the same as an unreachable uplink, and it must not be silent. This is
-    # a misconfiguration - a missing, expired or under-scoped token - and it
+    # a misconfiguration - an expired or under-scoped token - and it
     # will never fix itself. Treating it like a flat tyre is what let this
     # script look healthy while doing nothing.
     log "CANNOT READ $REPO@$REF: HTTP $http_code. This is a credential problem, not a network one."
     dd_event "Zippie drift check cannot read the repo" \
-        "drift-check.sh got HTTP $http_code fetching $REPO@$REF. zippie is a private repo and this needs ZIPPIE_GH_TOKEN in $PERSIST/env with read-only Contents scope. Until that is fixed the drift check reports nothing, which looks exactly like no drift." \
+        "drift-check.sh got HTTP $http_code fetching $REPO@$REF with its configured ZIPPIE_GH_TOKEN. Check its read-only Contents scope or remove it to disable optional self-reporting." \
         "error"
     exit 3
     ;;

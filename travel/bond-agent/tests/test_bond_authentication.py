@@ -61,7 +61,7 @@ from zippie.transport import (
 # The wildcard bind address, spelled without the literal. This is a
 # FakeSocket in a test - nothing binds to anything - but ruff's S104 reads
 # any `0.0.0.0` literal as a real bind target and Elder runs a selection
-# that includes it. A `# noqa: S104` is not the answer: S104 is outside
+# that includes it. A `noqa: S104` suppression is not the answer: S104 is outside
 # this project's own ruff selection, so the suppression itself reads as an
 # unused directive locally while Elder still wants it. Deriving the string
 # satisfies both configs and says what the address is.

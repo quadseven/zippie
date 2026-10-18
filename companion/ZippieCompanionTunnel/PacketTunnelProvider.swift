@@ -94,14 +94,33 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
         let tunnel = ClientTunnel(config: config, packetFlow: packetFlow)
         clientTunnel = tunnel
+        // A refused settings change is logged here and handed to `done`.
+        // `ClientTunnel.probeHome` then keeps the previous route state, so it
+        // does not claim the routes moved, and the next probe tries again.
+        tunnel.applyRouteState = { [weak self] state, done in
+            guard let self else {
+                done(ClientTunnelError.datapathFailed("provider stopped"))
+                return
+            }
+            self.setTunnelNetworkSettings(
+                ClientTunnel.networkSettings(config, state: state)) { error in
+                if let error {
+                    Self.log.error("client route settings refused: \(error.localizedDescription, privacy: .public)")
+                }
+                done(error)
+            }
+        }
 
-        setTunnelNetworkSettings(ClientTunnel.networkSettings(config)) { [weak self] error in
+        setTunnelNetworkSettings(ClientTunnel.networkSettings(config, state: .capturing)) { [weak self] error in
             if let error {
                 Self.log.error("client settings refused: \(error.localizedDescription, privacy: .public)")
                 completionHandler(error)
                 return
             }
             do {
+                if let defaults = RelayConfiguration.sharedDefaults {
+                    ClientProtectionStore.clear(from: defaults)
+                }
                 try tunnel.start()
                 Self.log.log("client mode carrying")
                 completionHandler(nil)
@@ -156,6 +175,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func startContributor(_ config: RelayConfiguration,
                                   completionHandler: @escaping (Error?) -> Void) {
+        if let defaults = RelayConfiguration.sharedDefaults {
+            ClientProtectionStore.clear(from: defaults)
+        }
         Self.log.log("""
             starting relay home=\(config.homeHost, privacy: .public):\
             \(config.homePort, privacy: .public) listen=\(config.listenPort, privacy: .public)
@@ -365,6 +387,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         // nowhere near here.
         clientTunnel?.stop()
         clientTunnel = nil
+        if let defaults = RelayConfiguration.sharedDefaults {
+            ClientProtectionStore.clear(from: defaults)
+        }
         // An explicit goodbye, so a phone that stops relaying on purpose does
         // not sit in the router's leg list for the rest of its lease. Only a
         // contributor ever announced itself as a leg, so only a contributor has
@@ -473,6 +498,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     /// is a problem for public distribution only - but it is a real one, and it
     /// has no workaround, because there is no other self-serve way to stay
     /// alive in the background on iOS.
+    ///
+    /// The third risk is the local-network permission under on-demand start:
+    /// if the extension starts in the background via on-demand while local-network
+    /// permission is unknown (the user has not yet opened the app to trigger and
+    /// grant the prompt), iOS suppresses permission prompts in app extensions.
+    /// The UDP listener cannot receive frames from the router on the local Wi-Fi
+    /// until the user opens the app in the foreground and approves the grant.
+    /// The provider receives no local-network grant state in its configuration,
+    /// so it cannot distinguish this case from another listener failure at
+    /// start. `relay.start` reports a failed bind through the normal start error;
+    /// a listener that enters `.waiting` reports its state through relay stats.
+    /// Only a device test with the permission still unknown can verify this
+    /// platform behavior; a package test cannot simulate the privacy prompt.
     static func inertNetworkSettings() -> NEPacketTunnelNetworkSettings {
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "192.0.2.1")
         let ipv4 = NEIPv4Settings(addresses: ["192.0.2.2"], subnetMasks: ["255.255.255.255"])

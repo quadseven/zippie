@@ -1,5 +1,10 @@
 # Publishing the companion as a private app
 
+**Superseded 2026-10-16.** FleetDM is decommissioned (infra#5389): its tunnel
+routes, workloads and data are gone, and Muster replaces it. The Fleet steps
+below are history. The bundle build and the managed Play notes still hold for
+any EMM that installs private apps.
+
 Fleet installs a custom Android app only as a **private app through managed
 Google Play**. This is the runbook for getting there. Written 2026-08-17, when
 the bundle first existed.
@@ -17,6 +22,12 @@ CI produces a signed Android App Bundle from the same invocation as the APK
 Rebuild it any time with the manual workflow
 `app.companion-android.release.yml`, `keystore: release`; the bundle uploads as
 the `zippie-companion-release-aab` artifact.
+
+Every PR that touches the app also builds and verifies a bundle, in
+`check.android-signing.yml`, with the throwaway key (#228). That bundle is never
+uploaded: Play binds an app to its upload key for good, so it exists only to
+prove `bundleRelease` and the jarsigner check still pass before a release
+dispatch depends on them.
 
 The Android app carries **no compiled-in personal infrastructure**. Its defaults
 are empty strings and a CI ratchet (#208) fails the build if a host reappears.
@@ -142,8 +153,6 @@ the remaining migration steps are ordinary work rather than blocked:
    house WAN, so the household keeps internet while the bond carries nothing.
 3. `mdm.ts.example-home.invalid` retires last, once nothing points at it.
 
-See `docs/headwind-to-fleet-migration.md` for why that order and not the obvious
-one.
 
 ## The managed-configuration surface
 

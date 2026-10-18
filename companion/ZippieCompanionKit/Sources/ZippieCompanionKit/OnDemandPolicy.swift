@@ -25,6 +25,17 @@ import Foundation
 /// mutate under a plain `swift test`. Only the preference load and save need a
 /// device. `TunnelProfile` builds the real rules from this policy and
 /// `TunnelProfileTests` asserts on them.
+///
+/// THE PHASE-2 RISK: LOCAL-NETWORK PERMISSION UNKNOWN
+/// If the contributor tunnel is started automatically by `NEOnDemandRuleConnect`
+/// while the local-network permission is unknown (for example, on a fresh
+/// install before the user has ever launched the containing app to trigger the
+/// prompt), iOS suppresses permission dialogs in app extensions. The extension
+/// cannot prompt the user for `NSLocalNetworkUsageDescription`. Consequently,
+/// the UDP listener on Wi-Fi cannot receive frames from the travel router (or
+/// fails to bind), leaving the relay deaf until the user opens the containing
+/// app in the foreground to approve the grant. Once granted, subsequent
+/// on-demand restarts in the background function normally.
 public struct OnDemandPolicy: Sendable, Equatable {
     /// Every SSID broadcast by the router. Empty means "no rule".
     public let routerSSIDs: [String]

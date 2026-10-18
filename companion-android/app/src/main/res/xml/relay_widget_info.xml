@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The launcher contract for the relay widget (#244).
+
+  EVERY ATTRIBUTE THAT DECIDES HOW BIG THE TILE IS IS HERE, and none of them
+  are cosmetic. minWidth/minHeight are the pre-API-31 size contract;
+  targetCellWidth/targetCellHeight are the API 31+ one and the pair a modern
+  launcher actually honours. They are kept in step deliberately - a widget that
+  declared only the old pair gets a size the user did not choose, which is the
+  same reason Glance's SizeMode.Responsive exists (see RelayWidget.kt).
+
+  resizeMode is horizontal|vertical with no `none`: a status tile a person
+  cannot widen is a tile they will eventually delete, and the medium size is
+  where the leg list lives.
+
+  widgetCategory is home_screen ONLY. A lock-screen or StandBy copy of this
+  would show a bond nobody asked about at the moment they were trying to read
+  something else, and both are explicitly out of scope for #244.
+
+  updatePeriodMillis is DELIBERATELY ABSENT. The platform floors it at thirty
+  minutes and the relay's own staleness threshold is ten seconds, so asking for
+  a periodic update here would be a request the system will not honour while
+  implying a freshness the widget cannot deliver. Refreshes are driven from the
+  publishing side instead - see RelayWidgetRefresh - and WidgetContent gates
+  what a stale redraw may claim.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="110dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:initialLayout="@layout/widget_loading"
+    android:description="@string/widget_description" />
