@@ -69,6 +69,14 @@ dashboard_port = 8787
 #
 # cost_class values: free | unlimited | throttle_ok | metered | expensive
 # monthly_cap_gb + soft_limit_pct demote a path after e.g. 85% of 50GB.
+# max_kbps is a hard throughput ceiling in kbit/s (0 = uncapped).
+#
+# Plan description, all optional and shown on the console; the phone app's
+# entries in legs.json win over these. Only billing_day changes behaviour: it
+# is the carrier's cycle day (1-31) and moves the usage period boundary.
+#   carrier, plan_name, plan_type  free text
+#   billing_day                    0 = calendar month
+#   expected_kbps                  what the line should carry, kbit/s
 
 [[paths]]
 name = "starlink"
@@ -87,6 +95,11 @@ priority = 20
 cost_class = "metered"
 monthly_cap_gb = 50
 soft_limit_pct = 0.85
+carrier = "YOUR_CARRIER"
+plan_name = "YOUR_PLAN_NAME"
+plan_type = "postpaid"
+billing_day = 14
+expected_kbps = 20000
 mtu = 1280
 match = { type = "ssid", ssid = "PHONE-FI-OPERATOR" }
 

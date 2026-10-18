@@ -37,6 +37,7 @@ from zippie.models import (
     PathState,
     PolicyConfig,
 )
+from zippie.pairing import PairingRequests
 from zippie.store import HomeAddressStore, LegStore, UsageStore
 
 log = logging.getLogger("zippie.agent")
@@ -103,6 +104,11 @@ def _dashboard_tls_context(config: AgentConfig) -> ssl.SSLContext | None:
 # under a timeout. The handler class is shared with the HTTP listener and is
 # deliberately left untouched.
 _TLS_HANDSHAKE_TIMEOUT_S = 10.0
+
+# The plan description a leg publishes (PathConfig.carrier and its siblings),
+# which legs.json may replace on the console. billing_day is here for display
+# only; what it does to usage periods is _billing_days's business.
+_PLAN_FIELDS = ("carrier", "plan_name", "plan_type", "billing_day", "expected_kbps")
 
 
 class _TLSHTTPServer(ThreadingHTTPServer):
@@ -677,6 +683,9 @@ class BondAgent:
         # purpose - see zippie/dynamic.py for why a phone in a config file was
         # the wrong model.
         self.dynamic = DynamicLegs()
+        # Phones on ethernet asking for the console token before they can
+        # announce. In memory only - see zippie/pairing.py.
+        self.pairing = PairingRequests()
         self._dynamic_paths: dict[str, PathRuntime] = {}
         # (total_bytes, monotonic_at) per leg, for deriving throughput.
         self._usage_at: dict[str, tuple[int, float]] = {}
@@ -2458,17 +2467,21 @@ class BondAgent:
         self.apply_leg_overrides()
 
     def _billing_days(self) -> dict[str, Any]:
-        """Each leg's carrier cycle day, as typed into legs.json.
+        """Each leg's carrier cycle day, from legs.json or else the config file.
 
         Read from the leg store and PASSED to the usage store rather than
         letting the usage store open legs.json itself. The two files are
         deliberately separate - one is measured, one is human input that cannot
         be recomputed - and the agent is the only thing allowed to hold both.
 
-        Absent means the calendar month, which is the right default for a leg
-        nobody has told us a billing date for.
+        legs.json wins, as it does for every other operator-entered field; a
+        config file billing_day of 0 is "not set". Absent from both means the
+        calendar month, which is the right default for a leg nobody has told us
+        a billing date for.
         """
-        out: dict[str, Any] = {}
+        out: dict[str, Any] = {
+            p.name: p.config.billing_day for p in self.paths if p.config.billing_day
+        }
         for name, entry in self._leg_store.load().items():
             if isinstance(entry, dict) and entry.get("billing_day") is not None:
                 out[str(name)] = entry["billing_day"]
@@ -3705,6 +3718,11 @@ class BondAgent:
         over = self._leg_store.load().get(path.name) or {}
         applied = sorted(k for k in over if k in LegStore.OVERRIDABLE)
         d["overridden"] = applied
+        # THE PHONE APP'S PLAN DESCRIPTION WINS over the config file's, for the
+        # same reason an override does: it is the more recent human entry. Only
+        # keys to_dict already publishes, so legs.json cannot add any here, and
+        # not listed in `overridden` - naming a carrier changes no routing.
+        d.update({k: over[k] for k in _PLAN_FIELDS if over.get(k) is not None})
         # DYNAMIC LEGS ARE MARKED. A leg that exists because a phone is
         # announcing it right now is a different thing from one an operator
         # typed into a file, and the difference decides whether "it vanished"
@@ -3893,6 +3911,10 @@ class BondAgent:
                 "legs_carrying": sum(1 for d in path_dicts if d["contributing"]),
                 "legs_in_bond": sum(1 for d in path_dicts if d["in_bond"]),
                 "legs_total": len(path_dicts),
+                # Phones on ethernet waiting for the operator to approve them.
+                # Never carries the pairing code: this payload is open to the
+                # LAN, and the code is what proves the phone is in hand.
+                "pairing_requests": self.pairing.pending(),
                 "uptime_s": round(time.time() - self._started, 1),
                 "home": self.config.home.endpoint,
                 # WHAT THE NAME ACTUALLY RESOLVED TO, and whether that is
@@ -4636,7 +4658,14 @@ class BondAgent:
 
             def do_POST(self) -> None:  # noqa: N802
                 parsed = urlparse(self.path)
-                if parsed.path not in ("/api/legs/announce", "/api/legs/withdraw"):
+                if parsed.path == "/api/legs/pair":
+                    self._pair_ask()
+                    return
+                if parsed.path not in (
+                    "/api/legs/announce",
+                    "/api/legs/withdraw",
+                    "/api/legs/pair/approve",
+                ):
                     self._reject(404, "not found")
                     return
                 # AUTHENTICATED, because an announcement adds a leg the router
@@ -4648,6 +4677,10 @@ class BondAgent:
                 body = self._json_body()
                 if body is None:
                     self._reject(400, "body must be a JSON object, 1..16384 bytes")
+                    return
+
+                if parsed.path == "/api/legs/pair/approve":
+                    self._pair_approve(body)
                     return
 
                 if parsed.path.endswith("withdraw"):
@@ -4701,6 +4734,59 @@ class BondAgent:
                         }
                     ).encode()
                 )
+
+            def _pair_ask(self) -> None:
+                """The phone's half of the handshake, asked until approved.
+
+                UNAUTHENTICATED, because the phone has nothing to authenticate
+                with yet; zippie/pairing.py says what protects it instead. The
+                source address, not anything in the body, is what the request
+                is bound to: the token is only ever released back to it.
+                """
+                body = self._json_body()
+                if body is None:
+                    self._reject(400, "body must be a JSON object, 1..16384 bytes")
+                    return
+                host = self.client_address[0]
+                if agent.pairing.collect(host, str(body.get("code") or "")):
+                    log.info("pairing complete by=%s", host)
+                    reply = {"pairing": "approved", "token": agent.console_token()}
+                    self._ok(json.dumps(reply).encode())
+                    return
+                known = any(r["host"] == host for r in agent.pairing.pending())
+                try:
+                    req = agent.pairing.request(
+                        name=str(body.get("name") or ""),
+                        label=str(body.get("label") or ""),
+                        host=host,
+                        link=str(body.get("link") or ""),
+                    )
+                except ValueError as exc:
+                    self._reject(400, str(exc))
+                    return
+                # Once per request, not once per poll. Never the code.
+                if not known:
+                    log.info("pairing requested name=%s link=ethernet by=%s", req.name, host)
+                reply = {
+                    "pairing": "pending",
+                    "code": req.code,
+                    "expires_s": round(agent.pairing.ttl_s, 1),
+                }
+                self._ok(json.dumps(reply).encode())
+
+            def _pair_approve(self, body: dict) -> None:
+                """The operator's half: the code read off the phone's screen."""
+                req = agent.pairing.approve(str(body.get("code") or ""))
+                if req is None:
+                    self._reject(403, "no pending pairing with that code")
+                    return
+                log.info(
+                    "pairing approved name=%s host=%s by=%s",
+                    req.name,
+                    req.host,
+                    self.client_address[0],
+                )
+                self._ok(json.dumps({"leg": req.name, "approved": True}).encode())
 
             def _ok(self, body: bytes) -> None:
                 self.send_response(200)

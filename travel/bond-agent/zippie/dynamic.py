@@ -42,6 +42,11 @@ DEFAULT_LEASE_S = 45.0
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$")
 
 
+def is_leg_name(name: str) -> bool:
+    """Whether `name` may name a leg that arrived over the network."""
+    return bool(_NAME_RE.match(name or ""))
+
+
 @dataclass
 class DynamicLeg:
     name: str
@@ -86,7 +91,7 @@ def announce_host(claimed: str, observed: str) -> str:
     disagree, and a test that has to stand up an HTTP server to reach them can
     only ever exercise the one source address the loopback interface gives it.
     """
-    return observed if _is_private_v4(observed) else claimed
+    return observed if is_private_v4(observed) else claimed
 
 
 class DynamicLegs:
@@ -114,9 +119,9 @@ class DynamicLegs:
         comes off the network rather than out of a file an operator wrote. A
         name that is not a plain slug would land in metric tags and path keys.
         """
-        if not _NAME_RE.match(name or ""):
+        if not is_leg_name(name):
             raise ValueError("name must be 2-32 chars of a-z, 0-9 and dashes")
-        if not _is_private_v4(host):
+        if not is_private_v4(host):
             # The router dials this address on its own LAN. A public address
             # would make the router a reflector pointed wherever the caller
             # liked.
@@ -167,7 +172,7 @@ class DynamicLegs:
             return None if leg is None else max(0.0, leg.expires_at - now)
 
 
-def _is_private_v4(host: str) -> bool:
+def is_private_v4(host: str) -> bool:
     parts = (host or "").split(".")
     if len(parts) != 4:
         return False

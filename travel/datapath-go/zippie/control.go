@@ -44,6 +44,9 @@ type LinkSpec struct {
 	Remote  string `json:"remote"` // host:port
 	Weight  int    `json:"weight"`
 	Healthy bool   `json:"healthy"`
+	// MaxKbps is the leg's deliberate throughput ceiling, the agent's
+	// PathConfig.max_kbps. Zero or absent means uncapped; see ratelimit.go.
+	MaxKbps int `json:"max_kbps"`
 }
 
 // SyncResult reports what the reconcile actually did. The agent logs it, and
@@ -104,6 +107,11 @@ func (t *Transport) SyncLinks(specs []LinkSpec) (SyncResult, error) {
 		if _, dup := desired[id]; dup {
 			return res, fmt.Errorf("path_id %d appears twice; one leg would shadow the other", id)
 		}
+		if s.MaxKbps < 0 {
+			// Zero already means uncapped. A negative ceiling means the agent
+			// and this process disagree about the contract, not a cap.
+			return res, fmt.Errorf("link %q: max_kbps %d is negative", s.Name, s.MaxKbps)
+		}
 		addr, err := net.ResolveUDPAddr("udp4", s.Remote)
 		if err != nil {
 			return res, fmt.Errorf("link %q: bad remote %q: %w", s.Name, s.Remote, err)
@@ -133,7 +141,7 @@ func (t *Transport) SyncLinks(specs []LinkSpec) (SyncResult, error) {
 		d := desired[id]
 		ep := LinkEndpoint{
 			PathID: id, Name: d.spec.Name, Device: d.spec.Device,
-			Remote: d.remote, Weight: d.spec.Weight,
+			Remote: d.remote, Weight: d.spec.Weight, MaxKbps: d.spec.MaxKbps,
 		}
 
 		cur, exists := live[id]
@@ -162,7 +170,9 @@ func (t *Transport) SyncLinks(specs []LinkSpec) (SyncResult, error) {
 			// would move the source port every tick, reset the per-leg RTT and
 			// last-heard clocks so every leg read as brand new forever, and
 			// show the far end a permanently roaming endpoint.
-			if t.applyLinkAttrs(id, ep.Weight, d.spec.Healthy) {
+			attrs := t.applyLinkAttrs(id, ep.Weight, d.spec.Healthy)
+			capped := t.applyLinkCap(id, ep.MaxKbps)
+			if attrs || capped {
 				res.Updated = append(res.Updated, ep.Name)
 			}
 		}
@@ -232,6 +242,29 @@ func (t *Transport) applyLinkAttrs(id uint8, weight int, healthy bool) bool {
 	// selects paths - and a second copy updated by hand is a divergence waiting
 	// to happen. LinkEndpoint.Weight stays what it was dialled with.
 	return changed
+}
+
+// applyLinkCap changes a leg's throughput ceiling in place, and reports whether
+// it actually changed.
+//
+// AN UNCHANGED CAP KEEPS ITS BUCKET. A new limiter starts full, and the agent
+// re-syncs about once a second, so replacing it on every sync would grant a
+// full second of burst every second - double a small cap, with nothing to show
+// for it. Only a different number gets a new bucket.
+//
+// Unlike weight, the cap IS mirrored onto the LinkEndpoint: the limiter lives
+// on the link rather than in the scheduler, so ep.MaxKbps is the only record of
+// what the current bucket was built from.
+func (t *Transport) applyLinkCap(id uint8, kbps int) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	l, ok := t.links[id]
+	if !ok || l.ep.MaxKbps == kbps {
+		return false
+	}
+	l.ep.MaxKbps = kbps
+	l.limiter = NewRateLimiter(kbps)
+	return true
 }
 
 // ---------------------------------------------------------------------------
