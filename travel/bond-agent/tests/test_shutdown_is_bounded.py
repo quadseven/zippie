@@ -19,9 +19,40 @@ the router to be made safe. A ceiling is the property that matters.
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 INIT = Path(__file__).resolve().parents[2] / "gl-mt3000" / "zippie.init"
+DEPLOY = Path(__file__).resolve().parents[3] / "scripts" / "deploy-openwrt.sh"
+
+
+def test_safe_mode_prevents_a_boot_start(tmp_path):
+    """A persistent marker must prevent procd from launching a bad config."""
+    marker = tmp_path / "safe-mode"
+    marker.touch()
+    script = f"""
+ZIPPIE_SAFE_MODE_FILE={marker}
+. {INIT}
+procd_open_instance() {{ echo launched; }}
+procd_set_param() {{ :; }}
+procd_close_instance() {{ :; }}
+logger() {{ :; }}
+start_service
+"""
+    result = subprocess.run(["sh", "-c", script], capture_output=True, text=True, check=True)
+    assert "launched" not in result.stdout
+
+    marker.unlink()
+    result = subprocess.run(["sh", "-c", script], capture_output=True, text=True, check=True)
+    assert "launched" in result.stdout
+
+
+def test_deploy_installs_and_verifies_the_boot_guard():
+    """The safe-mode init script must reach the router with the package."""
+    deploy = DEPLOY.read_text()
+    assert "travel/gl-mt3000/zippie.init" in deploy
+    assert "/etc/init.d/zippie" in deploy
+    assert "md5sum /etc/init.d/zippie" in deploy
 
 
 def _stop_body() -> str:
