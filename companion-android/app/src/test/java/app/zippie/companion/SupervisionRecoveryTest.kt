@@ -159,13 +159,13 @@ class SupervisionRecoveryTest {
                 return
             }
             val config = LegAnnouncer.Config(
-                consoleHost = "10.99.0.1:8787",
+                consoleHost = "10.99.0.1:8787", // leak-guard-allow: test-only LAN host for in-memory console post
                 token = token,
                 name = "pixel-test",
                 label = "Pixel Test",
                 listenPort = 51999,
             )
-            announcer.start(config, address = { "10.99.0.150" }) { outcome ->
+            announcer.start(config, address = { "10.99.0.150" }) { outcome -> // leak-guard-allow: test-only relay address
                 announceState = when (outcome) {
                     is LegAnnouncer.Outcome.Announced ->
                         "Announced as pixel-test, lease ${outcome.leaseRemainingS.toInt()}s."
