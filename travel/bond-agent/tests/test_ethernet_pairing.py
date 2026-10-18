@@ -19,8 +19,10 @@ from zippie.agent import BondAgent
 from zippie.config import parse_config
 from zippie.pairing import PairingRequests
 
-PHONE = "10.99.0.241"
-OTHER = "10.1.0.2"  # leak-guard-allow: generic; the LAN gate needs an RFC 1918 source
+# Generic addresses in the repo's documented 10.99/16 test range: the LAN
+# gate needs RFC 1918 sources, and the two must differ.
+PHONE = "10.99.0.241"  # leak-guard-allow
+OTHER = "10.99.0.2"  # leak-guard-allow
 
 
 class _Clock:
