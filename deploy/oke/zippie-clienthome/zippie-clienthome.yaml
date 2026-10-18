@@ -121,10 +121,10 @@ spec:
           # in the image config. So changing the datapath is a two-push loop:
           # push the change, read the digest out of the red check, paste, push.
           #
-          # The readable twin of this digest is the tag `sha-807e7430784f`.
+          # The readable twin of this digest is the tag `sha-e29d01628595`.
           # More than one tag may point here, and that is information rather
           # than a bug: those commits did not change the image.
-          image: ghcr.io/quadseven/zippie-clienthome@sha256:3b92e7c60707ed8ae4bf2c66ed5bfc410ec9be933041ce453f687d1a3ac7dbcf
+          image: ghcr.io/quadseven/zippie-clienthome@sha256:3d76c90a7e75f1ecf9ce44b8114f409797258f50b1ef1e0ad1b42f92b2002733
           args:
             - -listen=:51920           # NOT 51901/51902 - those are the live bond
             - -tun=zippie0
