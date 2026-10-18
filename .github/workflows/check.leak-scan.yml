@@ -12,6 +12,17 @@ name: check.leak-scan
 # `leak-guard-allow` marker on the same line. The separate operator-hosts guard
 # checks the address ranges permitted in the current tree.
 #
+# DENY-LIST LAYER (#38). Hostnames have no shape: the operator-hosts guard can
+# allowlist address RANGES, but a bare router nickname matches no pattern, and
+# writing it in a public guard would publish it. Terms like that (host
+# codenames, people, products) are read at run time from the SSM parameter
+# below, through the role in the LEAK_SCAN_ROLE_ARN secret. That role can read
+# this one parameter and nothing else, and trusts only pull_request runs of
+# the public repos that share it. The terms never live in this repo, the log
+# shows only how many were loaded, and a hit is redacted. An unreadable or
+# empty list fails the check rather than passing shapes-only, and a fork PR
+# gets no secrets, so the scan fails closed there too.
+#
 # `edited` is in the trigger list on purpose: a PR body can leak long after
 # the last push.
 #
@@ -27,6 +38,11 @@ jobs:
     uses: quadseven/infra-public/.github/workflows/_reusable.leak-scan.yml@273755079c88172df39501ee6914fd878c0920bc
     permissions:
       contents: read
+      # Mint the OIDC token for the deny-list read role.
+      id-token: write
     with:
       allowed-repo-refs: infra-public, muster
       enforce: true
+      deny-list-ssm-param: /infra/leak-scan/deny-list
+    secrets:
+      aws-role-arn: ${{ secrets.LEAK_SCAN_ROLE_ARN }}

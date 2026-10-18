@@ -13,8 +13,17 @@
 #           found that the previous scrub had caught the credentials and missed
 #           the topology: the household /24 was still in ~50 files, the travel
 #           router's hostname in ~100, and three measured CGNAT addresses sat in
-#           test fixtures. All of that is scrubbed now, and PART 2 is what stops
-#           the next pull request from putting it back.
+#           test fixtures. All of that is scrubbed now. PART 2 is what stops
+#           the next pull request from putting the ADDRESSES back - and only
+#           the addresses. An address has a shape an allowlist can describe;
+#           the router's hostname is a bare word with none, and this script
+#           cannot list the word without publishing it. The name came back
+#           into twelve places with this script green every time (#38).
+#           Hostnames are caught instead by the leak scan's deny-list layer
+#           (.github/workflows/check.leak-scan.yml): the terms are read at
+#           run time from SSM, never committed, and a hit is redacted. That
+#           layer scans each pull request's diff and text, not the whole
+#           tree, so a name that predates it is not re-found by either check.
 #
 # Both apps once shipped the operator's own infrastructure as compiled-in
 # defaults. Android's were emptied (#157) - homeHost, consoleLanHost, consoleUrl

@@ -1,8 +1,8 @@
 """Tests for the shared leak scan caller workflow (.github/workflows/check.leak-scan.yml).
 
 Verifies the workflow structure, triggers, SHA pinning, enforcing configuration,
-and that out-of-scope mechanisms (such as the runtime deny-list layer) and
-private repository references are not present.
+that the runtime deny-list layer is wired (it is what catches hostnames,
+#38), and that private repository references are not present.
 """
 
 from __future__ import annotations
@@ -79,22 +79,44 @@ def test_allowed_repo_refs_lists_only_public_repos():
     assert "infra" not in refs, "private repository 'infra' must not be in allowed-repo-refs"
 
 
-def test_deny_list_layer_is_out_of_scope():
-    """The runtime deny-list layer requires per-repo credentials and is out of scope."""
+def test_deny_list_layer_is_wired():
+    """Hostnames have no shape, so the deny-list layer is what catches them (#38).
+
+    The address allowlist in scripts/check-no-operator-hosts.sh cannot describe
+    a bare word, and listing the word in this public repo would publish it. The
+    shared scanner reads such terms at run time from SSM through a read-only
+    role instead. Dropping any of the three pieces below silently turns the
+    scan back into shapes-only, which is how the travel router's name got back
+    in once already.
+    """
     data = _load_workflow()
     leak_job = data.get("jobs", {}).get("leak-scan", {})
     with_inputs = leak_job.get("with", {})
     secrets = leak_job.get("secrets", {})
     permissions = leak_job.get("permissions", {})
 
-    assert "deny-list-ssm-param" not in with_inputs, (
-        "deny-list-ssm-param should not be configured in the thin caller"
+    assert with_inputs.get("deny-list-ssm-param") == "/infra/leak-scan/deny-list", (
+        "the caller must pass the shared deny-list parameter"
     )
-    assert "aws-role-arn" not in secrets, (
-        "aws-role-arn should not be passed while deny-list is out of scope"
+    assert secrets.get("aws-role-arn") == "${{ secrets.LEAK_SCAN_ROLE_ARN }}", (
+        "the deny-list read role must be passed, or the reusable fails closed"
     )
-    assert "id-token" not in permissions, (
-        "id-token permission is only needed for the deny-list read role"
+    assert permissions.get("id-token") == "write", (
+        "id-token: write is needed to assume the deny-list read role"
+    )
+    assert permissions.get("contents") == "read"
+
+
+def test_operator_hosts_header_does_not_overclaim_hostnames():
+    """The address guard must not claim to stop a hostname coming back (#38)."""
+    header = (REPO_ROOT / "scripts" / "check-no-operator-hosts.sh").read_text(encoding="utf-8")
+    # Comment markers would split the sentence across lines; read it as prose.
+    flat = " ".join(" ".join(line.lstrip("#").split()) for line in header.splitlines())
+    assert "PART 2 is what stops the next pull request from putting it back" not in flat, (
+        "the header still claims PART 2 keeps the router's hostname out"
+    )
+    assert "check.leak-scan.yml" in header, (
+        "the header must name where hostnames are actually caught"
     )
 
 
