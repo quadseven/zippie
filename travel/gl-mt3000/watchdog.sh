@@ -89,6 +89,10 @@ REARM_WINDOW=86400     # 24h
 SOLE_REARM_AFTER=5     # ~5 minutes
 ZIPPIE_IFACE="${ZIPPIE_IFACE:-pbz0}"
 
+# Safe mode is an operator hold, not a watchdog trip. Leave its counters and
+# re-arm budget untouched until the marker is removed.
+[ -e "$WD_PERSIST/safe-mode" ] && exit 0
+
 # NextDNS anycast: the resolvers this fleet actually uses everywhere else.
 # Two independent addresses so one provider hiccup cannot trip the switch.
 # Verified to answer ICMP from this router 2026-07-27.
