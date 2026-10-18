@@ -356,11 +356,19 @@ class RelayService : Service() {
      * it was forwarding bytes without an announcement token. When user unlock occurs,
      * the token becomes available in credential storage; refresh the config and start
      * announcing without interrupting the carrying sockets.
+     *
+     * A config that cannot be read or validated is logged, not raised: this
+     * relay is already carrying, and stopping it over the announcement would
+     * trade a missing leg label for a missing leg. The next pass tries again.
      */
     internal fun recoverAnnounceIfUnlocked() {
         if (!isAnnouncing || config.announceToken.isBlank()) {
-            val effective = runCatching { AndroidManagedConfig.effectiveConfig(this) }.getOrNull()
-            val validated = effective?.validated()?.getOrNull()
+            val effective = runCatching { AndroidManagedConfig.effectiveConfig(this) }
+                .onFailure { Log.w(TAG, "recovery: could not read configuration", it) }
+                .getOrNull()
+            val validated = effective?.validated()
+                ?.onFailure { Log.w(TAG, "recovery: configuration is invalid: ${it.message}") }
+                ?.getOrNull()
             if (validated != null && validated.announceToken.isNotBlank()) {
                 config = validated
                 startAnnouncing()

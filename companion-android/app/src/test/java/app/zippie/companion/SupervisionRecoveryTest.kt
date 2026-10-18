@@ -257,4 +257,24 @@ class SupervisionRecoveryTest {
 
         announcer.stop()
     }
+
+    @Test
+    fun `a recovery pass that cannot read or validate the config says so in the log`() {
+        // Recovery runs on a relay that is already carrying, so a config fault
+        // must not stop it - but it must not vanish either, or a relay that never
+        // announces leaves no trace of why. Source-text check because
+        // RelayService needs a real Android runtime (#48).
+        val src = java.io.File("src/main/java/app/zippie/companion/RelayService.kt").readText()
+        val body = src.substringAfter("internal fun recoverAnnounceIfUnlocked()")
+            .substringBefore("\n    /**")
+        assertTrue(
+            "a config read failure during recovery is swallowed",
+            Regex("""effectiveConfig\(this\)\s*\}\s*\.onFailure\s*\{\s*Log\.w""")
+                .containsMatchIn(body),
+        )
+        assertTrue(
+            "a config validation failure during recovery is swallowed",
+            Regex("""validated\(\)\s*\??\.onFailure\s*\{\s*Log\.w""").containsMatchIn(body),
+        )
+    }
 }

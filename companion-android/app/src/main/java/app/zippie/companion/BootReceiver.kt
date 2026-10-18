@@ -222,14 +222,15 @@ class BootReceiver : BroadcastReceiver() {
         // time and the one call that would have fixed it was gated on the name of
         // a broadcast that had already been and gone.
         //
-        // Gated on UserManager.isUserUnlocked (#237):
-        // sync reads credential-encrypted storage, so it must only run when
-        // the user is unlocked. A RETRY pass after unlock delivers the token
-        // without depending on source == BOOT_COMPLETED.
+        // STRICTLY ADDITIVE. If the lock state cannot be read the old rule
+        // applies, so this can only ever create sync opportunities, never remove
+        // one that exists today. A RETRY pass after unlock (#237) syncs through
+        // the isUserUnlocked branch, not through this fallback.
         val unlocked = runCatching {
-            context.getSystemService(UserManager::class.java)?.isUserUnlocked == true
-        }.getOrDefault(false)
-        if (unlocked) {
+            context.getSystemService(UserManager::class.java)?.isUserUnlocked
+        }.onFailure { Log.w(TAG, "$source: could not read lock state", it) }
+            .getOrNull()
+        if (unlocked ?: (source == BOOT_COMPLETED)) {
             runCatching { BootConfigStore.sync(context) }
                 .onFailure { Log.w(TAG, "$source: could not refresh boot config mirror", it) }
         }
