@@ -4,7 +4,15 @@ START=99
 STOP=10
 USE_PROCD=1
 
+# An operator can create this persistent marker before rebooting a router with
+# a suspect config. Remove it and start the service to resume the bond.
+ZIPPIE_SAFE_MODE_FILE="${ZIPPIE_SAFE_MODE_FILE:-/etc/zippie/safe-mode}"
+
 start_service() {
+  if [ -e "$ZIPPIE_SAFE_MODE_FILE" ]; then
+    logger -t zippie "safe mode active; agent start skipped"
+    return 0
+  fi
   procd_open_instance
   procd_set_param command /usr/bin/zippie up --wifi-secrets /etc/zippie/wifi-secrets.json
   procd_set_param respawn 3600 5 0

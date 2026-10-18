@@ -954,6 +954,17 @@ for f in "${HELPER_SCRIPTS[@]}"; do
   echo "  ${f}: ${got}"
 done
 
+# The boot service is part of the router package. A stale init script can
+# bypass safe mode even when the Python package and helpers match the repo.
+INIT_SRC="${REPO_ROOT}/travel/gl-mt3000/zippie.init"
+[[ -f "${INIT_SRC}" ]] || die "missing ${INIT_SRC}"
+ssh_run "cat > /etc/init.d/zippie && chmod +x /etc/init.d/zippie" < "${INIT_SRC}" \
+  || die "could not write /etc/init.d/zippie"
+want=$(md5_of "${INIT_SRC}")
+got=$(ssh_run "md5sum /etc/init.d/zippie 2>/dev/null | cut -d' ' -f1")
+[[ "${want}" == "${got}" ]] || die "/etc/init.d/zippie differs after copy"
+echo "  init script: ${got}"
+
 # The wrapper. `/usr/bin/zippie` is what the init script and every operator
 # invocation actually call.
 if [[ -f "${REPO_ROOT}/travel/gl-mt3000/zippie.wrapper" ]]; then

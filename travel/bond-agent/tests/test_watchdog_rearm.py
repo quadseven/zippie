@@ -212,6 +212,19 @@ def test_healthy_and_never_tripped_is_a_no_op(hz):
     assert "INITD" not in hz.log
 
 
+def test_safe_mode_blocks_watchdog_rearm_without_spending_budget(hz):
+    hz.set_tripped()
+    hz.set_running(False)
+    hz.set_stable(STABLE_MIN - 1)
+    (hz.persist / "safe-mode").touch()
+
+    hz.run()
+
+    assert "INITD" not in hz.log
+    assert hz.budget is None
+    assert hz.tripped
+
+
 def test_operator_recovery_clears_the_trip_without_spending_budget(hz):
     """Both 2026-08-01 outages ended with a human restart. That must not eat
     the automatic-recovery budget, which exists to bound AUTOMATIC re-arms."""

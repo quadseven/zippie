@@ -112,6 +112,12 @@ scripts/deploy-openwrt.sh <router> --dry-run   # what would change
 scripts/deploy-openwrt.sh <router>             # deploy, then prove it
 ```
 
+For a boot with a suspect config, create `/etc/zippie/safe-mode` on the router
+before rebooting. The init service then leaves the agent stopped, and the
+watchdog does not re-arm it. Physical WAN routes remain available. After fixing
+the config, remove the marker and run `/etc/init.d/zippie start`. The deploy
+script installs and verifies the init service as well as the Python package.
+
 Hand-copying is how the deployed agent drifted. On **2026-08-06** six of
 nineteen modules on the live router differed from the repo, `telemetry.py` was
 three days stale and owned by uid 501 rather than root, and five metrics that
