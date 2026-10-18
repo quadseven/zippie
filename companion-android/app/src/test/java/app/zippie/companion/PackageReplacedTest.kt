@@ -54,14 +54,23 @@ class PackageReplacedTest {
 
     @Test
     fun `it does not start a second relay when one is already running`() {
-        // The same guard BOOT_COMPLETED carries. A replace that somehow left the
-        // service alive must not produce two relays fighting over one LAN port.
+        // The same guard BOOT_COMPLETED carries. Since #237 it skips only a relay
+        // that is running AND announcing, so a running-but-unannounced one gets
+        // the recovery pass. That pass still cannot produce two relays fighting
+        // over one LAN port: RelayService.onStartCommand returns early when it is
+        // already running, after only refreshing the announcement.
         val src = repoFile("src/main/java/app/zippie/companion/BootReceiver.kt").readText()
         val branch = src.substringAfter("Intent.ACTION_MY_PACKAGE_REPLACED")
             .substringBefore("else -> Unit")
         assertTrue(
             "the MY_PACKAGE_REPLACED branch does not check RelayStatusStore first",
-            branch.contains("RelayStatusStore.report.value != null"),
+            branch.contains("SecondChanceGuard.shouldSkip(RelayStatusStore.report.value)"),
+        )
+        val service = repoFile("src/main/java/app/zippie/companion/RelayService.kt").readText()
+        assertTrue(
+            "RelayService no longer returns early when already running, so a " +
+                "recovery pass would start a second relay",
+            Regex("""if \(running\) \{[^}]*return START_STICKY""").containsMatchIn(service),
         )
     }
 
