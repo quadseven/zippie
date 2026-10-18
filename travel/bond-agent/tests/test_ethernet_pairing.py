@@ -20,7 +20,7 @@ from zippie.config import parse_config
 from zippie.pairing import PairingRequests
 
 PHONE = "10.99.0.241"
-OTHER = "10.99.0.77"
+OTHER = "10.1.0.2"  # leak-guard-allow: generic; the LAN gate needs an RFC 1918 source
 
 
 class _Clock:
@@ -138,7 +138,8 @@ def test_a_phone_not_on_ethernet_is_told_to_enter_the_token():
         _ask(_requests(), link="wifi")
 
 
-@pytest.mark.parametrize("host", ["127.0.0.1", "100.64.100.3", "203.0.113.7"])
+# A generic 100.64/10 address: the tailnet case needs a CGNAT source.
+@pytest.mark.parametrize("host", ["127.0.0.1", "100.64.0.1", "203.0.113.7"])  # leak-guard-allow
 def test_only_a_device_on_this_lan_may_ask(host):
     """Loopback, the tailnet and the internet can all reach the console. None
     of them is a phone plugged into this router."""
