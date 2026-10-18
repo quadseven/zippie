@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import inspect
+import re
+from pathlib import Path
 
 from zippie import agent as agent_mod
 from zippie import net
 from zippie.agent import BondAgent, projected_idle_mb_per_day
-from zippie.config import parse_config
-from zippie.datapath import FLAG_KEEPALIVE, FLAG_KEEPALIVE_REPLY, Frame
+from zippie.config import load_toml, parse_config
+from zippie.datapath import FLAG_KEEPALIVE, FLAG_KEEPALIVE_REPLY, HEADER_LEN, Frame
 from zippie.models import PathState
 from zippie.transport import LinkEndpoint, Transport
 
@@ -225,6 +227,38 @@ def test_idle_projection_docstring_matches_accounted_packet_bytes():
     assert "RTT-hint bytes" in documentation
     assert "2 * (HEADER_LEN + _IPV4_UDP_HEADER_BYTES) + 2" in documentation
     assert "accounted separately" in documentation
+
+
+_ROUTER_TOML = Path(__file__).resolve().parents[2] / "gl-mt3000" / "zippie.toml"
+
+
+def test_router_toml_idle_floor_comment_matches_the_projection():
+    """#235: the deployed config's idle-economy comment is arithmetic about
+    the projection above. Every number in it must follow from the code and
+    from the settings right below it, or it drifts the way "about 51 B/s"
+    did (3 legs x (19 + 17) B / 2 s is 54 B/s)."""
+    text = _ROUTER_TOML.read_text(encoding="utf-8")
+    comment = " ".join(
+        line.lstrip("# ").strip() for line in text.splitlines() if line.startswith("#")
+    )
+    claim = re.search(
+        r"about (\d+) transport bytes/s \((\d+) legs x a (\d+) B request and "
+        r"(\d+) B reply every (\d+) s\), or ([\d.]+) MB/day including IPv4/UDP "
+        r"headers and one (\d+) s WireGuard keepalive",
+        comment,
+    )
+    assert claim, "idle-economy comment in zippie.toml no longer states the floor"
+    rate, legs, request, reply, every_s, mb_day, keepalive_s = claim.groups()
+    legs, request, reply, every_s = int(legs), int(request), int(reply), int(every_s)
+
+    policy = parse_config(load_toml(_ROUTER_TOML)).policy
+    assert every_s * 1000 == policy.idle_probe_interval_ms
+    assert int(keepalive_s) == policy.idle_persistent_keepalive
+    assert request == HEADER_LEN + 2  # framed probe plus the 2-byte RTT hint
+    assert reply == HEADER_LEN
+    assert int(rate) == legs * (request + reply) // every_s
+    projected = projected_idle_mb_per_day(legs, float(every_s), int(keepalive_s))
+    assert mb_day == f"{projected:.2f}"
 
 
 def test_live_wireguard_keepalive_is_changed_without_rebuilding(monkeypatch):
