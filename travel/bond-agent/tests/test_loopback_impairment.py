@@ -39,6 +39,8 @@ from __future__ import annotations
 
 import json
 import random
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -77,6 +79,75 @@ class FakeSocket:
 
 
 PEER = ("127.0.0.1", 51901)
+
+
+def test_router_blackhole_installs_and_removes_bidirectional_packet_drops():
+    """A WiFi driver may pass packets despite a netem root qdisc."""
+    script = Path(__file__).resolve().parents[3] / "scripts" / "chaos.sh"
+    shell = f"""
+ZIPPIE_CHAOS_LIBRARY=1 . '{script}'
+iptables() {{ printf '%s\\n' "$*"; }}
+blackhole_on apclix0
+blackhole_off apclix0
+"""
+    result = subprocess.run(["sh", "-c", shell], capture_output=True, text=True, check=True)
+    commands = result.stdout.splitlines()
+    for chain, direction in (
+        ("INPUT", "-i"),
+        ("OUTPUT", "-o"),
+        ("FORWARD", "-i"),
+        ("FORWARD", "-o"),
+    ):
+        rule = f"{chain} {direction} apclix0 -m comment --comment zippie-chaos-blackhole -j DROP"
+        assert (
+            f"-I {chain} 1 {direction} apclix0 -m comment --comment zippie-chaos-blackhole -j DROP"
+            in commands
+        )
+        assert f"-D {rule}" in commands
+
+
+def test_router_blackhole_refuses_a_loss_result_without_drop_counter_movement():
+    script = Path(__file__).resolve().parents[3] / "scripts" / "chaos.sh"
+    shell = f"""
+ZIPPIE_CHAOS_LIBRARY=1 . '{script}'
+probe_loss() {{ echo 100; }}
+blackhole_drops() {{ echo 0; }}
+say() {{ :; }}
+verify_impairment apclix0 blackhole 1
+"""
+    result = subprocess.run(["sh", "-c", shell], capture_output=True, text=True)
+    assert result.returncode != 0
+
+
+def test_router_harness_reads_packet_mode_membership_from_console():
+    script = Path(__file__).resolve().parents[3] / "scripts" / "chaos.sh"
+    shell = f"""
+ZIPPIE_CHAOS_LIBRARY=1 . '{script}'
+curl() {{ echo '{{"paths":[{{"interface":"apclix0","in_bond":true}}]}}'; }}
+ip() {{ echo 'default dev pbz0'; }}
+in_bond apclix0
+"""
+    result = subprocess.run(["sh", "-c", shell], capture_output=True, text=True)
+    assert result.returncode == 0
+
+
+def test_router_harness_arms_and_clears_a_read_back_cron_deadline(tmp_path):
+    script = Path(__file__).resolve().parents[3] / "scripts" / "chaos.sh"
+    shell = f"""
+ZIPPIE_CHAOS_LIBRARY=1 . '{script}'
+CRON_FILE='{tmp_path}/crontab'
+crontab() {{ if [ "$1" = -l ]; then cat "$CRON_FILE"; else cp "$1" "$CRON_FILE"; fi; }}
+readlink() {{ echo /etc/zippie/chaos.sh; }}
+say() {{ :; }}
+ACTIVE_LEG=apclix0
+arm_deadline || exit 1
+crontab -l
+clear_deadline || exit 1
+test ! -s "$CRON_FILE"
+"""
+    result = subprocess.run(["sh", "-c", shell], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "cleanup apclix0 # zippie-chaos-deadline" in result.stdout
 
 
 def _clockwork():

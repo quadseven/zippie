@@ -10,7 +10,7 @@
 #
 #   1. A HARD DEADLINE clears every impairment after MAX_SECONDS no matter
 #      what - including if this script is killed mid-scenario. It is armed as
-#      a separate detached process BEFORE any impairment is applied. A netem
+#      a self-removing cron job BEFORE any impairment is applied. A netem
 #      rule left on a travel router you then drive away with is a very bad
 #      afternoon. The deadline clears root qdiscs, ingress qdiscs, AND the ifb
 #      device: an ingress redirect left behind is just as bad and is invisible
@@ -47,15 +47,19 @@
 # this OpenWrt build) we fall back to egress-only and SAY SO in the log and in
 # every affected result line, so old and new runs stay comparable instead of
 # silently meaning different things.
+# WiFi station drivers may bypass the root qdisc. For a hard blackhole, scoped
+# firewall drops cover both directions even when netem does not intercept a
+# packet. The rules are removed with the qdiscs after each scenario.
 #
 # NOT measured here: true flow survival. That needs a long-lived TCP stream to
 # a peer at the home end (iperf3 -s in the zippie-home pod) - see #2136.
 # Counting nexthop changes is a proxy - a proxy with a known mechanism.
 
 LOG=/tmp/zippie-chaos.log
-MAX_SECONDS=180
+MAX_SECONDS=300
 IFB_DEV=ifbz0
 PROBE_TARGET=${PROBE_TARGET:-8.8.8.8}
+BLACKHOLE_TAG=zippie-chaos-blackhole
 
 say() { echo "$(date +%H:%M:%S) $*" >> "$LOG"; }
 
@@ -64,6 +68,7 @@ say() { echo "$(date +%H:%M:%S) $*" >> "$LOG"; }
 # Clears EVERY impairment this script can create, on every device. Written to
 # be safe to call at any time, including when nothing is applied.
 all_impair_off() {
+    [ -n "${ACTIVE_LEG:-}" ] && blackhole_off "$ACTIVE_LEG"
     for d in $(tc qdisc show 2>/dev/null | awk '/netem/{print $5}' | sort -u); do
         tc qdisc del dev "$d" root 2>/dev/null
     done
@@ -74,22 +79,43 @@ all_impair_off() {
     ip link del "$IFB_DEV" 2>/dev/null
 }
 
-# Hard deadline. Detached and armed FIRST so it survives this script dying.
+# Cron survives the SSH session that the impairment may sever. A background
+# sleep does not survive reliably on this router.
 arm_deadline() {
-    (
-        sleep "$MAX_SECONDS"
-        for d in $(tc qdisc show 2>/dev/null | awk '/netem/{print $5}' | sort -u); do
-            tc qdisc del dev "$d" root 2>/dev/null
-            logger -t zippie-chaos "DEADLINE cleared netem on $d"
-        done
-        for d in $(tc qdisc show 2>/dev/null | awk '/ingress/{print $5}' | sort -u); do
-            tc filter del dev "$d" parent ffff: 2>/dev/null
-            tc qdisc del dev "$d" ingress 2>/dev/null
-            logger -t zippie-chaos "DEADLINE cleared ingress on $d"
-        done
-        ip link del "$IFB_DEV" 2>/dev/null
-    ) >/dev/null 2>&1 &
-    say "deadline armed: all impairments cleared in ${MAX_SECONDS}s regardless"
+    _cron_file=/tmp/zippie-chaos-crontab.$$
+    crontab -l 2>/dev/null > "$_cron_file" || :
+    if grep -q '# zippie-chaos-deadline$' "$_cron_file"; then
+        rm -f "$_cron_file"
+        say "ABORT: a chaos deadline is already armed"
+        return 1
+    fi
+    # shellcheck disable=SC2046  # three numeric clock fields
+    set -- $(date '+%H %M %S')
+    # shellcheck disable=SC2046  # two numeric cron fields
+    set -- $(awk -v h="$1" -v m="$2" -v s="$3" -v max="$MAX_SECONDS" \
+        'BEGIN {t=h*60+m+int((s+max+59)/60); print t%60, int(t/60)%24}')
+    _cron_minute=$1
+    _cron_hour=$2
+    _self=$(readlink -f "$0") || return 1
+    _cron_line="$_cron_minute $_cron_hour * * * $_self cleanup $ACTIVE_LEG # zippie-chaos-deadline"
+    printf '%s\n' "$_cron_line" >> "$_cron_file"
+    crontab "$_cron_file" || { rm -f "$_cron_file"; return 1; }
+    rm -f "$_cron_file"
+    if ! crontab -l 2>/dev/null | grep -Fxq "$_cron_line"; then
+        say "ABORT: deadline cron line did not read back"
+        clear_deadline
+        return 1
+    fi
+    say "deadline armed: cron cleanup after ${MAX_SECONDS}s"
+}
+
+clear_deadline() {
+    _cron_file=/tmp/zippie-chaos-crontab.$$
+    crontab -l 2>/dev/null | grep -v '# zippie-chaos-deadline$' > "$_cron_file" || :
+    crontab "$_cron_file"
+    _result=$?
+    rm -f "$_cron_file"
+    return "$_result"
 }
 
 # ----------------------------------------------------------------- probing --
@@ -141,6 +167,37 @@ ingress_off() {
     tc qdisc del dev "$1" ingress 2>/dev/null
 }
 
+blackhole_on() {
+    _blackhole_dev=$1
+    for _spec in "INPUT -i" "OUTPUT -o" "FORWARD -i" "FORWARD -o"; do
+        # shellcheck disable=SC2086  # split the fixed chain/direction pair
+        set -- $_spec
+        if ! iptables -I "$1" 1 "$2" "$_blackhole_dev" -m comment \
+            --comment "$BLACKHOLE_TAG" -j DROP; then
+            blackhole_off "$_blackhole_dev"
+            return 1
+        fi
+    done
+}
+
+blackhole_off() {
+    _blackhole_dev=$1
+    for _spec in "INPUT -i" "OUTPUT -o" "FORWARD -i" "FORWARD -o"; do
+        # shellcheck disable=SC2086  # split the fixed chain/direction pair
+        set -- $_spec
+        if iptables -C "$1" "$2" "$_blackhole_dev" -m comment \
+            --comment "$BLACKHOLE_TAG" -j DROP 2>/dev/null; then
+            iptables -D "$1" "$2" "$_blackhole_dev" -m comment \
+                --comment "$BLACKHOLE_TAG" -j DROP || return 1
+        fi
+    done
+}
+
+blackhole_drops() {
+    iptables -L OUTPUT -vxn 2>/dev/null | awk -v tag="$BLACKHOLE_TAG" \
+        'index($0, tag) {print $1; exit}'
+}
+
 # Prove the impairment is real. $3 is the kind: blackhole|loss|delay.
 # Echoes a human reason on failure. Returns 0 only when the leg is measurably
 # degraded in the way the scenario intends.
@@ -149,8 +206,12 @@ verify_impairment() {
     case "$_kind" in
     blackhole)
         _got=$(probe_loss "$_iface" 6)
-        [ "$_got" = "100" ] && return 0
-        say "    ABORT: blackhole not in effect (measured ${_got:-no-result}% loss, want 100%)"
+        _dropped=$(blackhole_drops)
+        if [ "$_got" = "100" ] && [ -n "$_dropped" ] && [ "$_dropped" -gt 0 ]; then
+            say "    blackhole proof: 100% probe loss, $_dropped OUTPUT packets dropped"
+            return 0
+        fi
+        say "    ABORT: blackhole unproven (loss=${_got:-no-result}%, dropped=${_dropped:-no-result})"
         return 1
         ;;
     loss)
@@ -178,8 +239,50 @@ verify_impairment() {
 
 # ------------------------------------------------------------- observation --
 
-nexthops() { ip route show default | grep -oE 'dev pb[0-9] weight [0-9]+' | tr '\n' ' '; }
-in_bond()  { ip route show default | grep -q "dev $1 "; }
+nexthops() {
+    _members=$(curl -fsS --max-time 2 http://127.0.0.1:8787/api/status 2>/dev/null \
+        | python3 -c 'import json, sys
+try:
+    status = json.load(sys.stdin)
+    paths = status["paths"]
+except (ValueError, KeyError):
+    print("console unavailable")
+    raise SystemExit(2)
+if status.get("datapath", "packet") != "packet":
+    raise SystemExit(3)
+print(" ".join("%s:%s" % (p["interface"], p["effective_weight"])
+               for p in paths if p.get("in_bond")))' 2>/dev/null)
+    _status=$?
+    if [ "$_status" -eq 3 ]; then
+        ip route show default | grep -oE 'dev pb[0-9] weight [0-9]+' | tr '\n' ' '
+    else
+        printf '%s\n' "$_members"
+    fi
+}
+
+in_bond() {
+    _wg_iface=$(curl -fsS --max-time 2 http://127.0.0.1:8787/api/status 2>/dev/null \
+        | python3 -c 'import json, sys
+try:
+    status = json.load(sys.stdin)
+    paths = status["paths"]
+except (ValueError, KeyError):
+    raise SystemExit(2)
+if status.get("datapath", "packet") != "packet":
+    match = next((p for p in paths if p.get("interface") == sys.argv[1]), None)
+    if match is None or not match.get("wg_iface"):
+        raise SystemExit(2)
+    print(match["wg_iface"])
+    raise SystemExit(3)
+raise SystemExit(0 if any(p.get("interface") == sys.argv[1] and p.get("in_bond")
+                          for p in paths) else 1)' "$1" 2>/dev/null)
+    _status=$?
+    if [ "$_status" -eq 3 ]; then
+        ip route show default | grep -q "dev $_wg_iface "
+    else
+        return "$_status"
+    fi
+}
 
 # Watch the nexthop set for up to $2 seconds, counting changes. Prints
 # "<changes> <seconds-until-predicate>" where the predicate is $3 (present|absent)
@@ -194,8 +297,10 @@ watch_for() {
         [ "$now" != "$prev" ] && changes=$((changes + 1))
         prev=$now
         if [ "$hit" -lt 0 ]; then
-            if [ "$want" = "absent" ] && ! in_bond "$iface"; then hit=$i; fi
-            if [ "$want" = "present" ] && in_bond "$iface"; then hit=$i; fi
+            in_bond "$iface"
+            member=$?
+            if [ "$want" = "absent" ] && [ "$member" -eq 1 ]; then hit=$i; fi
+            if [ "$want" = "present" ] && [ "$member" -eq 0 ]; then hit=$i; fi
         fi
     done
     echo "$changes $hit"
@@ -207,6 +312,17 @@ scenario() {
     name=$1; iface=$2; rule=$3; hold=$4; kind=$5
     say "--- $name  (dev=$iface  rule='$rule'  hold=${hold}s)"
 
+    if ! ip -4 addr show dev "$iface" | grep -q 'inet '; then
+        say "    SKIP: $iface has no IPv4 address"
+        return
+    fi
+    if [ "$kind" = blackhole ]; then
+        base_loss=$(probe_loss "$iface" 4)
+        if [ -z "$base_loss" ] || [ "$base_loss" -ge 100 ]; then
+            say "    SKIP: no healthy baseline through $iface"
+            return
+        fi
+    fi
     base_rtt=$(probe_rtt "$iface" 4)
     say "    baseline: rtt=${base_rtt:-none}ms  nexthops: $(nexthops)"
 
@@ -224,7 +340,18 @@ scenario() {
     fi
     say "    impairment applied: $halves"
 
+    if [ "$kind" = blackhole ] && ! blackhole_on "$iface"; then
+        ingress_off "$iface"
+        tc qdisc del dev "$iface" root 2>/dev/null
+        say "    SKIP: could not install firewall blackhole on $iface"
+        return
+    fi
+    if [ "$kind" = blackhole ]; then
+        halves="bidirectional firewall drop (netem $halves)"
+    fi
+
     if ! verify_impairment "$iface" "$kind" "$base_rtt"; then
+        [ "$kind" = blackhole ] && blackhole_off "$iface"
         ingress_off "$iface"
         tc qdisc del dev "$iface" root 2>/dev/null
         say "    scenario SKIPPED - no numbers reported, impairment unproven"
@@ -237,6 +364,7 @@ scenario() {
     set -- $(watch_for "$iface" "$hold" absent)
     say "    during: changes=$1 withdraw_s=$2  [$halves]  $(nexthops)"
 
+    [ "$kind" = blackhole ] && blackhole_off "$iface"
     ingress_off "$iface"
     tc qdisc del dev "$iface" root 2>/dev/null
     # shellcheck disable=SC2046  # see above
@@ -246,25 +374,42 @@ scenario() {
     say "    post-check: loss=$(probe_loss "$iface" 4)% ingress=$(tc qdisc show dev "$iface" | grep -c ingress)"
 }
 
+if [ "${ZIPPIE_CHAOS_LIBRARY:-0}" = 1 ]; then
+    # shellcheck disable=SC2317  # sourced by the shell-level harness tests
+    return 0 2>/dev/null || exit 0
+fi
+
+if [ "${1:-}" = cleanup ]; then
+    ACTIVE_LEG=${2:-}
+    all_impair_off
+    clear_deadline
+    exit 0
+fi
+
 : > "$LOG"
 say "=== zippie chaos run ==="
-say "legs: $(ip -4 -br addr | grep -E '^(eth0|eth2|apcli0)' | awk '{printf "%s ", $1}')"
+say "legs: $(ip -4 -br addr | grep -E '^(eth0|eth2|apcli0|apclix0)' | awk '{printf "%s ", $1}')"
 say "baseline nexthops: $(nexthops)"
 if ifb_up; then
     say "ifb: available ($IFB_DEV) - blackholes will be bidirectional"
 else
     say "ifb: UNAVAILABLE - scenarios run EGRESS-ONLY, a blackhole is a half-blackhole"
 fi
-arm_deadline
+ACTIVE_LEG=${LEG:-apclix0}
+case "$ACTIVE_LEG" in
+    *[!a-zA-Z0-9_.:-]*|'') say "ABORT: invalid leg interface"; exit 1 ;;
+esac
+arm_deadline || exit 1
 all_impair_off
 
 # Ordered least to most disruptive. Each one is survivable on its own: the
 # other two legs keep the bond and the tailscale management path alive.
-scenario "1 latency spike"      "${LEG:-apcli0}" "delay 400ms 80ms" 25 delay
-scenario "2 brownout 30% loss"  "${LEG:-apcli0}" "loss 30%"         25 loss
-scenario "3 hard blackhole"     "${LEG:-apcli0}" "loss 100%"        25 blackhole
+scenario "1 latency spike"      "$ACTIVE_LEG" "delay 400ms 80ms" 25 delay
+scenario "2 brownout 30% loss"  "$ACTIVE_LEG" "loss 30%"         25 loss
+scenario "3 hard blackhole"     "$ACTIVE_LEG" "loss 100%"        25 blackhole
 
 all_impair_off
+clear_deadline
 say "final nexthops: $(nexthops)"
 say "residual netem: $(tc qdisc show | grep -c netem)  residual ingress: $(tc qdisc show | grep -c ingress)"
 say "=== DONE ==="
