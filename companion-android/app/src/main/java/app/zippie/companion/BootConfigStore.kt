@@ -114,7 +114,23 @@ object BootConfigStore {
             }
     }
 
-    data class BudgetStandDown(val reason: String, val reconsiderAtEpochMs: Long)
+    data class BudgetStandDown(val reason: String, val reconsiderAtEpochMs: Long) {
+        /**
+         * The line StatusScreen shows for a phone standing down on budget: the
+         * reason and when it will reconsider, in the phone's own zone (#238
+         * AC3). Kept here, Android-free, so a JVM test can assert the exact
+         * text the screen draws (#255).
+         */
+        fun statusLine(
+            zone: java.time.ZoneId = java.time.ZoneId.systemDefault(),
+            locale: java.util.Locale = java.util.Locale.getDefault(),
+        ): String {
+            val reconsiderAt = java.time.Instant.ofEpochMilli(reconsiderAtEpochMs)
+                .atZone(zone)
+                .format(java.time.format.DateTimeFormatter.ofPattern("MMM d, HH:mm z", locale))
+            return "Relay paused: $reason Rechecking at $reconsiderAt."
+        }
+    }
 
     fun recordBudgetStandDown(context: Context, reason: String, reconsiderAtEpochMs: Long): Boolean =
         store(context).edit()
