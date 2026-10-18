@@ -50,6 +50,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from zippie.transport import LINK_BYTES_DEFINITION
+
 log = logging.getLogger(__name__)
 
 # Usage is flushed at most this often. A router runs from flash, and rewriting
@@ -251,6 +253,22 @@ class UsageStore:
             return {}
         if not isinstance(raw, dict):
             return {}
+        stored_definition = raw.get("bytes_definition")
+        if stored_definition != LINK_BYTES_DEFINITION:
+            # A changeover in what the counter MEANS (#183). The bytes were
+            # really measured; what changed is the ruler, so the counters are
+            # adopted, not zeroed - zeroing would let a capped leg blow past
+            # its carrier allowance on a definition change alone. Loud,
+            # because a month that mixes two definitions reads wrong against
+            # a carrier bill, and the next flush records the new definition
+            # in the file itself.
+            log.warning(
+                "usage.json was accumulated under byte-counting definition %r; "
+                "this build counts %r. Adopting the counters; the file will "
+                "record the new definition on the next flush.",
+                stored_definition or "v1-payload-only (pre-#183)",
+                LINK_BYTES_DEFINITION,
+            )
         out: dict[str, float] = {}
         for name, v in (raw.get("legs") or {}).items():
             try:
@@ -391,7 +409,17 @@ class UsageStore:
                     entry["previous_usage_gb"] = round(rec.previous_usage_gb, 4)
                     entry["previous_period_start"] = rec.previous_period_start
             legs[k] = entry
-        payload = json.dumps({"version": 2, "legs": legs}, indent=2)
+        payload = json.dumps(
+            {
+                "version": 2,
+                # Which ruler the counters were measured with (#183). A reader
+                # comparing against a carrier bill has to know whether the
+                # IPv4+UDP headers are in the number.
+                "bytes_definition": LINK_BYTES_DEFINITION,
+                "legs": legs,
+            },
+            indent=2,
+        )
         try:
             _atomic_write(self.path, payload)
         except OSError as exc:

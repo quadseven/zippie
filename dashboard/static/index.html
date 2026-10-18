@@ -381,6 +381,9 @@
         + " · idle floor " + e.projected_idle_mb_day + " MB/day"
         + " · probes " + e.probe_interval_ms + " ms"
         + " · keepalive " + e.persistent_keepalive_s + " s";
+      // Which ruler `metered` was measured with (#183): whether the IPv4+UDP
+      // headers are in the number a carrier bill gets compared against.
+      economy.textContent += " \u00b7 bytes " + (e.bytes_definition ?? "unknown");
       economy.hidden = false;
     } else {
       economy.hidden = true;
