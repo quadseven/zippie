@@ -29,8 +29,9 @@ final class RelayInboundEvidenceTests: XCTestCase {
     func testADatagramFromTheRouterRecordsInboundEvidence() async throws {
         // A random high port rather than 51999: the CI runner may have a real
         // relay or a previous test's socket on the fixed one, and
-        // `allowLocalEndpointReuse` means a collision would bind happily and
-        // then receive nothing.
+        // `allowLocalEndpointReuse` is now off, so a collision refuses to bind
+        // instead of silently receiving nothing - a fixed port risks this
+        // test's own listener failing to start.
         let port = UInt16.random(in: 49_500...50_500)
         let relay = CellularRelay(config: .init(listenPort: port,
                                                 homeHost: "127.0.0.1",

@@ -103,4 +103,62 @@ final class CellularRelayListenerHealthTests: XCTestCase {
                      + "report decoded at all - the same upgrade-window gap #92 already fixed "
                      + "once for cellularRetries")
     }
+
+    /// THE SINGLE-RELAY INVARIANT. Two relay instances on the same port must
+    /// not both bind and split the router's flow between them. With
+    /// `allowLocalEndpointReuse` off, the second listener's bind is refused,
+    /// so it never receives a datagram and never records inbound evidence -
+    /// instead of silently taking half the traffic. This test fails with
+    /// endpoint reuse on, where the second instance binds happily and both
+    /// relay on the same port.
+    func testSecondRelayOnTheSamePortFailsLoudly() async throws {
+        let port = UInt16.random(in: 49_500...50_500)
+
+        let first = CellularRelay(config: .init(listenPort: port,
+                                                homeHost: "127.0.0.1", homePort: 51_902))
+        try await first.start { _ in }
+        defer { Task { await first.stop() } }
+
+        // The first listener is bound: a router datagram reaches it and is
+        // recorded as inbound evidence.
+        send(Data([0x01]), toPort: port)
+        let deadline = Date().addingTimeInterval(5)
+        var firstStats = await first.currentStats()
+        while firstStats.lastRouterInboundAt == nil, Date() < deadline {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            firstStats = await first.currentStats()
+        }
+        XCTAssertNotNil(firstStats.lastRouterInboundAt,
+                        "the first relay never heard the router, so the port was not bound")
+
+        // A second instance on the same port: it must not bind and share the
+        // flow. Keep sending datagrams for a window; had its listener bound,
+        // it would have adopted the router and recorded inbound evidence.
+        let second = CellularRelay(config: .init(listenPort: port,
+                                                 homeHost: "127.0.0.1", homePort: 51_902))
+        try await second.start { _ in }
+        defer { Task { await second.stop() } }
+
+        for _ in 0..<20 {
+            send(Data([0x02]), toPort: port)
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let secondStats = await second.currentStats()
+        XCTAssertNil(secondStats.lastRouterInboundAt,
+                     "the second relay bound the same port and is splitting the router's flow")
+        XCTAssertNotNil(secondStats.lastError,
+                        "the second relay's bind conflict was not surfaced at all")
+    }
+
+    /// A router datagram to the relay's own port, to prove the listener is
+    /// bound. The cellular side is left to fail off-device (`requiredInterfaceType
+    /// = .cellular` has nothing to bind to); that is fine, the listener is what
+    /// these tests exercise.
+    private func send(_ data: Data, toPort port: UInt16) {
+        let conn = NWConnection(host: .ipv4(.loopback),
+                                port: NWEndpoint.Port(rawValue: port)!,
+                                using: .udp)
+        conn.start(queue: .global())
+        conn.send(content: data, completion: .contentProcessed { _ in })
+    }
 }

@@ -409,7 +409,13 @@ public actor CellularRelay {
 
     private func startListener() throws {
         let params = NWParameters.udp
-        params.allowLocalEndpointReuse = true
+        // SINGLE-RELAY INVARIANT. Only one listener may own this port: with
+        // endpoint reuse on, a second relay instance binds happily and the two
+        // split the router's flow between them, silently. With it off, a second
+        // bind is refused, that listener enters .failed, and the conflict is
+        // surfaced in this relay's own stats (errors / lastError) rather than
+        // being mistaken for a working leg.
+        params.allowLocalEndpointReuse = false
         let l = try NWListener(using: params,
                                on: NWEndpoint.Port(rawValue: config.listenPort)!)
         l.newConnectionHandler = { [weak self] conn in
