@@ -54,6 +54,7 @@ configMapGenerator:
       - zippie-pkg/auth.py
       - zippie-pkg/classify.py
       - zippie-pkg/datapath.py
+      - zippie-pkg/egress.py
       - zippie-pkg/home_transport.py
       - zippie-pkg/retransmit.py
       - zippie-pkg/transport.py
