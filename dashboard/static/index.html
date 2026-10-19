@@ -183,6 +183,11 @@
 
   .notice { margin-top: 14px; padding: 11px 14px; border: 1px dashed var(--line); border-radius: 10px; color: var(--ink-dim); font-size: 12.5px; }
   .notice b { color: var(--degraded); font-weight: 620; }
+  /* Paid data leaving while the wire is good (#290). Hidden in the normal
+     at-home state, so when it appears it is always a real finding. */
+  .costwarn { margin-top: 10px; padding: 11px 14px; border: 1px solid var(--degraded); border-radius: 10px; color: var(--ink); font-size: 13px; background: color-mix(in srgb, var(--degraded) 12%, transparent); }
+  .costwarn b { color: var(--degraded); font-weight: 700; }
+  .costwarn code { font-family: var(--mono); }
 </style>
 </head>
 <body>
@@ -194,6 +199,8 @@
       <p class="sub" id="subline">Waiting for the agent</p>
     </div>
   </div>
+
+  <div class="costwarn" id="costwarn" hidden></div>
 
   <div class="economy" id="economy" hidden></div>
 
@@ -367,6 +374,22 @@
     const primB = document.createElement("b"); primB.textContent = s.primary ?? "none";
     sub.append("mode ", modeB, " · primary ", primB);
 
+    // Paid data leaving while the wire is good (#290 AC5). textContent only,
+    // per the SECURITY note at the top of this script.
+    const cw = $("costwarn");
+    const bad = s.metered_despite_free_leg || [];
+    if (bad.length) {
+      cw.hidden = false;
+      cw.textContent = "";
+      const b = document.createElement("b");
+      b.textContent = "Metered traffic on paid legs. ";
+      const legs = document.createElement("code");
+      legs.textContent = bad.join(", ");
+      cw.append(b, legs, " carrying a real share while a healthy free leg exists — the free-leg preference may not be holding.");
+    } else {
+      cw.hidden = true;
+    }
+
     const economy = $("economy");
     if (s.economy) {
       const e = s.economy;
@@ -381,9 +404,6 @@
         + " · idle floor " + e.projected_idle_mb_day + " MB/day"
         + " · probes " + e.probe_interval_ms + " ms"
         + " · keepalive " + e.persistent_keepalive_s + " s";
-      // Which ruler `metered` was measured with (#183): whether the IPv4+UDP
-      // headers are in the number a carrier bill gets compared against.
-      economy.textContent += " \u00b7 bytes " + (e.bytes_definition ?? "unknown");
       economy.hidden = false;
     } else {
       economy.hidden = true;
@@ -453,9 +473,7 @@
       whereEl.className = "link-where";
       // Keep the identifier and interface visible but secondary -- when a
       // link misbehaves you need to know WHICH interface, not just its nickname.
-      // The carrier and plan name say which LINE it is, when someone typed them.
-      const ident = [p.label && p.label !== p.name ? p.name : null, p.ssid, p.interface,
-                     p.carrier, p.plan_name]
+      const ident = [p.label && p.label !== p.name ? p.name : null, p.ssid, p.interface]
         .filter(Boolean).join(" · ");
       whereEl.textContent = ident || "—";
       const pill = document.createElement("span");

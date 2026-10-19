@@ -37,7 +37,6 @@ from zippie.models import (
     PathState,
     PolicyConfig,
 )
-from zippie.pairing import PairingRequests
 from zippie.store import HomeAddressStore, LegStore, UsageStore
 
 log = logging.getLogger("zippie.agent")
@@ -104,11 +103,6 @@ def _dashboard_tls_context(config: AgentConfig) -> ssl.SSLContext | None:
 # under a timeout. The handler class is shared with the HTTP listener and is
 # deliberately left untouched.
 _TLS_HANDSHAKE_TIMEOUT_S = 10.0
-
-# The plan description a leg publishes (PathConfig.carrier and its siblings),
-# which legs.json may replace on the console. billing_day is here for display
-# only; what it does to usage periods is _billing_days's business.
-_PLAN_FIELDS = ("carrier", "plan_name", "plan_type", "billing_day", "expected_kbps")
 
 
 class _TLSHTTPServer(ThreadingHTTPServer):
@@ -224,9 +218,6 @@ PACKET_IFACE = "pbz0"
 # tunnel. Evicting a weak-but-working LTE leg is worse than carrying a dead one
 # for an extra three seconds, since the scheduler retransmits around loss.
 PACKET_LINK_STALE_S = 6.0
-# Loss classification runs once per probe pass. Twelve consecutive readings
-# confirm either side of the degraded threshold without changing RTT policy.
-LOSS_STATE_STREAK = 12
 # How long since the reassembler last handed a payload up before the packet
 # default route is withdrawn. Generous relative to the 1s control loop: a quiet
 # tunnel with no client traffic is not a broken one, and WireGuard's own
@@ -293,18 +284,12 @@ _WIREGUARD_EMPTY_TRANSPORT_BYTES = 32
 def projected_idle_mb_per_day(
     metered_legs: int, probe_interval_s: float, keepalive_s: int
 ) -> float:
-    """Estimate packet-mode idle traffic, including IP/UDP and RTT-hint bytes.
-
-    The `probes` term below charges each request/reply pair as
-    `2 * (HEADER_LEN + _IPV4_UDP_HEADER_BYTES) + 2`: two framed probes and
-    the request's two RTT-hint payload bytes. The reply has no payload.
-    Periodic WireGuard keepalives are accounted separately below.
-    """
+    """Upper-bound packet-mode idle floor, including IPv4 and UDP headers."""
     if metered_legs <= 0:
         return 0.0
     seconds_per_day = 86400
     framed_probe = HEADER_LEN + _IPV4_UDP_HEADER_BYTES
-    probes = metered_legs * (2 * framed_probe + 2) * seconds_per_day / max(0.2, probe_interval_s)
+    probes = metered_legs * 2 * framed_probe * seconds_per_day / max(0.2, probe_interval_s)
     keepalives = 0.0
     if keepalive_s > 0:
         keepalives = (
@@ -683,9 +668,6 @@ class BondAgent:
         # purpose - see zippie/dynamic.py for why a phone in a config file was
         # the wrong model.
         self.dynamic = DynamicLegs()
-        # Phones on ethernet asking for the console token before they can
-        # announce. In memory only - see zippie/pairing.py.
-        self.pairing = PairingRequests()
         self._dynamic_paths: dict[str, PathRuntime] = {}
         # (total_bytes, monotonic_at) per leg, for deriving throughput.
         self._usage_at: dict[str, tuple[int, float]] = {}
@@ -1217,17 +1199,11 @@ class BondAgent:
         WireGuard means the whole chain worked - leg, home transport, reorder,
         the lot. Nothing short of that proves the tunnel can carry traffic.
 
-        No deadlock, because the datapath does not need the default route to
-        work. Its sockets dial out with SO_BINDTODEVICE, so they can carry
-        frames and prove delivery while the default route is still absent.
-        The prover's evidence traffic reaches the far tunnel address over the
-        `<tunnel_ip>/32 dev pbz0` route that _ensure_packet_tunnel installs
-        when the tunnel comes up. The home-address /32 is a different route:
-        _pin_packet_endpoint installs it (net.pin_host_route, via the best
-        carrying leg) just before the default route goes in, so other
-        main-table traffic to the home address stays off the tunnel once that
-        route exists; it is not what lets the transport sockets reach home.
-        The default route follows the evidence rather than creating it.
+        No deadlock, because the datapath does not need the route to work. The
+        legs dial out with SO_BINDTODEVICE and the home endpoint has its own /32
+        pin, so frames flow, the handshake completes, and delivery starts while
+        the route is still absent. The route follows the evidence rather than
+        creating it.
 
         The failure mode this buys is the right one: a packet datapath that
         cannot deliver simply never gets the route, LAN clients keep using the
@@ -2127,32 +2103,6 @@ class BondAgent:
                 return 0.0
         return loss
 
-    def _classify_path_state(
-        self, path: PathRuntime, rtt_ms: float | None, loss_pct: float
-    ) -> PathState:
-        """Confirm loss-driven DEGRADED with a streak; preserve immediate failover."""
-        policy_config = self.config.policy
-        if loss_pct >= policy_config.failover_loss_pct:
-            path.loss_bad_streak = 0
-            path.loss_good_streak = 0
-            path.loss_degraded = False
-            judged_loss = loss_pct
-        elif loss_pct >= policy_config.degraded_loss_pct:
-            path.loss_bad_streak += 1
-            path.loss_good_streak = 0
-            if path.loss_bad_streak >= LOSS_STATE_STREAK:
-                path.loss_degraded = True
-            judged_loss = policy_config.degraded_loss_pct if path.loss_degraded else 0.0
-        else:
-            path.loss_bad_streak = 0
-            if path.loss_degraded:
-                path.loss_good_streak += 1
-                if path.loss_good_streak >= LOSS_STATE_STREAK:
-                    path.loss_degraded = False
-                    path.loss_good_streak = 0
-            judged_loss = policy_config.degraded_loss_pct if path.loss_degraded else 0.0
-        return policy.classify_state(rtt_ms, judged_loss, policy_config, previous=path.state)
-
     def _probe_packet_leg(self, path: PathRuntime) -> None:
         """Judge one packet-mode leg on evidence from the FAR END.
 
@@ -2283,9 +2233,13 @@ class BondAgent:
         # Falls back to the raw sample for the very first probe, when there is
         # no average yet.
         rtt_for_state = path.rtt_ewma_ms if path.rtt_ewma_ms is not None else rtt
-        # Keep the raw reading on path.loss_pct for reporting and weighting;
-        # only the state classifier applies the loss confirmation streak.
-        path.state = self._classify_path_state(path, rtt_for_state, path.loss_pct)
+        # path.loss_pct, NOT a second hardcoded 0.0 - it was set two lines
+        # above from the same `loss` reading and classify_state must judge on
+        # what was actually just measured, the same way route mode's own call
+        # site passes the loss it just computed rather than a literal (#115).
+        path.state = policy.classify_state(
+            rtt_for_state, path.loss_pct, self.config.policy, previous=path.state
+        )
 
     def probe_paths(self) -> None:
         host = self.config.home.endpoint
@@ -2406,7 +2360,7 @@ class BondAgent:
             # flag rather than the current rtt_ms sample for exactly the
             # reason documented on the field itself in models.py.
             path.has_ever_answered = True
-            path.state = self._classify_path_state(path, rtt, loss)
+            path.state = policy.classify_state(rtt, loss, self.config.policy, previous=path.state)
             if path.state != PathState.DOWN:
                 path.last_ok_ms = int(time.time() * 1000)
                 path.last_error = None
@@ -2467,21 +2421,17 @@ class BondAgent:
         self.apply_leg_overrides()
 
     def _billing_days(self) -> dict[str, Any]:
-        """Each leg's carrier cycle day, from legs.json or else the config file.
+        """Each leg's carrier cycle day, as typed into legs.json.
 
         Read from the leg store and PASSED to the usage store rather than
         letting the usage store open legs.json itself. The two files are
         deliberately separate - one is measured, one is human input that cannot
         be recomputed - and the agent is the only thing allowed to hold both.
 
-        legs.json wins, as it does for every other operator-entered field; a
-        config file billing_day of 0 is "not set". Absent from both means the
-        calendar month, which is the right default for a leg nobody has told us
-        a billing date for.
+        Absent means the calendar month, which is the right default for a leg
+        nobody has told us a billing date for.
         """
-        out: dict[str, Any] = {
-            p.name: p.config.billing_day for p in self.paths if p.config.billing_day
-        }
+        out: dict[str, Any] = {}
         for name, entry in self._leg_store.load().items():
             if isinstance(entry, dict) and entry.get("billing_day") is not None:
                 out[str(name)] = entry["billing_day"]
@@ -3718,11 +3668,6 @@ class BondAgent:
         over = self._leg_store.load().get(path.name) or {}
         applied = sorted(k for k in over if k in LegStore.OVERRIDABLE)
         d["overridden"] = applied
-        # THE PHONE APP'S PLAN DESCRIPTION WINS over the config file's, for the
-        # same reason an override does: it is the more recent human entry. Only
-        # keys to_dict already publishes, so legs.json cannot add any here, and
-        # not listed in `overridden` - naming a carrier changes no routing.
-        d.update({k: over[k] for k in _PLAN_FIELDS if over.get(k) is not None})
         # DYNAMIC LEGS ARE MARKED. A leg that exists because a phone is
         # announcing it right now is a different thing from one an operator
         # typed into a file, and the difference decides whether "it vanished"
@@ -3817,8 +3762,6 @@ class BondAgent:
 
     def _economy_status(self) -> dict[str, Any] | None:
         """Client work versus bytes bought from metered transport legs."""
-        from zippie.transport import LINK_BYTES_DEFINITION
-
         transport = getattr(self, "_transport", None)
         if transport is None:
             return None
@@ -3852,12 +3795,6 @@ class BondAgent:
             # this layer; name the limitation instead of implying decryption.
             "client_payload_estimated": True,
             "metered_bytes": metered_bytes,
-            # Which ruler metered_bytes was measured with (#183). A future
-            # comparison against a carrier bill has to know whether the
-            # IPv4+UDP headers are in the number, or it is silently off by
-            # 28 bytes per datagram. Same name as the usage.json field, so
-            # the file and the console speak one word for one ruler.
-            "bytes_definition": LINK_BYTES_DEFINITION,
             "metered_amplification": (
                 round(metered_bytes / client_bytes, 2) if client_bytes else None
             ),
@@ -3911,10 +3848,6 @@ class BondAgent:
                 "legs_carrying": sum(1 for d in path_dicts if d["contributing"]),
                 "legs_in_bond": sum(1 for d in path_dicts if d["in_bond"]),
                 "legs_total": len(path_dicts),
-                # Phones on ethernet waiting for the operator to approve them.
-                # Never carries the pairing code: this payload is open to the
-                # LAN, and the code is what proves the phone is in hand.
-                "pairing_requests": self.pairing.pending(),
                 "uptime_s": round(time.time() - self._started, 1),
                 "home": self.config.home.endpoint,
                 # WHAT THE NAME ACTUALLY RESOLVED TO, and whether that is
@@ -3971,9 +3904,18 @@ class BondAgent:
                 "pid": os.getpid(),
                 "config_path": self.config_meta.get("path"),
                 "config_sha256": self.config_meta.get("sha256"),
-                # Excludes per-device [home] values for comparison with the
-                # checked-in template. The raw hash above still checks the stamp.
-                "config_repo_sha256": self.config_meta.get("repo_sha256"),
+                # METERED LEGS CARRYING BESIDE A HEALTHY FREE LEG (#290 AC5).
+                # The preference damps metered legs to the weight floor while
+                # a free leg carries; a name here means a leg is holding MORE
+                # than the floor, i.e. the preference is not holding and paid
+                # data is leaving while the wire is good. Empty in the normal
+                # at-home state, so a non-empty list is always a real finding
+                # and the dashboard banners it.
+                "metered_despite_free_leg": (
+                    policy.metered_carrying_despite_healthy_free_leg(
+                        self.paths, self.config.policy
+                    )
+                ),
             }
 
     def write_status_file(self) -> None:
@@ -4658,14 +4600,7 @@ class BondAgent:
 
             def do_POST(self) -> None:  # noqa: N802
                 parsed = urlparse(self.path)
-                if parsed.path == "/api/legs/pair":
-                    self._pair_ask()
-                    return
-                if parsed.path not in (
-                    "/api/legs/announce",
-                    "/api/legs/withdraw",
-                    "/api/legs/pair/approve",
-                ):
+                if parsed.path not in ("/api/legs/announce", "/api/legs/withdraw"):
                     self._reject(404, "not found")
                     return
                 # AUTHENTICATED, because an announcement adds a leg the router
@@ -4677,10 +4612,6 @@ class BondAgent:
                 body = self._json_body()
                 if body is None:
                     self._reject(400, "body must be a JSON object, 1..16384 bytes")
-                    return
-
-                if parsed.path == "/api/legs/pair/approve":
-                    self._pair_approve(body)
                     return
 
                 if parsed.path.endswith("withdraw"):
@@ -4734,59 +4665,6 @@ class BondAgent:
                         }
                     ).encode()
                 )
-
-            def _pair_ask(self) -> None:
-                """The phone's half of the handshake, asked until approved.
-
-                UNAUTHENTICATED, because the phone has nothing to authenticate
-                with yet; zippie/pairing.py says what protects it instead. The
-                source address, not anything in the body, is what the request
-                is bound to: the token is only ever released back to it.
-                """
-                body = self._json_body()
-                if body is None:
-                    self._reject(400, "body must be a JSON object, 1..16384 bytes")
-                    return
-                host = self.client_address[0]
-                if agent.pairing.collect(host, str(body.get("code") or "")):
-                    log.info("pairing complete by=%s", host)
-                    reply = {"pairing": "approved", "token": agent.console_token()}
-                    self._ok(json.dumps(reply).encode())
-                    return
-                known = any(r["host"] == host for r in agent.pairing.pending())
-                try:
-                    req = agent.pairing.request(
-                        name=str(body.get("name") or ""),
-                        label=str(body.get("label") or ""),
-                        host=host,
-                        link=str(body.get("link") or ""),
-                    )
-                except ValueError as exc:
-                    self._reject(400, str(exc))
-                    return
-                # Once per request, not once per poll. Never the code.
-                if not known:
-                    log.info("pairing requested name=%s link=ethernet by=%s", req.name, host)
-                reply = {
-                    "pairing": "pending",
-                    "code": req.code,
-                    "expires_s": round(agent.pairing.ttl_s, 1),
-                }
-                self._ok(json.dumps(reply).encode())
-
-            def _pair_approve(self, body: dict) -> None:
-                """The operator's half: the code read off the phone's screen."""
-                req = agent.pairing.approve(str(body.get("code") or ""))
-                if req is None:
-                    self._reject(403, "no pending pairing with that code")
-                    return
-                log.info(
-                    "pairing approved name=%s host=%s by=%s",
-                    req.name,
-                    req.host,
-                    self.client_address[0],
-                )
-                self._ok(json.dumps({"leg": req.name, "approved": True}).encode())
 
             def _ok(self, body: bytes) -> None:
                 self.send_response(200)
@@ -4899,9 +4777,6 @@ class BondAgent:
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
                     self.wfile.write(body)
-                    return
-                if parsed.path.lower().endswith(".apk"):
-                    self.send_error(403, "serving APKs from agent dashboard is forbidden")
                     return
                 self.send_error(404)
 
@@ -5051,14 +4926,12 @@ def config_fingerprint(config_path: str | None) -> dict[str, str]:
     import hashlib
 
     from zippie.config import resolve_config_path
-    from zippie import build
 
     try:
         path = resolve_config_path(config_path)
         return {
             "path": str(path),
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-            "repo_sha256": build.normalized_config_fingerprint(path),
         }
     except FileNotFoundError:
         return {}

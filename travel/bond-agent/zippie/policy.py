@@ -419,6 +419,46 @@ def _damped_for_free_leg(
     return max(policy.weight_floor, int(base * FREE_LEG_METERED_DAMPING))
 
 
+def metered_carrying_despite_healthy_free_leg(
+    paths: list[PathRuntime], policy: PolicyConfig
+) -> list[str]:
+    """Names of metered legs carrying a real share while a healthy free leg exists.
+
+    zippie#290 AC5, the visible half of the preference AC4 builds. The damping
+    in :func:`_damped_for_free_leg` holds metered legs at exactly the weight
+    floor while a free leg carries - a damped leg is the design WORKING, so
+    it is not named here. A leg ABOVE the floor means the preference is not
+    holding (or never engaged): paid data is leaving while the wire is good,
+    which is the 2026-08-20 outage in miniature and deserves a banner, not a
+    gauge only a Datadog monitor reads.
+
+    "Metered" is METERED and EXPENSIVE, the same set the economy accounting
+    bills. UNLIMITED and THROTTLE_OK are not paid data; an unlimited leg
+    carrying beside the wire is two free things sharing, not a leak.
+
+    "Healthy" is :func:`free_leg_is_carrying`'s proof standard - UP, answered,
+    bytes arriving - not mere presence. A dead wire makes metered traffic the
+    only traffic available, and warning about it would blame the legs doing
+    the only job on offer.
+
+    Reads the weights the last pass actually produced, so this must run after
+    :func:`recompute` (or on status paths whose ``effective_weight`` the
+    agent keeps current). Takes the list rather than a single path because,
+    like the damping decision, the answer is bond-wide: one leg's share is
+    only suspicious in the context of the others.
+    """
+    if not free_leg_is_carrying(paths):
+        return []
+    offenders = []
+    for p in paths:
+        rank = COST_RANK.get(p.effective_cost_class, 3)
+        if rank < COST_RANK[CostClass.METERED]:
+            continue
+        if (p.effective_weight or 0) > policy.weight_floor:
+            offenders.append(p.name)
+    return offenders
+
+
 def effective_weight(
     path: PathRuntime,
     policy: PolicyConfig,
