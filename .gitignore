@@ -63,3 +63,8 @@ companion-android/local.properties
 
 # Agent worktrees are local scratch, never part of a change.
 .claude/worktrees/
+
+# Scratch files a lane run left on main once (#252); never commit them again.
+/test.txt
+/bin/test.txt
+/.loom/test.txt
