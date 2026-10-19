@@ -80,13 +80,13 @@ object IslandReport {
      */
     fun evaluate(
         relayListening: Boolean,
-        consoleAnsweredOnLan: Boolean,
+        proximity: RouterProximity,
         carryingLegs: Int?,
     ): IslandState {
         // FIRST, because a phone whose own relay is down is not a witness. It
         // would report NOT_NEAR_ROUTER from the sofa and look like a departure.
         if (!relayListening) return IslandState.RELAY_NOT_READY
-        if (!consoleAnsweredOnLan || carryingLegs == null) return IslandState.NOT_NEAR_ROUTER
+        if (proximity != RouterProximity.LOCAL || carryingLegs == null) return IslandState.NOT_NEAR_ROUTER
         return if (carryingLegs > 0) IslandState.ROUTER_CARRYING else IslandState.ROUTER_NOT_CARRYING
     }
 }
