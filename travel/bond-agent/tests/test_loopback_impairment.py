@@ -119,6 +119,24 @@ verify_impairment apclix0 blackhole 1
     assert result.returncode != 0
 
 
+def test_router_blackhole_cleanup_reports_failed_rule_inspection():
+    script = Path(__file__).resolve().parents[3] / "scripts" / "chaos.sh"
+    shell = f"""
+ZIPPIE_CHAOS_LIBRARY=1 . '{script}'
+iptables() {{
+    case "$1" in
+        -C) return 1 ;;
+        -S) echo '-A INPUT -i apclix0 -m comment --comment zippie-chaos-blackhole -j DROP' ;;
+    esac
+}}
+say() {{ echo "$*"; }}
+blackhole_off apclix0
+"""
+    result = subprocess.run(["sh", "-c", shell], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "could not inspect blackhole rule" in result.stdout
+
+
 def test_router_harness_reads_packet_mode_membership_from_console():
     script = Path(__file__).resolve().parents[3] / "scripts" / "chaos.sh"
     shell = f"""
@@ -148,6 +166,19 @@ test ! -s "$CRON_FILE"
     result = subprocess.run(["sh", "-c", shell], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert "cleanup apclix0 # zippie-chaos-deadline" in result.stdout
+
+
+def test_router_harness_reports_failed_deadline_removal():
+    script = Path(__file__).resolve().parents[3] / "scripts" / "chaos.sh"
+    shell = f"""
+ZIPPIE_CHAOS_LIBRARY=1 . '{script}'
+crontab() {{ [ "$1" = -l ] && echo '0 0 * * * cleanup # zippie-chaos-deadline'; return 1; }}
+say() {{ echo "$*"; }}
+clear_deadline
+"""
+    result = subprocess.run(["sh", "-c", shell], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "deadline could not be cleared" in result.stdout
 
 
 def _clockwork():

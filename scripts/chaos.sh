@@ -115,6 +115,9 @@ clear_deadline() {
     crontab "$_cron_file"
     _result=$?
     rm -f "$_cron_file"
+    if [ "$_result" -ne 0 ]; then
+        say "ABORT: deadline could not be cleared"
+    fi
     return "$_result"
 }
 
@@ -188,7 +191,21 @@ blackhole_off() {
         if iptables -C "$1" "$2" "$_blackhole_dev" -m comment \
             --comment "$BLACKHOLE_TAG" -j DROP 2>/dev/null; then
             iptables -D "$1" "$2" "$_blackhole_dev" -m comment \
-                --comment "$BLACKHOLE_TAG" -j DROP || return 1
+                --comment "$BLACKHOLE_TAG" -j DROP || {
+                    say "ABORT: could not remove blackhole rule from $1"
+                    return 1
+                }
+        else
+            _rules=$(iptables -S "$1") || {
+                say "ABORT: could not inspect blackhole rule on $1"
+                return 1
+            }
+            if printf '%s\n' "$_rules" \
+                | grep -F -- "-A $1 $2 $_blackhole_dev -m comment --comment" \
+                | grep -Fq "$BLACKHOLE_TAG"; then
+                say "ABORT: could not inspect blackhole rule on $1"
+                return 1
+            fi
         fi
     done
 }
