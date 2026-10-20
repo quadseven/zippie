@@ -284,12 +284,18 @@ _WIREGUARD_EMPTY_TRANSPORT_BYTES = 32
 def projected_idle_mb_per_day(
     metered_legs: int, probe_interval_s: float, keepalive_s: int
 ) -> float:
-    """Upper-bound packet-mode idle floor, including IPv4 and UDP headers."""
+    """Estimate packet-mode idle traffic, including IP/UDP and RTT-hint bytes.
+
+    The `probes` term below charges each request/reply pair as
+    `2 * (HEADER_LEN + _IPV4_UDP_HEADER_BYTES) + 2`: two framed probes and
+    the request's two RTT-hint payload bytes. The reply has no payload.
+    Periodic WireGuard keepalives are accounted separately below.
+    """
     if metered_legs <= 0:
         return 0.0
     seconds_per_day = 86400
     framed_probe = HEADER_LEN + _IPV4_UDP_HEADER_BYTES
-    probes = metered_legs * 2 * framed_probe * seconds_per_day / max(0.2, probe_interval_s)
+    probes = metered_legs * (2 * framed_probe + 2) * seconds_per_day / max(0.2, probe_interval_s)
     keepalives = 0.0
     if keepalive_s > 0:
         keepalives = (
@@ -1200,10 +1206,16 @@ class BondAgent:
         the lot. Nothing short of that proves the tunnel can carry traffic.
 
         No deadlock, because the datapath does not need the route to work. The
-        legs dial out with SO_BINDTODEVICE and the home endpoint has its own /32
-        pin, so frames flow, the handshake completes, and delivery starts while
-        the route is still absent. The route follows the evidence rather than
-        creating it.
+        legs dial out with SO_BINDTODEVICE, so frames flow and the handshake
+        completes while the route is still absent. The prover's evidence traffic
+        reaches the far tunnel address over the `<tunnel_ip>/32 dev pbz0` route
+        that _ensure_packet_tunnel installs when the tunnel comes up. The
+        home-address /32 is a different route: _pin_packet_endpoint installs it
+        (net.pin_host_route, via the best carrying leg) just before the default
+        route goes in, so other main-table traffic to the home address stays off
+        the tunnel once that route exists; it is not what lets the transport
+        sockets reach home. The route follows the evidence rather than creating
+        it.
 
         The failure mode this buys is the right one: a packet datapath that
         cannot deliver simply never gets the route, LAN clients keep using the
@@ -3912,9 +3924,7 @@ class BondAgent:
                 # at-home state, so a non-empty list is always a real finding
                 # and the dashboard banners it.
                 "metered_despite_free_leg": (
-                    policy.metered_carrying_despite_healthy_free_leg(
-                        self.paths, self.config.policy
-                    )
+                    policy.metered_carrying_despite_healthy_free_leg(self.paths, self.config.policy)
                 ),
             }
 
@@ -4777,6 +4787,12 @@ class BondAgent:
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
                     self.wfile.write(body)
+                    return
+                if parsed.path.lower().endswith(".apk"):
+                    # TESTKEY-signed companion installs must never be served
+                    # from this console (#249). A 403, not a 404, so the client
+                    # knows the request was understood and refused.
+                    self.send_error(403, "serving APKs from agent dashboard is forbidden")
                     return
                 self.send_error(404)
 
