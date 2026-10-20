@@ -181,6 +181,78 @@ clear_deadline
     assert "deadline could not be cleared" in result.stdout
 
 
+def test_router_harness_reports_failed_deadline_install():
+    """A rejected install leaves the deadline in the old table, so silence here
+    would let a phantom deadline clear a later run's impairment at the wrong
+    time."""
+    script = Path(__file__).resolve().parents[3] / "scripts" / "chaos.sh"
+    shell = f"""
+ZIPPIE_CHAOS_LIBRARY=1 . '{script}'
+crontab() {{ if [ "$1" = -l ]; then echo '0 0 * * * cleanup # zippie-chaos-deadline'; return 0; fi; return 1; }}
+say() {{ echo "$*"; }}
+clear_deadline
+"""
+    result = subprocess.run(["sh", "-c", shell], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "deadline could not be cleared" in result.stdout
+
+
+def test_router_blackhole_rolls_back_a_partial_insert():
+    """A failed insert must not leak the rules that already went in. The rollback
+    deletes by specification instead of asking iptables -C, because -C is exactly
+    the check that can fail transiently and strand a live drop rule."""
+    script = Path(__file__).resolve().parents[3] / "scripts" / "chaos.sh"
+    shell = f"""
+ZIPPIE_CHAOS_LIBRARY=1 . '{script}'
+iptables() {{
+    case "$1" in
+        -C) return 1 ;;
+        -S) return 0 ;;
+        -I)
+            echo "I:$*"
+            if [ "$2" = FORWARD ]; then return 1; fi
+            return 0
+            ;;
+        -D)
+            echo "D:$*"
+            return 0
+            ;;
+    esac
+}}
+say() {{ echo "$*"; }}
+blackhole_on apclix0
+"""
+    result = subprocess.run(["sh", "-c", shell], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "D:-D INPUT -i apclix0" in result.stdout
+    assert "D:-D OUTPUT -o apclix0" in result.stdout
+    assert "D:-D FORWARD" not in result.stdout
+
+
+def test_router_blackhole_drop_counter_follows_the_pkts_column():
+    """The counter is evidence that an impairment is real, so it must read the
+    named column rather than whichever field happens to come first in this
+    iptables version."""
+    script = Path(__file__).resolve().parents[3] / "scripts" / "chaos.sh"
+    shell = f"""
+ZIPPIE_CHAOS_LIBRARY=1 . '{script}'
+iptables() {{
+    case "$1" in
+        -L) cat <<'EOF'
+Chain OUTPUT (policy ACCEPT 0 packets, 0 bytes)
+    num   pkts      bytes target     prot opt in     out     source               destination
+    1       42        0 DROP       all  --  *      apclix0  0.0.0.0/0            0.0.0.0/0            /* zippie-chaos-blackhole */
+EOF
+            ;;
+    esac
+}}
+blackhole_drops
+"""
+    result = subprocess.run(["sh", "-c", shell], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "42"
+
+
 def _clockwork():
     """A hand-cranked monotonic clock. Delay is a TIME property, and a test that
     waited on the wall clock would be slow and flaky in the same stroke."""
