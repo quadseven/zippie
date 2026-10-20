@@ -112,13 +112,12 @@ arm_deadline() {
 clear_deadline() {
     _cron_file=/tmp/zippie-chaos-crontab.$$
     crontab -l 2>/dev/null | grep -v '# zippie-chaos-deadline$' > "$_cron_file" || :
-    crontab "$_cron_file"
-    _result=$?
-    rm -f "$_cron_file"
-    if [ "$_result" -ne 0 ]; then
+    if ! crontab "$_cron_file"; then
+        rm -f "$_cron_file"
         say "ABORT: deadline could not be cleared"
+        return 1
     fi
-    return "$_result"
+    rm -f "$_cron_file"
 }
 
 # ----------------------------------------------------------------- probing --
@@ -170,16 +169,40 @@ ingress_off() {
     tc qdisc del dev "$1" ingress 2>/dev/null
 }
 
+# Delete the first $2 tagged rules this call inserted, by specification.
+# Deliberately does not consult `iptables -C`: that check can fail transiently
+# while the rule is still present, which is exactly how a partial insert leaks.
+blackhole_rollback() {
+    _rollback_dev=$1
+    _rollback_left=$2
+    for _spec in "INPUT -i" "OUTPUT -o" "FORWARD -i" "FORWARD -o"; do
+        [ "$_rollback_left" -le 0 ] && return 0
+        # shellcheck disable=SC2086  # split the fixed chain/direction pair
+        set -- $_spec
+        if ! iptables -D "$1" "$2" "$_rollback_dev" -m comment \
+            --comment "$BLACKHOLE_TAG" -j DROP; then
+            say "ABORT: could not roll back blackhole rule on $1"
+            return 1
+        fi
+        _rollback_left=$((_rollback_left - 1))
+    done
+}
+
 blackhole_on() {
     _blackhole_dev=$1
+    # Clear any rule left by an earlier call first, so a retry cannot stack a
+    # second tagged rule that blackhole_off would then leave behind.
+    blackhole_off "$_blackhole_dev" || return 1
+    _inserted=0
     for _spec in "INPUT -i" "OUTPUT -o" "FORWARD -i" "FORWARD -o"; do
         # shellcheck disable=SC2086  # split the fixed chain/direction pair
         set -- $_spec
         if ! iptables -I "$1" 1 "$2" "$_blackhole_dev" -m comment \
             --comment "$BLACKHOLE_TAG" -j DROP; then
-            blackhole_off "$_blackhole_dev"
+            blackhole_rollback "$_blackhole_dev" "$_inserted"
             return 1
         fi
+        _inserted=$((_inserted + 1))
     done
 }
 
@@ -211,8 +234,14 @@ blackhole_off() {
 }
 
 blackhole_drops() {
-    iptables -L OUTPUT -vxn 2>/dev/null | awk -v tag="$BLACKHOLE_TAG" \
-        'index($0, tag) {print $1; exit}'
+    iptables -L OUTPUT -vxn 2>/dev/null | awk -v tag="$BLACKHOLE_TAG" '
+        {
+            if (col == 0) {
+                for (i = 1; i <= NF; i++) if ($i == "pkts") { col = i; next }
+            }
+            if (col && index($0, tag)) { print $col; exit }
+        }
+    '
 }
 
 # Prove the impairment is real. $3 is the kind: blackhole|loss|delay.
