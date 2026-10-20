@@ -880,7 +880,8 @@ class RelayService : Service() {
             runBlocking {
                 BondStatusClient.probe(local, wifi = SystemWifiRoute(this@RelayService))
             }
-        }.getOrNull() ?: return IslandReport.evaluate(listening, RouterProximity.UNREACHABLE, null)
+        }.onFailure { Log.w(TAG, "router probe failed: ${it.message}") }
+            .getOrNull() ?: return IslandReport.evaluate(listening, RouterProximity.UNREACHABLE, null)
         val status = result as? ConsoleResult.Ok
         return IslandReport.evaluate(
             relayListening = listening,
