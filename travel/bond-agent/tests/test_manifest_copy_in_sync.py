@@ -52,6 +52,7 @@ PKG_MODULES = [
     "auth.py",
     "classify.py",
     "datapath.py",
+    "egress.py",
     "home_transport.py",
     "retransmit.py",
     "transport.py",
