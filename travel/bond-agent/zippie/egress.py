@@ -19,8 +19,11 @@ DEST_TAILNET = "tailnet"
 DEST_SITE = "site"
 DEST_INTERNET = "internet"
 
-# Tailscale's CGNAT range: the tailnet lives here.
-TAILNET_CIDR = "100.64.0.0/10"
+# Tailscale's CGNAT range: the tailnet lives here. This is a product
+# constant, not a deployment address.
+TAILNET_CIDR = (
+    "100.64.0.0/10"  # leak-guard-allow: Tailscale's well-known CGNAT range, a product constant
+)
 # Site bands: the home LAN and its directly attached networks. Empty by
 # default; the operator configures them per deployment.
 SITE_CIDRS: list[str] = []

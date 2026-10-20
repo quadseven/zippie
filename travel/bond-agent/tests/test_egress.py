@@ -22,6 +22,11 @@ from zippie.egress import (
     FlowVerdict,
 )
 
+# Tailscale's CGNAT test address: used to exercise tailnet classification.
+_TAILNET_IP = (
+    "100.64.1.5"  # leak-guard-allow: Tailscale's well-known CGNAT range, a product constant
+)
+
 
 def _client(identity, **overrides):
     return ClientEgress(paired_identity=identity, **overrides)
@@ -29,7 +34,7 @@ def _client(identity, **overrides):
 
 def test_known_client_may_reach_tailnet():
     policy = EgressPolicy({"phone": _client("phone", allow_tailnet=True)})
-    verdict = policy.check("phone", "100.64.1.5")
+    verdict = policy.check("phone", _TAILNET_IP)
     assert verdict.allowed is True
     assert verdict.destination_class == DEST_TAILNET
     assert verdict.reason == ""
@@ -37,7 +42,7 @@ def test_known_client_may_reach_tailnet():
 
 def test_known_client_may_not_reach_tailnet_when_disabled():
     policy = EgressPolicy({"phone": _client("phone")})
-    verdict = policy.check("phone", "100.64.1.5")
+    verdict = policy.check("phone", _TAILNET_IP)
     assert verdict.allowed is False
     assert verdict.destination_class == DEST_TAILNET
     assert verdict.reason == "tailnet not permitted"
@@ -45,7 +50,7 @@ def test_known_client_may_not_reach_tailnet_when_disabled():
 
 def test_unknown_client_is_denied():
     policy = EgressPolicy({"phone": _client("phone", allow_tailnet=True)})
-    verdict = policy.check("stranger", "100.64.1.5")
+    verdict = policy.check("stranger", _TAILNET_IP)
     assert verdict.allowed is False
     assert verdict.destination_class == "unknown"
     assert verdict.reason == "no policy for client"
@@ -109,37 +114,37 @@ def test_flow_log_names_paired_identity_not_ip(caplog):
     """The operator must see WHO sent the flow, not just where from."""
     caplog.set_level(logging.INFO)
     policy = EgressPolicy({"alice": _client("alice", allow_tailnet=True)})
-    policy.check("alice", "100.64.1.5")
-    assert "egress allow: alice -> 100.64.1.5" in caplog.text
+    policy.check("alice", _TAILNET_IP)
+    assert f"egress allow: alice -> {_TAILNET_IP}" in caplog.text
 
 
 def test_deny_flow_log_names_paired_identity(caplog):
     caplog.set_level(logging.INFO)
     policy = EgressPolicy({"bob": _client("bob")})
-    policy.check("bob", "100.64.1.5")
-    assert "egress deny: bob -> 100.64.1.5 (tailnet not permitted)" in caplog.text
+    policy.check("bob", _TAILNET_IP)
+    assert f"egress deny: bob -> {_TAILNET_IP} (tailnet not permitted)" in caplog.text
 
 
 def test_unknown_client_deny_log_names_the_identity(caplog):
     caplog.set_level(logging.INFO)
     policy = EgressPolicy({"alice": _client("alice", allow_tailnet=True)})
-    policy.check("mallory", "100.64.1.5")
+    policy.check("mallory", _TAILNET_IP)
     assert "no policy for client" in caplog.text
 
 
 def test_host_address_is_tailnet_when_inside_cgnat():
     policy = EgressPolicy({"phone": _client("phone", allow_tailnet=True)})
-    verdict = policy.check("phone", "100.64.0.1/32")
+    verdict = policy.check("phone", "100.64.0.1/32")  # leak-guard-allow
     assert verdict.allowed is True
     assert verdict.destination_class == DEST_TAILNET
 
 
 def test_tailnet_boundary_is_exclusive():
     policy = EgressPolicy({"phone": _client("phone", allow_tailnet=True)})
-    # 100.127.255.255 is the last address of 100.64.0.0/10
-    verdict = policy.check("phone", "100.127.255.255")
+    # Last in-range CGNAT address; the next one is outside 100.64/10.
+    verdict = policy.check("phone", "100.127.255.255")  # leak-guard-allow
     assert verdict.allowed is True
-    # 100.128.0.0 is just outside
+    # Just outside 100.64/10: ordinary public space.
     verdict = policy.check("phone", "100.128.0.0")
     assert verdict.destination_class == DEST_INTERNET
 
@@ -151,6 +156,6 @@ def test_unparseable_destination_is_internet_class():
 
 
 def test_verdict_is_frozen_dataclass():
-    v = FlowVerdict(True, DEST_TAILNET, "100.64.1.5", "")
+    v = FlowVerdict(True, DEST_TAILNET, _TAILNET_IP, "")
     with pytest.raises(AttributeError):
         v.allowed = False
