@@ -50,7 +50,7 @@ def test_known_client_may_not_reach_tailnet_when_disabled():
 
 def test_unknown_client_is_denied():
     policy = EgressPolicy({"phone": _client("phone", allow_tailnet=True)})
-    verdict = policy.check("stranger", _TAILNET_IP)
+    verdict = policy.check("client-unknown", _TAILNET_IP)
     assert verdict.allowed is False
     assert verdict.destination_class == "unknown"
     assert verdict.reason == "no policy for client"
@@ -113,22 +113,22 @@ def test_bad_cidr_in_policy_is_skipped_and_logged(caplog):
 def test_flow_log_names_paired_identity_not_ip(caplog):
     """The operator must see WHO sent the flow, not just where from."""
     caplog.set_level(logging.INFO)
-    policy = EgressPolicy({"alice": _client("alice", allow_tailnet=True)})
-    policy.check("alice", _TAILNET_IP)
-    assert f"egress allow: alice -> {_TAILNET_IP}" in caplog.text
+    policy = EgressPolicy({"client-a": _client("client-a", allow_tailnet=True)})
+    policy.check("client-a", _TAILNET_IP)
+    assert f"egress allow: client-a -> {_TAILNET_IP}" in caplog.text
 
 
 def test_deny_flow_log_names_paired_identity(caplog):
     caplog.set_level(logging.INFO)
-    policy = EgressPolicy({"bob": _client("bob")})
-    policy.check("bob", _TAILNET_IP)
-    assert f"egress deny: bob -> {_TAILNET_IP} (tailnet not permitted)" in caplog.text
+    policy = EgressPolicy({"client-b": _client("client-b")})
+    policy.check("client-b", _TAILNET_IP)
+    assert f"egress deny: client-b -> {_TAILNET_IP} (tailnet not permitted)" in caplog.text
 
 
 def test_unknown_client_deny_log_names_the_identity(caplog):
     caplog.set_level(logging.INFO)
-    policy = EgressPolicy({"alice": _client("alice", allow_tailnet=True)})
-    policy.check("mallory", _TAILNET_IP)
+    policy = EgressPolicy({"client-a": _client("client-a", allow_tailnet=True)})
+    policy.check("client-x", _TAILNET_IP)
     assert "no policy for client" in caplog.text
 
 
