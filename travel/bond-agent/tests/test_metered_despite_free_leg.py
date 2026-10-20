@@ -104,7 +104,7 @@ def test_no_healthy_free_leg_means_no_warning():
 
 
 def test_a_never_answered_free_leg_is_not_healthy():
-    """The 2026-08-20 wire: present, UP, tx flowing, rx pinned at zero. It
+    """The outage wire: present, UP, tx flowing, rx pinned at zero. It
     must not count as the healthy free leg that makes metered traffic
     suspicious - that incident is exactly what `never_handshaked` exists
     to exclude."""

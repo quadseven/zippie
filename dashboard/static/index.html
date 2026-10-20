@@ -385,7 +385,7 @@
       b.textContent = "Metered traffic on paid legs. ";
       const legs = document.createElement("code");
       legs.textContent = bad.join(", ");
-      cw.append(b, legs, " carrying a real share while a healthy free leg exists — the free-leg preference may not be holding.");
+      cw.append(b, legs, " carrying a real share while a healthy free leg exists; the free-leg preference may not be holding.");
     } else {
       cw.hidden = true;
     }
@@ -404,6 +404,9 @@
         + " · idle floor " + e.projected_idle_mb_day + " MB/day"
         + " · probes " + e.probe_interval_ms + " ms"
         + " · keepalive " + e.persistent_keepalive_s + " s";
+      // Which ruler `metered` was measured with (#183): whether the IPv4+UDP
+      // headers are in the number a carrier bill gets compared against.
+      economy.textContent += " \u00b7 bytes " + (e.bytes_definition ?? "unknown");
       economy.hidden = false;
     } else {
       economy.hidden = true;
@@ -473,7 +476,9 @@
       whereEl.className = "link-where";
       // Keep the identifier and interface visible but secondary -- when a
       // link misbehaves you need to know WHICH interface, not just its nickname.
-      const ident = [p.label && p.label !== p.name ? p.name : null, p.ssid, p.interface]
+      // The carrier and plan name say which LINE it is, when someone typed them.
+      const ident = [p.label && p.label !== p.name ? p.name : null, p.ssid, p.interface,
+                     p.carrier, p.plan_name]
         .filter(Boolean).join(" · ");
       whereEl.textContent = ident || "—";
       const pill = document.createElement("span");
