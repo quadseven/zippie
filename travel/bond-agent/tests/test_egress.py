@@ -52,10 +52,10 @@ def test_unknown_client_is_denied():
 
 
 def test_site_class_and_allow():
-    egress_mod.SITE_CIDRS = ["192.168.0.0/16"]
+    egress_mod.SITE_CIDRS = ["192.0.2.0/24"]
     try:
         policy = EgressPolicy({"phone": _client("phone", allow_site=True)})
-        verdict = policy.check("phone", "192.168.1.1")
+        verdict = policy.check("phone", "192.0.2.1")
         assert verdict.allowed is True
         assert verdict.destination_class == DEST_SITE
     finally:
@@ -63,10 +63,10 @@ def test_site_class_and_allow():
 
 
 def test_site_denied_when_disabled():
-    egress_mod.SITE_CIDRS = ["192.168.0.0/16"]
+    egress_mod.SITE_CIDRS = ["192.0.2.0/24"]
     try:
         policy = EgressPolicy({"phone": _client("phone")})
-        verdict = policy.check("phone", "192.168.1.1")
+        verdict = policy.check("phone", "192.0.2.1")
         assert verdict.allowed is False
         assert verdict.destination_class == DEST_SITE
         assert verdict.reason == "site not permitted"
