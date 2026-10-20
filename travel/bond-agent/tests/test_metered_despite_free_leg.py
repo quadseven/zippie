@@ -68,7 +68,7 @@ def test_a_damped_metered_leg_at_the_floor_is_not_a_warning():
     pol = PolicyConfig()
     paths = [
         _healthy_free(),
-        _path("pixel", weight=pol.weight_floor),
+        _path("phone", weight=pol.weight_floor),
     ]
     assert metered_carrying_despite_healthy_free_leg(paths, pol) == []
 
@@ -77,20 +77,20 @@ def test_a_metered_leg_above_the_floor_beside_a_healthy_free_leg_warns():
     pol = PolicyConfig()
     paths = [
         _healthy_free(),
-        _path("pixel", weight=pol.weight_floor + 24),
+        _path("phone", weight=pol.weight_floor + 24),
     ]
-    assert metered_carrying_despite_healthy_free_leg(paths, pol) == ["pixel"]
+    assert metered_carrying_despite_healthy_free_leg(paths, pol) == ["phone"]
 
 
 def test_every_offending_leg_is_named():
     pol = PolicyConfig()
     paths = [
         _healthy_free(),
-        _path("pixel", weight=pol.weight_floor + 24),
-        _path("fi", weight=pol.weight_floor + 8),
-        _path("starlink", weight=pol.weight_floor),  # damped: not named
+        _path("phone", weight=pol.weight_floor + 24),
+        _path("phone2", weight=pol.weight_floor + 8),
+        _path("satellite", weight=pol.weight_floor),  # damped: not named
     ]
-    assert metered_carrying_despite_healthy_free_leg(paths, pol) == ["pixel", "fi"]
+    assert metered_carrying_despite_healthy_free_leg(paths, pol) == ["phone", "phone2"]
 
 
 def test_no_healthy_free_leg_means_no_warning():
@@ -99,7 +99,7 @@ def test_no_healthy_free_leg_means_no_warning():
     legs for doing the only job available."""
     pol = PolicyConfig()
     dead_wire = _healthy_free(state=PathState.DOWN)
-    paths = [dead_wire, _path("pixel", weight=100)]
+    paths = [dead_wire, _path("phone", weight=100)]
     assert metered_carrying_despite_healthy_free_leg(paths, pol) == []
 
 
@@ -112,7 +112,7 @@ def test_a_never_answered_free_leg_is_not_healthy():
     wire = _healthy_free()
     wire.never_handshaked = True
     wire.rx_bytes = 0
-    paths = [wire, _path("pixel", weight=100)]
+    paths = [wire, _path("phone", weight=100)]
     assert metered_carrying_despite_healthy_free_leg(paths, pol) == []
 
 
@@ -140,7 +140,7 @@ def test_a_down_metered_leg_is_not_carrying():
     pol = PolicyConfig()
     paths = [
         _healthy_free(),
-        _path("pixel", state=PathState.DOWN, weight=0),
+        _path("phone", state=PathState.DOWN, weight=0),
     ]
     assert metered_carrying_despite_healthy_free_leg(paths, pol) == []
 
@@ -159,8 +159,6 @@ def test_the_free_leg_itself_is_never_named():
 
 
 def _wired_agent(tmp_path):
-    from pathlib import Path  # noqa: F401  (kept local: this module is policy-pure above)
-
     from zippie.agent import BondAgent
     from zippie.config import parse_config
 
@@ -175,13 +173,13 @@ def _wired_agent(tmp_path):
                 "home": {
                     "endpoint": "home.example",
                     "server_public_key": "c2VydmVy",
-                    "address_cidr": "10.66.0.10/24",
+                    "address_cidr": "10.66.0.10/24",  # leak-guard-allow: tunnel fixture, same as sibling tests
                     "ports": [51902],
                 },
                 "policy": {"mode": "aggregate"},
                 "paths": [
                     {"name": "ethernet", "interface": "eth0", "cost_class": "free"},
-                    {"name": "pixel", "interface": "wwan0", "cost_class": "metered"},
+                    {"name": "phone", "interface": "wwan0", "cost_class": "metered"},
                 ],
             }
         )
@@ -191,7 +189,7 @@ def _wired_agent(tmp_path):
     wire.never_handshaked = False
     wire.rx_bytes = 4096
     wire.effective_weight = 100
-    phone = next(p for p in agent.paths if p.name == "pixel")
+    phone = next(p for p in agent.paths if p.name == "phone")
     phone.state = PathState.UP
     phone.never_handshaked = False
     phone.rx_bytes = 2048
@@ -201,7 +199,7 @@ def _wired_agent(tmp_path):
 def test_status_dict_names_the_offending_leg(tmp_path):
     agent, phone = _wired_agent(tmp_path)
     phone.effective_weight = agent.config.policy.weight_floor + 24
-    assert agent.status_dict()["metered_despite_free_leg"] == ["pixel"]
+    assert agent.status_dict()["metered_despite_free_leg"] == ["phone"]
 
 
 def test_status_dict_is_quiet_when_the_metered_leg_is_damped(tmp_path):

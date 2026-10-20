@@ -429,8 +429,8 @@ def metered_carrying_despite_healthy_free_leg(
     floor while a free leg carries - a damped leg is the design WORKING, so
     it is not named here. A leg ABOVE the floor means the preference is not
     holding (or never engaged): paid data is leaving while the wire is good,
-    which is the 2026-08-20 outage in miniature and deserves a banner, not a
-    gauge only a Datadog monitor reads.
+    which is the 2026-08-20 outage in miniature and deserves a banner, not
+    a gauge only an external monitor reads.
 
     "Metered" is METERED and EXPENSIVE, the same set the economy accounting
     bills. UNLIMITED and THROTTLE_OK are not paid data; an unlimited leg
