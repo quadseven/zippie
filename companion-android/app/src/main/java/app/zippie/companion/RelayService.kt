@@ -875,15 +875,19 @@ class RelayService : Service() {
     private fun routerView(): IslandState {
         val listening = lanSocket != null
         val local = config.consoleCandidates.filter { it.isLocal }
-        if (local.isEmpty()) return IslandReport.evaluate(listening, false, null)
-        val status = runCatching {
+        if (local.isEmpty()) {
+            return IslandReport.evaluate(listening, RouterProximity.UNREACHABLE, null)
+        }
+        val probe = runCatching {
             runBlocking {
-                BondStatusClient.probe(local, wifi = SystemWifiRoute(this@RelayService)).first
+                BondStatusClient.probe(local, wifi = SystemWifiRoute(this@RelayService))
             }
-        }.getOrNull() as? ConsoleResult.Ok
+        }.getOrNull()
+        val proximity = probe?.second ?: RouterProximity.UNREACHABLE
+        val status = probe?.first as? ConsoleResult.Ok
         return IslandReport.evaluate(
             relayListening = listening,
-            consoleAnsweredOnLan = status != null,
+            proximity = proximity,
             carryingLegs = status?.status?.carryingCount,
         )
     }
