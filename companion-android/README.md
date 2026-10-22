@@ -427,8 +427,6 @@ the APK pulled from each device rather than off a log. That digest is PINNED in
 is `zippie` on every key this project has used, throwaway keys included, so only
 the digest tells them apart - a build whose file name, version name and artifact
 name all said TESTKEY reached the fleet once anyway. Naming is not a control.
-The fleet audit and web root verification are recorded in
-`docs/fleet-audit-testkey-installs.md`.
 
 ## Getting a build onto the handsets
 

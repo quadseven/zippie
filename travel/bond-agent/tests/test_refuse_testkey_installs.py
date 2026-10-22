@@ -205,7 +205,6 @@ def test_router_web_root_guards_in_scripts():
     """Verify router deploy and drift scripts guard /www against TESTKEY APKs."""
     deploy_content = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     assert "/www/*TESTKEY*.apk" in deploy_content
-    assert "zippie-block-testkey.conf" in deploy_content
 
     drift_content = DRIFT_SCRIPT.read_text(encoding="utf-8")
     assert "/www/*TESTKEY*.apk" in drift_content

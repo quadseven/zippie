@@ -978,15 +978,6 @@ fi
 # The router web root (/www) must never serve TESTKEY or throwaway-signed APKs.
 say "guarding web root against TESTKEY / throwaway APKs"
 ssh_run "rm -f /www/*TESTKEY*.apk /www/*throwaway*.apk 2>/dev/null || true"
-if ssh_run "[ -d /etc/nginx/conf.d ]"; then
-  ssh_run "cat > /etc/nginx/conf.d/zippie-block-testkey.conf <<'EOF'
-# Refuse serving TESTKEY or throwaway APKs from web root (zippie#241)
-location ~* (TESTKEY|throwaway).*\.apk$ {
-    return 403;
-}
-EOF
-/etc/init.d/nginx reload >/dev/null 2>&1 || true"
-fi
 
 # BOOT-ENABLE, AND PROVE IT. This is the step whose absence caused the outage,
 # so it is checked rather than assumed - `enable` prints nothing on success and
