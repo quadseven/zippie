@@ -1,7 +1,9 @@
 package app.zippie.companion
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.regex.Pattern
 
 /**
  * The signal that would have caught the two outages nothing caught (zippie#286),
@@ -15,6 +17,33 @@ class IslandReportTest {
         assertEquals(
             IslandState.ROUTER_NOT_CARRYING,
             IslandReport.evaluate(relayListening = true, proximity = RouterProximity.LOCAL, carryingLegs = 0),
+        )
+    }
+
+    @Test
+    fun `the islanding signal ships within minutes, not days`() {
+        // The acceptance criterion from #320: "A monitor fires in minutes, not
+        // days, when the signal is set". The heartbeat ships router_view telemetry
+        // every SHIP_INTERVAL_MS (20s), so the ROUTER_NOT_CARRYING signal reaches
+        // Datadog within ~20 seconds of the router becoming islanded - well under
+        // the "minutes" bound and orders of magnitude faster than the "days" the
+        // old hub observer would have taken.
+        //
+        // SHIP_INTERVAL_MS is private in RelayService, so we parse it from source.
+        // A future change that raises the interval past 5 minutes would break this
+        // test and require a deliberate decision to relax the criterion.
+        val src = java.io.File("src/main/java/app/zippie/companion/RelayService.kt").readText()
+        val intervalLine = src.lines()
+            .first { it.trim().startsWith("private const val SHIP_INTERVAL_MS") }
+        val shipIntervalMs = Pattern.compile("\\d+_?\\d*L?").matcher(intervalLine)
+            .results()
+            .map { it.group().replace("_", "").replace("L", "").toLong() }
+            .first()
+        val fiveMinutesMs = 5 * 60 * 1000L
+        assertTrue(
+            "SHIP_INTERVAL_MS must be under 5 minutes so the islanding signal " +
+                "reaches Datadog in minutes, not days. Current: ${shipIntervalMs}ms",
+            shipIntervalMs < fiveMinutesMs
         )
     }
 
