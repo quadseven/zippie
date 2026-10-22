@@ -35,7 +35,7 @@ class IslandReportTest {
         val src = java.io.File("src/main/java/app/zippie/companion/RelayService.kt").readText()
         val intervalLine = src.lines()
             .first { it.trim().startsWith("private const val SHIP_INTERVAL_MS") }
-        val shipIntervalMs = Pattern.compile("\\d+_?\\d*L?").matcher(intervalLine)
+        val shipIntervalMs: Long = Pattern.compile("\\d+_?\\d*L?").matcher(intervalLine)
             .results()
             .map { it.group().replace("_", "").replace("L", "").toLong() }
             .first()

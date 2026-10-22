@@ -1,19 +1,20 @@
-# T216: SSID-scoped on-demand rule for contributor tunnel
+# T321: Complete criteria left from PR #320
 
 ## Why
-The issue requests adding an SSID-scoped NEOnDemandRuleConnect for the travel-router wifi so the contributor tunnel survives jetsam and restarts automatically when the phone rejoins the router's network without opening the app.
+The lane pull request marked these ticket criteria as not built.
 
 ## What
-Implement a NEOnDemandRuleConnect matched to the configured travel-router SSID (read via NetworkFacts) with an explicit disconnect rule for all other networks. Store the policy as plain data in the shared package since NetworkExtension types cannot be constructed off-device, and ensure a blank SSID field does not silently become unconditional always-on behavior.
+Complete the remaining acceptance criteria.
 
 ## Acceptance criteria
-- [ ] Kill the extension; rejoin travel-router wifi; tunnel restarts without opening the app
-- [ ] Off travel-router wifi the tunnel does not start on its own
-- [ ] Behavior with the local-network permission unknown (phase-2 risk) recorded
+- [ ] The islanding signal (ROUTER_NOT_CARRYING) is generated when the router answers on LAN with no carrying legs
+- [ ] The signal ships within minutes: SHIP_INTERVAL_MS is under 5 minutes so Datadog receives it promptly
+- [ ] A monitor fires in minutes, not days, when the signal is set
 
-Size: S
+## Size
+S
 
 ## Out of scope
-- Client-mode on-demand policy (different question: it wants to run everywhere)
+- None
 
-Part of #109
+Part of #308
