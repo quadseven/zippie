@@ -37,10 +37,11 @@ from __future__ import annotations
 
 import logging
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from zippie.auth import AuthLevel, build_identity, parse_auth_level
 from zippie.classify import ClassifierConfig
+from zippie.egress import EgressPolicy
 from zippie.transport import LinkEndpoint, Transport
 
 log = logging.getLogger("zippie.home_transport")
@@ -83,6 +84,15 @@ class HomeTransportConfig:
     # auth_peer_id or every frame fails to verify, with the same single error
     # as a bad MAC.
     auth_peer_id: int = 1
+    # Per-client egress policy. None (default) preserves existing behaviour:
+    # every authenticated frame is delivered. When set, frames from paths with
+    # no mapped identity are dropped (fail closed), and every decision is
+    # logged under the paired identity, never the IP.
+    egress_policy: EgressPolicy | None = None
+    # Maps a link's path_id to the paired identity of the client using that
+    # leg. Home learns one remote per path id on first frame; this map lets
+    # the egress check attribute each flow to a named client.
+    path_identities: dict[int, str] = field(default_factory=dict)
 
 
 def build_home_transport(
@@ -116,7 +126,7 @@ def build_home_transport(
     if selector_factory is not None:
         kwargs["selector_factory"] = selector_factory
 
-    t = Transport(cfg.local_addr, **kwargs)
+    t = HomeTransport(cfg.local_addr, cfg.egress_policy, cfg.path_identities, **kwargs)
     # One physical listener; received path ids become logical downstream links.
     # The initial remote is a placeholder. Hold it out of scheduling until an
     # inbound frame proves where the path lives.
@@ -137,6 +147,47 @@ def build_home_transport(
         cfg.wg_server,
     )
     return t
+
+
+class HomeTransport(Transport):
+    """Transport subclass that enforces per-client egress before delivery.
+
+    The shared `Transport` cannot see inside WireGuard-encrypted payloads, so
+    the egress check here is coarse: a client with no egress class enabled is
+    denied everything (fail closed). Per-destination decisions need the
+    decrypted packet, which lives outside this layer. Every decision is logged
+    under the paired identity, never the IP.
+    """
+
+    def __init__(
+        self,
+        local_addr: tuple[str, int],
+        egress_policy: EgressPolicy | None,
+        path_identities: dict[int, str],
+        **kwargs,
+    ) -> None:
+        super().__init__(local_addr, **kwargs)
+        self.egress_policy = egress_policy
+        self._path_identities = dict(path_identities)
+
+    def set_path_identity(self, path_id: int, paired_identity: str) -> None:
+        """Record which paired client uses which path id."""
+        self._path_identities[path_id] = paired_identity
+
+    def _on_link_data(
+        self, raw: bytes, path_id: int | None = None, addr: tuple[str, int] | None = None
+    ) -> list[bytes]:
+        if self.egress_policy is not None and path_id is not None:
+            paired_identity = self._path_identities.get(path_id)
+            if paired_identity is None:
+                # Fail closed: a path with no mapped identity may not send.
+                log.info("egress drop: path %d has no paired identity", path_id)
+                return []
+            if not self.egress_policy.may_send(paired_identity):
+                log.info("egress drop: %s has no egress permitted", paired_identity)
+                return []
+            log.info("egress pass: %s on path %d", paired_identity, path_id)
+        return super()._on_link_data(raw, path_id, addr)
 
 
 # How often the running transport prints its counters. Chosen so a whole

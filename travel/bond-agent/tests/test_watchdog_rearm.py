@@ -18,7 +18,6 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
@@ -35,6 +34,8 @@ SOLE_REARM_AFTER = 5
 class Harness:
     """A fake router: controls reachability and whether zippie is running."""
 
+    NOW = 2_000_000_000
+
     def __init__(self, tmp: Path):
         self.tmp = tmp
         self.persist = tmp / "persist"
@@ -44,6 +45,8 @@ class Harness:
             d.mkdir(parents=True)
         self.calls = tmp / "calls.log"
         self.events = tmp / "events.log"
+        # Keep the watchdog's clock aligned with the timestamps in its state files.
+        self._stub("date", f'[ "$1" = "+%s" ] || exit 2\necho {self.NOW}\n')
         self._stub("ping", f'[ -f "{tmp}/unreachable" ] && exit 1\nexit 0\n')
         # THE ROUTING TABLE IS NOW PART OF THE ENVIRONMENT (#188). The teardown
         # asks whether anything sits underneath zippie's default route, so the
@@ -149,12 +152,7 @@ class Harness:
         return (self.persist / "watchdog.tripped").exists()
 
     def set_tripped(self) -> None:
-        # NOW, not a fixed epoch. The budget window is 24h wide and the
-        # watchdog compares it against the wall clock, so a hardcoded
-        # timestamp silently ages out of the window and the test starts
-        # asserting the opposite of what it means. The literal that used
-        # to be here (2026-08-01 10:22:52) did exactly that, 24h later.
-        (self.persist / "watchdog.tripped").write_text(f"{int(time.time())}\n")
+        (self.persist / "watchdog.tripped").write_text(f"{self.NOW}\n")
 
     @property
     def stable(self) -> int:
@@ -172,7 +170,9 @@ class Harness:
         c, w = f.read_text().split()
         return int(c), int(w)
 
-    def set_budget(self, count: int, window_start: int) -> None:
+    def set_budget(self, count: int, window_start: int | None = None) -> None:
+        if window_start is None:
+            window_start = self.NOW
         (self.persist / "watchdog.rearms").write_text(f"{count} {window_start}\n")
 
     @property
@@ -265,7 +265,7 @@ def test_budget_is_capped_so_a_flapping_device_stays_down(hz):
     """The original anti-flap intent, preserved."""
     hz.set_tripped()
     hz.set_running(False)
-    hz.set_budget(MAX_REARMS, int(time.time()))  # inside the window; see set_tripped
+    hz.set_budget(MAX_REARMS)
     hz.set_stable(STABLE_MIN - 1)
     hz.run()
     assert not hz.running, "must NOT re-arm once the budget is exhausted"
@@ -277,7 +277,7 @@ def test_budget_is_capped_so_a_flapping_device_stays_down(hz):
 def test_cap_message_is_not_repeated_every_minute(hz):
     hz.set_tripped()
     hz.set_running(False)
-    hz.set_budget(MAX_REARMS, int(time.time()))  # inside the window; see set_tripped
+    hz.set_budget(MAX_REARMS)
     hz.set_stable(STABLE_MIN + 5)
     hz.run()
     hz.run()
@@ -581,7 +581,7 @@ def test_the_sole_uplink_recovery_is_still_bounded(tmp_path):
     hz.set_sole_uplink(True)
     hz.set_tripped()
     hz.set_running(False)
-    hz.set_budget(MAX_REARMS, int(time.time()))
+    hz.set_budget(MAX_REARMS)
 
     for _ in range(SOLE_REARM_AFTER + 3):
         hz.run()

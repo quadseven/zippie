@@ -14,7 +14,7 @@ class IslandReportTest {
         // 2026-08-23: router powered, agent running, LAN fine, no uplink at all.
         assertEquals(
             IslandState.ROUTER_NOT_CARRYING,
-            IslandReport.evaluate(relayListening = true, consoleAnsweredOnLan = true, carryingLegs = 0),
+            IslandReport.evaluate(relayListening = true, proximity = RouterProximity.LOCAL, carryingLegs = 0),
         )
     }
 
@@ -22,7 +22,7 @@ class IslandReportTest {
     fun `a router that is carrying is not reported`() {
         assertEquals(
             IslandState.ROUTER_CARRYING,
-            IslandReport.evaluate(relayListening = true, consoleAnsweredOnLan = true, carryingLegs = 2),
+            IslandReport.evaluate(relayListening = true, proximity = RouterProximity.LOCAL, carryingLegs = 2),
         )
     }
 
@@ -32,7 +32,15 @@ class IslandReportTest {
         // router most of the time; that must be silence, not a page.
         assertEquals(
             IslandState.NOT_NEAR_ROUTER,
-            IslandReport.evaluate(relayListening = true, consoleAnsweredOnLan = false, carryingLegs = null),
+            IslandReport.evaluate(relayListening = true, proximity = RouterProximity.UNREACHABLE, carryingLegs = null),
+        )
+    }
+
+    @Test
+    fun `a remote router answer is not evidence of nearby islanding`() {
+        assertEquals(
+            IslandState.NOT_NEAR_ROUTER,
+            IslandReport.evaluate(relayListening = true, proximity = RouterProximity.REMOTE, carryingLegs = 0),
         )
     }
 
@@ -40,7 +48,7 @@ class IslandReportTest {
     fun `a phone whose own relay is down is not a witness about the router`() {
         assertEquals(
             IslandState.RELAY_NOT_READY,
-            IslandReport.evaluate(relayListening = false, consoleAnsweredOnLan = true, carryingLegs = 0),
+            IslandReport.evaluate(relayListening = false, proximity = RouterProximity.LOCAL, carryingLegs = 0),
         )
     }
 
@@ -50,7 +58,7 @@ class IslandReportTest {
         // NOT_NEAR_ROUTER and reads as a departure it is not.
         assertEquals(
             IslandState.RELAY_NOT_READY,
-            IslandReport.evaluate(relayListening = false, consoleAnsweredOnLan = false, carryingLegs = null),
+            IslandReport.evaluate(relayListening = false, proximity = RouterProximity.UNREACHABLE, carryingLegs = null),
         )
     }
 
@@ -61,7 +69,7 @@ class IslandReportTest {
         // BondUiState type exists to enforce.
         assertEquals(
             IslandState.NOT_NEAR_ROUTER,
-            IslandReport.evaluate(relayListening = true, consoleAnsweredOnLan = true, carryingLegs = null),
+            IslandReport.evaluate(relayListening = true, proximity = RouterProximity.LOCAL, carryingLegs = null),
         )
     }
 
