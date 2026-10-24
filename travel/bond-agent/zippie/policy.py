@@ -398,6 +398,45 @@ def free_leg_is_carrying(paths: list[PathRuntime]) -> bool:
     return False
 
 
+def metered_legs_while_free(paths: list[PathRuntime]) -> list[str]:
+    """Return names of metered/expensive legs that moved bytes this pass while a
+    free leg is UP, handshaked, and has rx_bytes > 0.
+
+    This detects the exact situation zippie#324 warns about: the bond has a
+    genuinely healthy free leg, but metered legs are still carrying traffic.
+    Only legs whose effective_cost_class is METERED or EXPENSIVE and that have
+    sent or received bytes since the last pass are included.
+    """
+    # First check if a free leg is genuinely carrying
+    free_carrying = False
+    for p in paths:
+        if COST_RANK.get(p.effective_cost_class, 3) != COST_RANK[CostClass.FREE]:
+            continue
+        if p.state is not PathState.UP:
+            continue
+        if p.never_handshaked:
+            continue
+        if p.rx_bytes <= 0:
+            continue
+        free_carrying = True
+        break
+
+    if not free_carrying:
+        return []
+
+    # Collect metered/expensive legs that moved bytes (tx + rx > 0)
+    metered_names = []
+    for p in paths:
+        rank = COST_RANK.get(p.effective_cost_class, 3)
+        if rank < COST_RANK[CostClass.METERED]:
+            continue
+        if p.tx_bytes <= 0 and p.rx_bytes <= 0:
+            continue
+        metered_names.append(p.name)
+
+    return metered_names
+
+
 def _damped_for_free_leg(
     base: int, rank: int, policy: PolicyConfig, free_leg_carrying: bool
 ) -> int:
