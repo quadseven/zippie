@@ -79,6 +79,9 @@ func (r *ClientRegistry) Stats() RegistryStats {
 // nothing on its own, which is why the MAC check follows unconditionally. A
 // v2 frame has no id at all and is refused: a multi-client home cannot
 // attribute it, and guessing would defeat the whole point.
+//
+// A discovery proof (FlagPeerProof, discovery.go) is refused even when its MAC
+// is good: it is never this client's traffic.
 func (r *ClientRegistry) Verify(raw []byte) (Frame, *Identity, error) {
 	claimed, ok := PeekClientID(raw)
 	if !ok {
@@ -102,6 +105,9 @@ func (r *ClientRegistry) Verify(raw []byte) (Frame, *Identity, error) {
 		r.stats.BadMAC++
 		r.mu.Unlock()
 		return Frame{}, nil, err
+	}
+	if f.Flags&FlagPeerProof != 0 {
+		return Frame{}, nil, ErrPeerProofOnDatapath
 	}
 	return f, id, nil
 }

@@ -95,17 +95,9 @@ func NewClient(configJSON string) (*Client, error) {
 	// to cleartext when the pairing is missing would make the failure silent
 	// again, in the direction that matters.
 	if c.KeyHex != "" {
-		key, err := hex.DecodeString(c.KeyHex)
+		key, err := c.pairedKey()
 		if err != nil {
-			return nil, fmt.Errorf("bad key_hex: %w", err)
-		}
-		if len(key) < 16 {
-			return nil, fmt.Errorf("key is %d bytes, want at least 16", len(key))
-		}
-		if c.ClientID == 0 {
-			// Zero is not a usable client id: home cannot tell "client 0" from
-			// a zero-valued field it forgot to set.
-			return nil, errors.New("client_id must be set when a key is given")
+			return nil, err
 		}
 		id, err := zippie.NewSealedIdentity(c.ClientID, key)
 		if err != nil {
@@ -126,6 +118,25 @@ func NewClient(configJSON string) (*Client, error) {
 		return nil, err
 	}
 	return &Client{transport: t, sealed: cfg.Identity != nil}, nil
+}
+
+// pairedKey validates client_id and key_hex and returns the key. Shared by
+// the datapath and by discovery (discovery.go), so a credential one accepts
+// is never one the other refuses.
+func (c config) pairedKey() ([]byte, error) {
+	key, err := hex.DecodeString(c.KeyHex)
+	if err != nil {
+		return nil, fmt.Errorf("bad key_hex: %w", err)
+	}
+	if len(key) < 16 {
+		return nil, fmt.Errorf("key is %d bytes, want at least 16", len(key))
+	}
+	if c.ClientID == 0 {
+		// Zero is not a usable client id: home cannot tell "client 0" from
+		// a zero-valued field it forgot to set.
+		return nil, errors.New("client_id must be set when a key is given")
+	}
+	return key, nil
 }
 
 // AddLink attaches one physical leg. `device` is the interface to pin the
