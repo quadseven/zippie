@@ -715,6 +715,9 @@ class BondAgent:
         # tunnel rebuild: a wrecked pbz0 is rebuilt on every pass until it
         # holds, and the same INFO line on each of them is the #87 spam again.
         self._bond_unshaped_announced = False
+        # Previous set of metered legs carrying while free leg is healthy, for
+        # change detection and single warning log per transition (zippie#324).
+        self._metered_while_free_last: set[str] = set()
         # Adaptive cake rate (#41). Constructed unconditionally - the fields
         # cost nothing idle - and consulted only when shaper_auto_rate is on,
         # same pattern config-gated features already follow in this class.
@@ -3125,6 +3128,29 @@ class BondAgent:
                 self.config.policy,
                 current_primary=self.primary,
             )
+            # Compute metered legs carrying while free leg is healthy (zippie#324).
+            from zippie.policy import metered_legs_while_free
+
+            metered_now = set(metered_legs_while_free(self.paths))
+            if metered_now != self._metered_while_free_last:
+                if metered_now:
+                    # New or changed set - log warning with leg names
+                    leg_names = ", ".join(sorted(metered_now))
+                    free_leg_names = [
+                        p.name
+                        for p in self.paths
+                        if p.effective_cost_class == CostClass.FREE
+                        and p.state is PathState.UP
+                        and not p.never_handshaked
+                        and p.rx_bytes > 0
+                    ]
+                    free_names_str = ", ".join(sorted(free_leg_names)) or "none"
+                    log.warning(
+                        "metered leg(s) %s carrying while free leg %s is healthy",
+                        leg_names,
+                        free_names_str,
+                    )
+                self._metered_while_free_last = metered_now
             for _p in self.paths:
                 policy.update_rtt_ewma(_p, self.config.policy)
                 # The tail travels WITH the average, never instead of it. The
@@ -3896,6 +3922,7 @@ class BondAgent:
                     else None
                 ),
                 "economy": self._economy_status(),
+                "metered_while_free": sorted(self._metered_while_free_last),
                 "primary": self.primary,
                 "active_paths": [p.name for p in self.paths if p.effective_weight > 0],
                 "paths": path_dicts,
