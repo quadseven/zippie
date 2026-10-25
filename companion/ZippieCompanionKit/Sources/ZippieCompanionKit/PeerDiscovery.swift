@@ -74,12 +74,20 @@ public protocol PeerAdvertising: AnyObject {
 
 /// Wraps NWBrowser for `_zippie._tcp`. Delivers discovered peers on the queue
 /// passed to `start(queue:)`, which the service keeps off the main actor.
+///
+/// The `resultsChangedHandler` receives `Set<NWBrowser.Result>` for added
+/// results and `Set<NWBrowser.Result.Change>` for removed changes. Added
+/// results carry endpoint and metadata directly; removed changes wrap the
+/// result via their `result` property.
 final class NWBrowserAdapter: PeerBrowsing {
     private let browser: NWBrowser
     var resultsChangedHandler: (([DiscoveredPeer], [String]) -> Void)? = nil
 
     init() {
-        self.browser = NWBrowser(for: .bonjour(type: "_zippie._tcp", domain: .local()))
+        let params = NWParameters()
+        params.includePeerToPeer = true
+        self.browser = NWBrowser(for: .bonjour(type: "_zippie._tcp", domain: .local),
+                                  using: params)
     }
 
     func start(queue: DispatchQueue) {
@@ -93,27 +101,63 @@ final class NWBrowserAdapter: PeerBrowsing {
     }
 
     func stop() {
-        browser.stop()
+        browser.cancel()
     }
 
-    private static func discovered(from change: NWBrowser.Result.Change) -> DiscoveredPeer? {
-        guard case let .bonjourService(svc) = change.endpoint else { return nil }
-        return DiscoveredPeer(name: svc.name, txt: txt(from: change))
+    /// Extracts a discovered peer from a browse result. The service name and
+    /// TXT record come from the result's metadata; host and port come from
+    /// the endpoint when it has been resolved to a host:port.
+    private static func discovered(from result: NWBrowser.Result) -> DiscoveredPeer? {
+        for metadata in result.metadata {
+            if case let .bonjourService(svc) = metadata {
+                var host = ""
+                var port: UInt16 = 0
+                if case let .hostPort(hp) = result.endpoint {
+                    host = hp.hostname
+                    port = hp.port.rawValue
+                }
+                return DiscoveredPeer(name: svc.name, host: host, port: port,
+                                      txt: txt(from: svc.txtRecord))
+            }
+        }
+        return nil
     }
 
+    /// Extracts a service name from a removed change. The change wraps the
+    /// result via its `result` property, so the metadata is read from there.
     private static func name(from change: NWBrowser.Result.Change) -> String? {
-        guard case let .bonjourService(svc) = change.endpoint else { return nil }
-        return svc.name
+        for metadata in change.result.metadata {
+            if case let .bonjourService(svc) = metadata {
+                return svc.name
+            }
+        }
+        return nil
     }
 
-    /// NOTE: `NWBrowser.Result.Change` carries only the endpoint and the add/
-    /// remove difference, not the metadata, so the TXT record is not available
-    /// here. Until that cast is confirmed, txt is empty and the verifier
-    /// refuses the peer - a safe failure (nothing untrusted is published),
-    /// never a crash. The fake browser in tests supplies txt directly, so
-    /// verification is fully exercised without a real network.
-    private static func txt(from change: NWBrowser.Result.Change) -> [String: String] {
-        [:]
+    /// Parses a Bonjour TXT record (length-prefixed key=value entries) into a
+    /// dictionary. Returns empty on any malformed input.
+    private static func txt(from data: Data?) -> [String: String] {
+        guard let data else { return [:] }
+        var result: [String: String] = [:]
+        var offset = 0
+        while offset < data.count {
+            let keyLength = Int(data[offset])
+            offset += 1
+            guard offset + keyLength <= data.count else { break }
+            let key = String(data: data.subdata(in: offset..<offset + keyLength), encoding: .utf8) ?? ""
+            offset += keyLength
+            var value = ""
+            if offset < data.count {
+                let valueLength = Int(data[offset])
+                offset += 1
+                if offset + valueLength <= data.count {
+                    value = String(data: data.subdata(in: offset..<offset + valueLength), encoding: .utf8) ?? ""
+                    offset += valueLength
+                }
+            }
+            result[key] = value
+        }
+        return result
     }
 }
 
@@ -141,6 +185,6 @@ final class NWListenerAdvertiser: PeerAdvertising {
     }
 
     func stop() {
-        listener.stop()
+        listener.cancel()
     }
 }
