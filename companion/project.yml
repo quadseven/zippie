@@ -84,6 +84,12 @@ targets:
         # confirmed by reading the BUILT plist.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        # Declare the Bonjour service the companion advertises and browses so
+        # the OS permits `_zippie._tcp` local-network discovery. The local
+        # network usage string is declared one level up via
+        # INFOPLIST_KEY_NSLocalNetworkUsageDescription.
+        NSBonjourServices:
+          - "_zippie._tcp"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.zippie.companion
