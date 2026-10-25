@@ -1232,7 +1232,7 @@ class Transport:
         if frame is None:
             return []
         self.stats.received += 1
-        if not self._pass_epoch_gate(frame):
+        if not self._pass_epoch_gate(frame, frame.path_id if self._roam else path_id):
             return []
 
         # On home, the selector can identify only the one listening socket.
@@ -1309,7 +1309,7 @@ class Transport:
                 self.stats.mac_legacy += 1
         return frame
 
-    def _pass_epoch_gate(self, frame: Frame) -> bool:
+    def _pass_epoch_gate(self, frame: Frame, path_id: int | None = None) -> bool:
         """THE EPOCH GATE. Owns the decision "does this frame belong to the
         stream this end is on, or is it a stranger's". Runs at every rung
         including off, and BEFORE roaming, NACK answers and keepalive
@@ -1351,9 +1351,21 @@ class Transport:
         follows within seconds and takes over then; the cost of the rule is a
         few seconds of a restart not being believed, and the cost of not
         having it is that 17 bytes resets the stream.
+
+        ...EXCEPT A REPLY TO A PROBE THIS END HAS OUTSTANDING (#334). The
+        "DATA follows within seconds" premise holds only when the restarted
+        end is the one that initiates. A restarted HOME is not: its wg server
+        only answers, and the travel agent withdraws the bonded route once
+        every leg reads silent, so no tunnel data ever crosses to provoke an
+        answer. Live 2026-10-25: home restarted at 09:10:32 ET, travel
+        withdrew the route 30 s later, and the bond stayed down until travel
+        restarted. A reply that echoes the id of a probe this end sent on that
+        same leg is not a blind forgery: the forger has to know which probe
+        is outstanding. It still waits for the takeover window, and a
+        reply triggers no send, so it is no reflector.
         """
         known = self._peer_epoch is not None and frame.epoch == self._peer_epoch
-        if not known and not self._adopt_epoch(frame):
+        if not known and not self._adopt_epoch(frame, path_id):
             # Wrong epoch on a live tunnel: someone else's packet.
             self.stats.unauthenticated += 1
             log.debug(
@@ -1363,16 +1375,17 @@ class Transport:
         self._last_good_frame = self._clock()
         return True
 
-    def _adopt_epoch(self, frame: Frame) -> bool:
+    def _adopt_epoch(self, frame: Frame, path_id: int | None = None) -> bool:
         """The half of the epoch gate that decides whether an UNKNOWN epoch
         is a peer restart to follow or a stranger to drop. Split from
         `_pass_epoch_gate` so the gate's own body reads as one rule: a known
         epoch passes, an unknown one passes only if this says so.
 
         Trust on first use: with no stream established the first frame is
-        believed whatever it is. After that, only a data frame (never a
-        keepalive or NACK, the two cheapest things to forge) and only once
-        the current stream has gone quiet for the takeover window.
+        believed whatever it is. After that, only a data frame or a reply to
+        a probe outstanding on that leg (never an unsolicited keepalive or a
+        NACK, the two cheapest things to forge), and only once the current
+        stream has gone quiet for the takeover window.
 
         Returns True when the frame's epoch is now the stream's epoch.
         """
@@ -1381,7 +1394,14 @@ class Transport:
             or self._clock() - self._last_good_frame > self._epoch_takeover_idle_s
         )
         first_ever = self._peer_epoch is None
-        takeover = not frame.is_keepalive and not (frame.flags & FLAG_NACK) and idle
+        data = not frame.is_keepalive and not (frame.flags & FLAG_NACK)
+        answered = (
+            frame.is_keepalive
+            and frame.is_keepalive_reply
+            and path_id is not None
+            and frame.seq in self._ka_sent.get(path_id, {})
+        )
+        takeover = (data or answered) and idle
         if not first_ever and not takeover:
             return False
         if not first_ever:

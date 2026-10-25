@@ -586,8 +586,9 @@ by the round-trip health reported by travel. Home probes each learned return
 path; a silent path or one whose probes stop being answered stands down until
 it responds again. Probe silence counts only after travel has answered one probe
 from this home process: a restarted home has a new epoch, travel refuses that
-epoch on keepalives, and only a downstream data frame moves travel onto it
-(#334). Each path's return address roams independently.
+epoch on unsolicited keepalives (#334). Travel does accept a new epoch from a
+reply to a probe it has outstanding on that leg, once the old stream is quiet,
+because a restarted home sends no data until travel's tunnel speaks first. Each path's return address roams independently.
 
 **The fleet hub** polls every router every five seconds from home, on mains
 power and wired internet. It exists because of a structural blind spot: the
