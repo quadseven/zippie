@@ -79,7 +79,7 @@ class PeerDiscoveryLifecycleTest {
 
         // Resume
         val verifiedLatch2 = CountDownLatch(1)
-        onAppResume()
+        onAppResume(onVerified = { _ -> verifiedLatch2.countDown() })
 
         assertTrue("discovery should restart on resume", discovery.isRunning)
         assertTrue("NSD discovery should be started again", fakeNsd.discoveryStarted)
@@ -195,12 +195,12 @@ class PeerDiscoveryLifecycleTest {
         discovery.stop()
     }
 
-    private fun onAppResume() {
-        discovery.start(rosterJson,
-            onVerified = { _ -> },
-            onRefused = { _, _ -> },
-            onLost = { _ -> }
-        )
+    private fun onAppResume(
+        onVerified: (VerifiedPeer) -> Unit = { _ -> },
+        onRefused: (String, String) -> Unit = { _, _ -> },
+        onLost: (String) -> Unit = { _ -> }
+    ) {
+        discovery.start(rosterJson, onVerified = onVerified, onRefused = onRefused, onLost = onLost)
     }
 
     private fun buildRosterJson(): String {

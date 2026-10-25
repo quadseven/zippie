@@ -59,10 +59,8 @@ class NsdPeerDiscovery(
 
         nsdManager.stopServiceDiscovery(discoveryListener)
 
-        // Stop all pending resolves
-        resolveListeners.values.forEach { listener ->
-            nsdManager.stopResolveService(listener.resolveListener)
-        }
+        // Note: NsdManager.stopResolveService(ResolveListener) requires API 28+.
+        // We clear the map and let pending resolves complete or fail naturally.
         resolveListeners.clear()
         verifiedServices.clear()
 
@@ -89,7 +87,8 @@ class NsdPeerDiscovery(
             }
         }
 
-        override fun onServiceLost(serviceName: String) {
+        override fun onServiceLost(serviceInfo: NsdServiceInfo) {
+            val serviceName = serviceInfo.serviceName
             Log.d(tag, "Lost service: $serviceName")
             callbacks?.onLost(serviceName)
             verifiedServices.remove(serviceName)
@@ -143,8 +142,6 @@ class NsdPeerDiscovery(
                     } else {
                         callbacks.onRefused(serviceName, "verification_failed")
                     }
-                } catch (e: FakeGoPeerCrypto.VerificationRefused) {
-                    callbacks.onRefused(serviceName, e.reason)
                 } catch (e: Exception) {
                     Log.e(tag, "Verification error for $serviceName", e)
                     callbacks.onRefused(serviceName, "verification_error")
