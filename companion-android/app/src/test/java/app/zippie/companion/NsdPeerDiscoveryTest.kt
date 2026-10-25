@@ -235,6 +235,7 @@ class NsdPeerDiscoveryTest {
 
 /**
  * Fake NSD manager for testing that simulates service discovery events.
+ * Uses interfaces that don't depend on Android framework classes.
  */
 class FakeNsdManager {
     @Volatile var discoveryStarted = false
@@ -272,28 +273,36 @@ class FakeNsdManager {
         discoverListener?.onServiceLost(name)
     }
 
-    inner class DiscoveryListener : NsdManager.DiscoveryListener {
-        override fun onDiscoveryStarted(serviceType: String) {}
-        override fun onServiceFound(serviceInfo: NsdServiceInfo) {}
-        override fun onServiceLost(serviceName: String) {}
-        override fun onDiscoveryStopped(serviceType: String) {}
-        override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {}
-        override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
+    interface DiscoveryListener {
+        fun onDiscoveryStarted(serviceType: String)
+        fun onServiceFound(serviceInfo: NsdServiceInfo)
+        fun onServiceLost(serviceName: String)
+        fun onDiscoveryStopped(serviceType: String)
+        fun onStartDiscoveryFailed(serviceType: String, errorCode: Int)
+        fun onStopDiscoveryFailed(serviceType: String, errorCode: Int)
     }
 
-    inner class ResolveListener : NsdManager.ResolveListener {
-        override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
-        override fun onServiceResolved(serviceInfo: NsdServiceInfo) {}
+    interface ResolveListener {
+        fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int)
+        fun onServiceResolved(serviceInfo: NsdServiceInfo)
     }
 }
 
 /**
  * Fake NSD service info for testing.
  */
+interface NsdServiceInfo {
+    val serviceName: String
+    val serviceType: String
+    val host: java.net.InetAddress?
+    val port: Int
+    val attributes: java.util.Map<String, ByteArray>
+}
+
 class FakeNsdServiceInfo(
     override val serviceName: String,
     private val txtJson: String?
-) : NsdServiceInfo() {
+) : NsdServiceInfo {
 
     override val serviceType: String = "_zippie._tcp."
     override val host: java.net.InetAddress? = java.net.InetAddress.getByName("192.0.2.10")
@@ -338,7 +347,9 @@ class TestableNsdPeerDiscovery(
 
         callbacks = DiscoveryCallbacks(rosterJson, onVerified, onRefused, onLost)
 
-        fakeNsd.discoverServices("_zippie._tcp.", PROTOCOL_DNS_SD, object : FakeNsdManager.DiscoveryListener() {
+        fakeNsd.discoverServices("_zippie._tcp.", PROTOCOL_DNS_SD, object : FakeNsdManager.DiscoveryListener {
+            override fun onDiscoveryStarted(serviceType: String) {}
+
             override fun onServiceFound(serviceInfo: NsdServiceInfo) {
                 val name = serviceInfo.serviceName
                 val txtRecord = serviceInfo.attributes
@@ -372,6 +383,12 @@ class TestableNsdPeerDiscovery(
             override fun onDiscoveryStopped(serviceType: String) {
                 isRunning = false
             }
+
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                isRunning = false
+            }
+
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
         })
     }
 

@@ -6,10 +6,10 @@ import org.json.JSONObject
  * Fake implementation for testing that simulates the Go core's verification logic.
  * Uses pre-configured responses to test the discovery flow without the Go binding.
  */
-class FakeGoPeerCrypto(
-    private val verifiedPeers: Map<String, VerifiedPeer> = emptyMap(),  // txtJson -> VerifiedPeer
-    private val refusedReasons: Map<String, String> = emptyMap()        // txtJson -> reason
-) : GoPeerCrypto {
+class FakeGoPeerCrypto : GoPeerCrypto {
+
+    val verifiedPeers = mutableMapOf<String, VerifiedPeer>()   // txtJson -> VerifiedPeer
+    val refusedReasons = mutableMapOf<String, String>()        // txtJson -> reason
 
     override fun peerTxt(credentialJson: String, endpoint: String): String? {
         // Not used in discovery tests

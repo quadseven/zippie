@@ -8,9 +8,6 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
-// DNS-SD protocol constant (matches NsdManager.PROTOCOL_DNS_SD)
-const val PROTOCOL_DNS_SD = 1
-
 /**
  * Tests for peer discovery lifecycle: stops on background, restarts on resume.
  * Verifies no leaked listeners.
@@ -89,7 +86,7 @@ class PeerDiscoveryLifecycleTest {
     }
 
     @Test
-    fun `no leaked listeners after multiple background/resume cycles`() {
+    fun `no leaked listeners after multiple background and resume cycles`() {
         val txtJson = """{"id":"1","proof":"valid_proof"}"""
         val peer = VerifiedPeer(1, "192.0.2.10:51820")
         fakeCrypto.verifiedPeers[txtJson] = peer
