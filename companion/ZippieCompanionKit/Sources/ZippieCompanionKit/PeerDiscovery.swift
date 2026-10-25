@@ -7,8 +7,8 @@ import Network
 /// all claims from anything on the wifi. Only `VerifiedPeer`, produced by the
 /// Go core's `VerifyPeer`, is published to the app.
 public struct DiscoveredPeer: Sendable, Equatable, Hashable {
-    /// The Bonjour service name, used to key a peer across appearances and
-    /// disappearances.
+    /// The peer's identifying name, taken from the resolved endpoint host;
+    /// used to key a peer across appearances and disappearances.
     public let name: String
     /// The address the peer is reachable at, if the browser resolved one.
     public let host: String
@@ -77,8 +77,8 @@ public protocol PeerAdvertising: AnyObject {
 ///
 /// The `resultsChangedHandler` receives `Set<NWBrowser.Result>` for added
 /// results and `Set<NWBrowser.Result.Change>` for removed changes. Added
-/// results carry endpoint and metadata directly; removed changes wrap the
-/// result via their `result` property.
+/// results carry endpoint and metadata directly; removed changes carry the
+/// removed result via their `.removed` case.
 final class NWBrowserAdapter: PeerBrowsing {
     private let browser: NWBrowser
     var resultsChangedHandler: (([DiscoveredPeer], [String]) -> Void)? = nil
@@ -86,7 +86,7 @@ final class NWBrowserAdapter: PeerBrowsing {
     init() {
         let params = NWParameters()
         params.includePeerToPeer = true
-        self.browser = NWBrowser(for: .bonjour(type: "_zippie._tcp", domain: .local),
+        self.browser = NWBrowser(for: .bonjour(type: "_zippie._tcp", domain: "local"),
                                   using: params)
     }
 
@@ -108,56 +108,43 @@ final class NWBrowserAdapter: PeerBrowsing {
     /// TXT record come from the result's metadata; host and port come from
     /// the endpoint when it has been resolved to a host:port.
     private static func discovered(from result: NWBrowser.Result) -> DiscoveredPeer? {
-        for metadata in result.metadata {
-            if case let .bonjourService(svc) = metadata {
-                var host = ""
-                var port: UInt16 = 0
-                if case let .hostPort(hp) = result.endpoint {
-                    host = hp.hostname
-                    port = hp.port.rawValue
-                }
-                return DiscoveredPeer(name: svc.name, host: host, port: port,
-                                      txt: txt(from: svc.txtRecord))
-            }
+        guard case .bonjour(let txtRecord) = result.metadata else {
+            return nil
         }
-        return nil
+        var host = ""
+        var port: UInt16 = 0
+        if case let .hostPort(hn, p) = result.endpoint {
+            host = hostname(from: hn)
+            port = p.rawValue
+        }
+        return DiscoveredPeer(name: host, host: host, port: port, txt: txtRecord.dictionary)
     }
 
-    /// Extracts a service name from a removed change. The change wraps the
-    /// result via its `result` property, so the metadata is read from there.
+    /// Extracts a service name from a removed change. The change carries the
+    /// removed result, so the name is read from that result's endpoint, the
+    /// same source `discovered` uses so added and removed names stay in step.
     private static func name(from change: NWBrowser.Result.Change) -> String? {
-        for metadata in change.result.metadata {
-            if case let .bonjourService(svc) = metadata {
-                return svc.name
-            }
+        guard case .removed(let result) = change else {
+            return nil
+        }
+        if case let .hostPort(hn, _) = result.endpoint {
+            return hostname(from: hn)
         }
         return nil
     }
 
-    /// Parses a Bonjour TXT record (length-prefixed key=value entries) into a
-    /// dictionary. Returns empty on any malformed input.
-    private static func txt(from data: Data?) -> [String: String] {
-        guard let data else { return [:] }
-        var result: [String: String] = [:]
-        var offset = 0
-        while offset < data.count {
-            let keyLength = Int(data[offset])
-            offset += 1
-            guard offset + keyLength <= data.count else { break }
-            let key = String(data: data.subdata(in: offset..<offset + keyLength), encoding: .utf8) ?? ""
-            offset += keyLength
-            var value = ""
-            if offset < data.count {
-                let valueLength = Int(data[offset])
-                offset += 1
-                if offset + valueLength <= data.count {
-                    value = String(data: data.subdata(in: offset..<offset + valueLength), encoding: .utf8) ?? ""
-                    offset += valueLength
-                }
-            }
-            result[key] = value
+    /// Turns a resolved endpoint host into a printable name.
+    private static func hostname(from host: NWEndpoint.Host) -> String {
+        switch host {
+        case .name(let name, _):
+            return name
+        case .ipv4(let address):
+            return String(describing: address)
+        case .ipv6(let address):
+            return String(describing: address)
+        @unknown default:
+            return ""
         }
-        return result
     }
 }
 
