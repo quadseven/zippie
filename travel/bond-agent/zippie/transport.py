@@ -721,6 +721,11 @@ class Transport:
         self._roam = roam
         self._home_downstream = home_downstream
         self._last_home_probe_at = self._clock()
+        # Has the far end answered any home probe since this process started?
+        # Until it has, probe silence proves nothing (#334): a travel end that
+        # still holds the previous home epoch drops every keepalive from this
+        # one, and only a downstream DATA frame can move it to the new epoch.
+        self._home_probe_answered = False
         self.scheduler = Scheduler(duplicate_fanout=duplicate_fanout)
         self.reassembler = Reassembler(reorder_deadline_ms=reorder_deadline_ms, _clock=_clock)
         self.retransmit = RetransmitBuffer(retransmit, _clock=_clock)
@@ -1424,6 +1429,21 @@ class Transport:
             self.scheduler.set_healthy(path_id, True)
 
     def _home_probe_overdue(self, path_id: int) -> bool:
+        """True when this path's probes have gone unanswered long enough to
+        stand it down.
+
+        NEVER BEFORE THE FAR END HAS ANSWERED ONE (#334). A restarted home has
+        a new epoch, and the travel epoch gate refuses a new epoch carried by a
+        keepalive: only a data frame may claim a restart. Standing paths down
+        on probe silence then drops every downstream data frame with no_path,
+        so the frame that would let travel adopt the new epoch is never sent
+        and both ends wait on each other forever. Live 2026-10-18 to 10-25:
+        travel rejected 100% of home frames, home sent 0 downstream bytes.
+        Until a probe is answered, upstream receipt is the health signal, as
+        it was before #293.
+        """
+        if not self._home_probe_answered:
+            return False
         outstanding = self._ka_sent.get(path_id, {})
         return (
             len(outstanding) >= 3
@@ -1491,6 +1511,7 @@ class Transport:
         self._link_rtt[path_id] = (self._clock() - sent) * 1000.0
         self._note_ka_outcome(path_id, lost=False)
         if self._home_downstream:
+            self._home_probe_answered = True
             self.scheduler.set_healthy(path_id, True)
         # Anything older than the probe just answered is LOST, not
         # merely slow - the far end answers in order on a given
