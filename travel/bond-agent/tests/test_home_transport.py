@@ -325,3 +325,170 @@ def test_home_stands_down_a_silent_leg_and_recovers_when_it_returns():
         _assert_downstream_targets(home, sockets[1].sent, set(sources.values()))
     finally:
         home.close()
+
+
+def test_home_keeps_sending_downstream_until_the_far_end_answers_a_probe():
+    """#334: probe silence proves nothing before the far end has answered once.
+
+    A travel end still holding the previous home epoch drops every keepalive
+    from a restarted home. If home stood the path down for that, it would drop
+    the downstream data frame that lets travel adopt the new epoch, and the
+    bond would deadlock. Live 2026-10-18 to 10-25, home sent 0 downstream bytes.
+    """
+    home, sockets = _fake_home()
+    now = [home._clock()]
+    home._clock = lambda: now[0]
+    source = ("192.0.2.1", 40003)
+
+    def arrive():
+        frame = Frame(seq=1, path_id=3, payload=b"", flags=FLAG_KEEPALIVE, epoch=10)
+        home._on_link_data(frame.pack(), path_id=0, addr=source)
+
+    try:
+        arrive()
+        # Far past HOME_STANDDOWN_S with every probe unanswered, while the
+        # path keeps delivering upstream frames.
+        for _ in range(10):
+            now[0] += 2
+            arrive()
+            home.tick()
+        assert len(_keepalive_probes(sockets[1].sent, source)) >= 3
+        _assert_downstream_targets(home, sockets[1].sent, {source})
+    finally:
+        home.close()
+
+
+def test_home_stands_down_an_unanswering_path_once_the_far_end_has_answered():
+    """The #293 stand-down still applies after the far end proves it answers."""
+    home, sockets = _fake_home()
+    now = [home._clock()]
+    home._clock = lambda: now[0]
+    sources = {3: ("192.0.2.1", 40003), 7: ("192.0.2.1", 40007)}
+
+    def arrive(path_id):
+        frame = Frame(seq=1, path_id=path_id, payload=b"", flags=FLAG_KEEPALIVE, epoch=10)
+        home._on_link_data(frame.pack(), path_id=0, addr=sources[path_id])
+
+    try:
+        arrive(3)
+        arrive(7)
+        sockets[1].sent.clear()
+        home.send_keepalives()
+        probe = _keepalive_probes(sockets[1].sent, sources[3])[-1]
+        reply = Frame(
+            seq=probe.seq,
+            path_id=3,
+            payload=b"",
+            flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
+            epoch=10,
+        )
+        home._on_link_data(reply.pack(), path_id=0, addr=sources[3])
+
+        # Path 3 keeps answering; path 7 keeps sending upstream but never
+        # answers a probe.
+        for _ in range(5):
+            now[0] += 2
+            arrive(3)
+            arrive(7)
+            sockets[1].sent.clear()
+            home.tick()
+            probe = _keepalive_probes(sockets[1].sent, sources[3])[-1]
+            reply = Frame(
+                seq=probe.seq,
+                path_id=3,
+                payload=b"",
+                flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
+                epoch=10,
+            )
+            home._on_link_data(reply.pack(), path_id=0, addr=sources[3])
+
+        _assert_downstream_targets(home, sockets[1].sent, {sources[3]})
+    finally:
+        home.close()
+
+
+def test_a_restarted_home_gets_through_to_a_travel_end_on_the_old_epoch(monkeypatch):
+    """#334 end to end: the mirror of the restarted-travel loopback test.
+
+    One long-lived travel transport, two home lifetimes. The second home has a
+    new epoch that travel refuses on keepalives, so home's probes go unanswered
+    well past the stand-down window. Downstream data must still reach travel,
+    or travel never adopts the new epoch and the bond carries nothing.
+    """
+    import zippie.transport as transport_mod
+
+    # Shrink the stand-down clock so the test waits well past it in under a
+    # second. Both names are read at call time.
+    monkeypatch.setattr(transport_mod, "HOME_PROBE_INTERVAL_S", 0.05)
+    monkeypatch.setattr(transport_mod, "HOME_STANDDOWN_S", 0.15)
+
+    home_listen, travel_local, wg_server_port = _free_port(), _free_port(), _free_port()
+    travel = Transport(
+        ("127.0.0.1", travel_local), reorder_deadline_ms=50, epoch_takeover_idle_s=0.2
+    )
+    travel.add_link(
+        LinkEndpoint(
+            path_id=0, name="leg", device=None, remote=("127.0.0.1", home_listen), weight=100
+        )
+    )
+    threading.Thread(target=travel.run, daemon=True).start()
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    server.bind(("127.0.0.1", wg_server_port))
+    server.settimeout(0.05)
+    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    client.bind(("127.0.0.1", 0))
+    client.settimeout(0.05)
+
+    def home_session(payload):
+        """One home lifetime: fresh transport, fresh epoch. Returns echoes."""
+        home = build_home_transport(
+            HomeTransportConfig(
+                listen_addr=("127.0.0.1", home_listen),
+                local_addr=("127.0.0.1", _free_port()),
+                wg_server=("127.0.0.1", wg_server_port),
+                reorder_deadline_ms=50,
+            )
+        )
+        threading.Thread(target=home.run, daemon=True).start()
+        got = []
+        try:
+            # Upstream frames only, for well past the stand-down window: home
+            # learns the leg and probes it, and travel (on the old epoch) drops
+            # every probe. A real travel end sends keepalives every 2 s and a
+            # WireGuard handshake only every 5 s, so this order is the live one.
+            for _ in range(8):
+                travel.send_keepalives()
+                time.sleep(0.05)
+            deadline = time.monotonic() + 1.5
+            while time.monotonic() < deadline and not got:
+                client.sendto(payload, ("127.0.0.1", travel_local))
+                try:
+                    data, addr = server.recvfrom(65535)
+                    server.sendto(data, addr)  # the fake wg server echoes
+                except socket.timeout:
+                    pass
+                try:
+                    got.append(client.recvfrom(65535)[0])
+                except socket.timeout:
+                    pass
+        finally:
+            home.stop()
+            time.sleep(0.1)
+            home.close()
+        return got
+
+    try:
+        assert home_session(b"home-one"), "baseline home session never echoed back"
+        # Travel's stream must go quiet past its takeover window before a new
+        # epoch is believed, exactly as a real pod restart leaves it.
+        time.sleep(0.3)
+        assert home_session(b"home-two"), (
+            "a restarted home never reached a travel end on the old epoch: "
+            "home stood every path down on probes travel was refusing"
+        )
+    finally:
+        travel.stop()
+        server.close()
+        client.close()
+        time.sleep(0.1)
