@@ -137,6 +137,14 @@ spec:
             # and the router is portable: a literal here would already be
             # wrong the moment it shipped, and would have to be scrubbed
             # before commit, which is exactly the failure class this fixes.
+            #
+            # A DNS NAME, NOT AN ADDRESS. The Secret holds a public DNS name
+            # whose A record is the router's tailnet address, kept by the
+            # operator's DNS stack and synced into this Secret from the
+            # operator's parameter store. This pod cannot resolve
+            # MagicDNS names, but it resolves public DNS, so a name survives
+            # the router being re-addressed on the tailnet with no change
+            # here and no hand-edited Secret.
             # Missing or reserved-for-documentation values are refused by
             # hub.py's own guard rather than dialled - see router_config_error.
             #
