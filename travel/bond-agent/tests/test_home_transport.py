@@ -492,3 +492,113 @@ def test_a_restarted_home_gets_through_to_a_travel_end_on_the_old_epoch(monkeypa
         server.close()
         client.close()
         time.sleep(0.1)
+
+
+def _start_home(home_listen, wg_server_port):
+    home = build_home_transport(
+        HomeTransportConfig(
+            listen_addr=("127.0.0.1", home_listen),
+            local_addr=("127.0.0.1", _free_port()),
+            wg_server=("127.0.0.1", wg_server_port),
+            reorder_deadline_ms=50,
+        )
+    )
+    threading.Thread(target=home.run, daemon=True).start()
+    return home
+
+
+def _stop_home(home):
+    home.stop()
+    time.sleep(0.1)
+    home.close()
+
+
+def test_travel_hears_a_restarted_home_on_keepalives_alone():
+    """#334 second live failure: travel up, then home restarts.
+
+    The travel agent judges a leg by whether frames come back, and once every
+    leg reads silent it withdraws the bonded route, so no tunnel data crosses
+    again. A restarted home's wg server only answers, so home sends no data
+    either. Travel must therefore accept the new home epoch from the replies
+    to its own probes, or the leg stays silent forever. Live 2026-10-25: home
+    restarted at 09:10:32 ET and travel withdrew the route at 09:11:02.
+    """
+    home_listen, travel_local, wg_server_port = _free_port(), _free_port(), _free_port()
+    travel = Transport(
+        ("127.0.0.1", travel_local), reorder_deadline_ms=50, epoch_takeover_idle_s=0.2
+    )
+    travel.add_link(
+        LinkEndpoint(
+            path_id=0, name="leg", device=None, remote=("127.0.0.1", home_listen), weight=100
+        )
+    )
+    threading.Thread(target=travel.run, daemon=True).start()
+
+    def probe_for(seconds):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            travel.send_keepalives()
+            time.sleep(0.05)
+
+    home = _start_home(home_listen, wg_server_port)
+    try:
+        probe_for(0.3)
+        assert travel.link_rtt_ms(0) is not None, "baseline: the first home never answered"
+    finally:
+        _stop_home(home)
+
+    # Home is gone longer than travel's takeover window, as a pod restart is.
+    time.sleep(0.3)
+    home = _start_home(home_listen, wg_server_port)
+    try:
+        rejected_before = travel.stats.unauthenticated
+        probe_for(0.6)
+        age = travel.link_rx_age_s(0)
+        assert age is not None and age < 0.2, (
+            "travel still reads the leg as silent: it refused every probe reply "
+            "from the restarted home"
+        )
+        assert travel.stats.unauthenticated - rejected_before <= 1
+    finally:
+        _stop_home(home)
+        travel.stop()
+        time.sleep(0.1)
+
+
+def test_only_a_reply_to_an_outstanding_probe_claims_a_restart():
+    """An unsolicited keepalive, or a reply naming a probe this end never
+    sent, still cannot move a quiet stream to a new epoch."""
+    t = Transport(
+        ("127.0.0.1", 0),
+        epoch_takeover_idle_s=0.0,
+        socket_factory=lambda *_: _RecordingSocket(),
+        selector_factory=_FakeSelector,
+    )
+    try:
+        t._peer_epoch = 10
+        t._last_good_frame = None
+        t._ka_sent[0] = {41: t._clock()}
+        stranger = Frame(seq=41, path_id=0, payload=b"", flags=FLAG_KEEPALIVE, epoch=99)
+        assert not t._pass_epoch_gate(stranger, 0)
+        unknown = Frame(
+            seq=42, path_id=0, payload=b"", flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY, epoch=99
+        )
+        assert not t._pass_epoch_gate(unknown, 0)
+        assert not t._pass_epoch_gate(
+            Frame(
+                seq=41,
+                path_id=0,
+                payload=b"",
+                flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
+                epoch=99,
+            ),
+            1,
+        )
+        assert t._peer_epoch == 10
+        answer = Frame(
+            seq=41, path_id=0, payload=b"", flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY, epoch=99
+        )
+        assert t._pass_epoch_gate(answer, 0)
+        assert t._peer_epoch == 99
+    finally:
+        t.close()
