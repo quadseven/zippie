@@ -66,7 +66,7 @@ jobs:
         env:
           KEY_B64: ${{ secrets.ROUTER_DEPLOY_SSH_KEY_B64 }}
           # ROUTER_DEPLOY_TARGET is a public DNS NAME whose A record is the
-          # router's tailnet address (infra#949), never a literal address: the
+          # router's tailnet address, never a literal address: the
           # runner pod cannot resolve MagicDNS, and a literal goes stale the
           # moment the router is re-addressed on the tailnet.
           ROUTER_HOST: ${{ secrets.ROUTER_DEPLOY_TARGET }}

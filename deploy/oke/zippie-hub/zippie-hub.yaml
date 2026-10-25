@@ -141,7 +141,7 @@ spec:
             # A DNS NAME, NOT AN ADDRESS. The Secret holds a public DNS name
             # whose A record is the router's tailnet address, kept by the
             # operator's DNS stack and synced into this Secret from the
-            # operator's parameter store (infra#949). This pod cannot resolve
+            # operator's parameter store. This pod cannot resolve
             # MagicDNS names, but it resolves public DNS, so a name survives
             # the router being re-addressed on the tailnet with no change
             # here and no hand-edited Secret.
