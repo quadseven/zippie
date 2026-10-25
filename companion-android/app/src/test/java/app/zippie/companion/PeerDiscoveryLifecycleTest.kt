@@ -102,13 +102,13 @@ class PeerDiscoveryLifecycleTest {
         onAppBackground()
 
         // Cycle 2
-        onAppResume()
+        onAppResume(onVerified = { _ -> }, onRefused = { _, _ -> }, onLost = { _ -> })
         fakeNsd.simulateServiceFound("peer-2", txtJson)
         Thread.sleep(100)
         onAppBackground()
 
         // Cycle 3
-        onAppResume()
+        onAppResume(onVerified = { _ -> }, onRefused = { _, _ -> }, onLost = { _ -> })
         fakeNsd.simulateServiceFound("peer-3", txtJson)
         Thread.sleep(100)
         onAppBackground()
@@ -171,7 +171,7 @@ class PeerDiscoveryLifecycleTest {
 
         // After background, the verified state should be cleared
         // so that on resume, the same peer would be re-verified
-        onAppResume()
+        onAppResume(onVerified = { _ -> }, onRefused = { _, _ -> }, onLost = { _ -> })
 
         val verifiedLatch = CountDownLatch(1)
         // Replace callback to catch re-verification
@@ -193,9 +193,9 @@ class PeerDiscoveryLifecycleTest {
     }
 
     private fun onAppResume(
-        onVerified: (VerifiedPeer) -> Unit = { _ -> },
-        onRefused: (String, String) -> Unit = { _, _ -> },
-        onLost: (String) -> Unit = { _ -> }
+        onVerified: (VerifiedPeer) -> Unit,
+        onRefused: (String, String) -> Unit,
+        onLost: (String) -> Unit
     ) {
         discovery.start(rosterJson, onVerified = onVerified, onRefused = onRefused, onLost = onLost)
     }

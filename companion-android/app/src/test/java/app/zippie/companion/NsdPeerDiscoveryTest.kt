@@ -311,7 +311,7 @@ class FakeNsdServiceInfo(
     override val attributes: java.util.Map<String, ByteArray>
         get() {
             if (txtJson == null) return emptyMap()
-            val map = java.util.HashMap<String, ByteArray>()
+            val map: java.util.Map<String, ByteArray> = java.util.HashMap()
             val obj = JSONObject(txtJson)
             val keys = obj.keys()
             while (keys.hasNext()) {
@@ -327,7 +327,7 @@ class FakeNsdServiceInfo(
  */
 class TestableNsdPeerDiscovery(
     private val fakeNsd: FakeNsdManager,
-    crypto: GoPeerCrypto
+    private val crypto: GoPeerCrypto
 ) : PeerDiscovery {
 
     @Volatile
