@@ -59,7 +59,7 @@ public protocol PeerVerifying {
 /// A Bonjour browser for `_zippie._tcp`. Results are delivered on the queue
 /// passed to `start(queue:)`, which the service keeps off the main actor.
 public protocol PeerBrowsing: AnyObject {
-    var resultsChangedHandler: ((added: [DiscoveredPeer], removed: [String]) -> Void)? { get set }
+    var resultsChangedHandler: (([DiscoveredPeer], [String]) -> Void)? { get set }
     func start(queue: DispatchQueue)
     func stop()
 }
@@ -76,7 +76,7 @@ public protocol PeerAdvertising: AnyObject {
 /// passed to `start(queue:)`, which the service keeps off the main actor.
 final class NWBrowserAdapter: PeerBrowsing {
     private let browser: NWBrowser
-    var resultsChangedHandler: ((added: [DiscoveredPeer], removed: [String]) -> Void)? = nil
+    var resultsChangedHandler: (([DiscoveredPeer], [String]) -> Void)? = nil
 
     init() {
         self.browser = NWBrowser(for: .bonjour(type: "_zippie._tcp", domain: .local()))
@@ -85,8 +85,8 @@ final class NWBrowserAdapter: PeerBrowsing {
     func start(queue: DispatchQueue) {
         browser.browseResultsChangedHandler = { [weak self] rawAdded, rawRemoved in
             guard let self else { return }
-            let added = rawAdded.compactMap(Self.discovered(from:))
-            let removed = rawRemoved.compactMap(Self.name(from:))
+            let added = rawAdded.compactMap { Self.discovered(from: $0) }
+            let removed = rawRemoved.compactMap { Self.name(from: $0) }
             self.resultsChangedHandler?(added, removed)
         }
         browser.start(queue: queue)
@@ -96,22 +96,23 @@ final class NWBrowserAdapter: PeerBrowsing {
         browser.stop()
     }
 
-    private static func discovered(from result: NWBrowser.Result) -> DiscoveredPeer? {
-        guard case let .bonjourService(svc) = result.endpoint else { return nil }
-        return DiscoveredPeer(name: svc.name, txt: txt(from: result))
+    private static func discovered(from change: NWBrowser.Result.Change) -> DiscoveredPeer? {
+        guard case let .bonjourService(svc) = change.endpoint else { return nil }
+        return DiscoveredPeer(name: svc.name, txt: txt(from: change))
     }
 
-    private static func name(from result: NWBrowser.Result) -> String? {
-        guard case let .bonjourService(svc) = result.endpoint else { return nil }
+    private static func name(from change: NWBrowser.Result.Change) -> String? {
+        guard case let .bonjourService(svc) = change.endpoint else { return nil }
         return svc.name
     }
 
-    /// NOTE: extracting the TXT record from `result.metadata` requires the SDK's
-    /// metadata type. Until that cast is confirmed, txt is empty and the
-    /// verifier refuses the peer - a safe failure (nothing untrusted is
-    /// published), never a crash. The fake browser in tests supplies txt
-    /// directly, so verification is fully exercised without a real network.
-    private static func txt(from result: NWBrowser.Result) -> [String: String] {
+    /// NOTE: `NWBrowser.Result.Change` carries only the endpoint and the add/
+    /// remove difference, not the metadata, so the TXT record is not available
+    /// here. Until that cast is confirmed, txt is empty and the verifier
+    /// refuses the peer - a safe failure (nothing untrusted is published),
+    /// never a crash. The fake browser in tests supplies txt directly, so
+    /// verification is fully exercised without a real network.
+    private static func txt(from change: NWBrowser.Result.Change) -> [String: String] {
         [:]
     }
 }

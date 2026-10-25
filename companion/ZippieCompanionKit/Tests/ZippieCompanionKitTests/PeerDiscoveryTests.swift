@@ -38,7 +38,7 @@ final class PeerDiscoveryTests: XCTestCase {
     }
 
     private final class FakeBrowser: PeerBrowsing {
-        var resultsChangedHandler: ((added: [DiscoveredPeer], removed: [String]) -> Void)? = nil
+        var resultsChangedHandler: (([DiscoveredPeer], [String]) -> Void)? = nil
         var started = false
         var stopped = false
         var startQueue: DispatchQueue?

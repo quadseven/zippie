@@ -37,10 +37,10 @@ public actor PeerDiscoveryService {
     }
 
     private let verifier: any PeerVerifying
-    private let browser: any PeerBrowsing
-    private let advertiser: (any PeerAdvertising)?
+    private nonisolated let browser: any PeerBrowsing
+    private nonisolated let advertiser: (any PeerAdvertising)?
     private let config: Config
-    private let browseQueue: DispatchQueue
+    private nonisolated let browseQueue: DispatchQueue
 
     private var verified: [String: VerifiedPeer] = [:]
 
