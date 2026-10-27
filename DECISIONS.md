@@ -29,7 +29,7 @@ describe are the code and comments in this tree.
 - [Keeping the router alive](#keeping-the-router-alive) - D18 to D22
 - [Phones as infrastructure](#phones-as-infrastructure) - D23 to D27
 - [Telling the truth](#telling-the-truth) - D28 to D31
-- [Boundaries](#boundaries) - D32 to D35
+- [Boundaries](#boundaries) - D32 to D36
 
 ---
 
@@ -1508,6 +1508,16 @@ now computed from the poller's last touch whenever one has happened; "never" is
 reserved for the one case it is literally true.
 
 ---
+
+### D36. Keep device certificate issuance at home
+
+The travel router must not hold a CA key or sign device certificates.
+The home enrollment endpoint issues certificates after operator approval.
+
+A router can be lost or compromised while travelling. A signing key there
+would let an attacker enroll devices whose credentials outlive the compromise.
+Keeping issuance at the home endpoint limits that exposure; the router still
+handles traffic and presents its own identity, but cannot mint new identities.
 
 ## Two rules that generalize
 
