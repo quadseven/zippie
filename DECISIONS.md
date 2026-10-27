@@ -29,7 +29,7 @@ describe are the code and comments in this tree.
 - [Keeping the router alive](#keeping-the-router-alive) - D18 to D22
 - [Phones as infrastructure](#phones-as-infrastructure) - D23 to D27
 - [Telling the truth](#telling-the-truth) - D28 to D31
-- [Boundaries](#boundaries) - D32 to D36
+- [Boundaries](#boundaries) - D32 to D37
 
 ---
 
@@ -1518,6 +1518,21 @@ A router can be lost or compromised while travelling. A signing key there
 would let an attacker enroll devices whose credentials outlive the compromise.
 Keeping issuance at the home endpoint limits that exposure; the router still
 handles traffic and presents its own identity, but cannot mint new identities.
+
+### D37. Keep all travel LAN traffic in the full tunnel
+
+Keep the full tunnel for IPv4 and IPv6 rather than routing selected traffic
+out through the local network. A consistent home egress IP and encrypted
+traffic over the local network are part of the product. Local breakout would
+expose traffic to the local network, and destination-based rules cannot
+reliably identify which traffic does not need the home IP. A stale rule could
+silently send traffic along the wrong path.
+
+This decision accepts a measured cost: on good local fibre the leg to home
+had 114 ms RTT and a 177 MB download ran at about 9.5 Mbps. Downstream
+capacity remains a separate problem tracked by #24. The home-end per-client
+egress policy in #312 controls traffic after it reaches home; it does not
+provide local breakout from the travel LAN.
 
 ## Two rules that generalize
 
