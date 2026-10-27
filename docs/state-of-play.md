@@ -10,6 +10,43 @@ Read this before picking the work back up. Several things that look finished
 are not, and one thing that looks like an improvement is currently a
 regression.
 
+## Summary as of 2026-09-01 (moved from the README)
+
+Zippie runs a phone-inclusive multipath bond on a GL-MT3000 travel router
+today. The packet datapath carries traffic continuously across several legs
+at once, including a phone running the Companion relay app: when a phone is
+present it becomes a leg, and when it is absent it is not - no configuration
+step either way. WireGuard tunnels, tiered reserve links, per-leg usage
+accounting, and address-loss failover (measured in the tens of milliseconds,
+not the multi-second probe delay of earlier builds) are all live on the
+router this project runs on day to day.
+
+**Both phone platforms announce and carry.** Read off the router's own console
+and log on 2026-09-01, with the agent 35 h into its uptime: two Android Pixels
+and one iPhone were all announcing on the 15 s / 45 s lease this project
+defines, and the leg carrying the household was an **Android** one -
+`pixel-6a-ea83`, in the bond at weight 48, 0.0% loss, 225 ms, **764 MB
+received** on its own link counter. A second Android leg had 586 MB against its
+counter. The iPhone leg was `down` at 62.5% loss at the time of reading. The
+README claimed the opposite for 24 days; see the 2026-09-01 update below for
+the full reading.
+
+**And it comes back by itself.** Same day, cold-booted at both ends with nobody
+touching anything: the router by `sysrq`, then both handsets. Every leg
+re-announced and the bond reformed unattended - and at 91 s of agent uptime
+(112 s after the `sysrq`; the agent starts about 20 s into boot) the router's
+ONLY active path was the Android leg, carrying the household by itself until
+the Wi-Fi repeater and the second phone came back. The
+handsets' own uptime read 171 s and 173 s afterwards, which is how the reboot is
+known to have happened rather than assumed.
+
+Known gaps: data caps are entered by hand rather than pulled from a carrier
+API, the Companion app's history chart is slow to load away from the router's
+own LAN, and the newer Go datapath's throughput ceiling and frame
+authentication are still being hardened. The sections below hold the exact
+numbers, the current known-broken list, and the traps already paid for. Each
+is dated, so check that date against what you observe live before trusting it.
+
 ## Update (2026-08-07)
 
 All of the following was measured on the live router, not inferred.
