@@ -54,3 +54,7 @@ jobs:
         run: bash scripts/check-no-operator-hosts.sh --self-test
       - name: No new operator hosts in shipped source, and none in the tree
         run: bash scripts/check-no-operator-hosts.sh
+      # The README is public text too: hold it to the public README standard
+      # (#342). Plain python3, no pytest, so it needs nothing on the runner.
+      - name: README follows the public README standard
+        run: python3 travel/bond-agent/tests/test_readme_standard.py
