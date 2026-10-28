@@ -204,6 +204,13 @@ jobs:
       - name: Generate the Xcode project
         run: $HOME/bin/xcodegen generate
 
+      # The shared setup uses GOTOOLCHAIN=local, so select the mobile module's
+      # declared Go version before installing its pinned binding tools.
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: travel/datapath-go/mobile/go.mod
+          cache-dependency-path: travel/datapath-go/mobile/go.sum
+
       # THE EXTENSION DOES NOT LINK WITHOUT THIS. The Go datapath is built
       # from source rather than committed (~23 MB of binary), so a runner with
       # no framework produces an extension that cannot start client mode -
