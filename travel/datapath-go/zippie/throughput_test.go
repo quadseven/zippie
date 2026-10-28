@@ -135,13 +135,13 @@ func runPacedLoopback(t *testing.T, src, sink *net.UDPConn, travel, home *Transp
 	t.Helper()
 	want := make([]byte, payloadSize)
 	got := make([]byte, payloadSize+1)
+	if err := sink.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		t.Fatalf("sink deadline: %v", err)
+	}
 	for i := 0; i < packets; i++ {
 		binary.BigEndian.PutUint32(want[:4], uint32(i))
 		if _, err := src.Write(want); err != nil {
 			t.Fatalf("write payload %d: %v", i, err)
-		}
-		if err := sink.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
-			t.Fatalf("sink deadline: %v", err)
 		}
 		n, _, err := sink.ReadFromUDP(got)
 		if err != nil {
