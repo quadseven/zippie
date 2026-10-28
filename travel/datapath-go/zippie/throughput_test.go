@@ -135,8 +135,12 @@ func runPacedLoopback(t *testing.T, src, sink *net.UDPConn, travel, home *Transp
 	t.Helper()
 	want := make([]byte, payloadSize)
 	got := make([]byte, payloadSize+1)
-	if err := sink.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+	deadline := time.Now().Add(30 * time.Second)
+	if err := sink.SetReadDeadline(deadline); err != nil {
 		t.Fatalf("sink deadline: %v", err)
+	}
+	if err := src.SetWriteDeadline(deadline); err != nil {
+		t.Fatalf("source deadline: %v", err)
 	}
 	for i := 0; i < packets; i++ {
 		binary.BigEndian.PutUint32(want[:4], uint32(i))
@@ -182,9 +186,12 @@ func TestPacedLoopbackSurvivesSlowTravelReader(t *testing.T) {
 		t.Fatalf("travel receive buffer: %v", err)
 	}
 	travel.mu.Lock()
+	unlocked := make(chan struct{})
+	defer func() { <-unlocked }()
 	go func() {
 		time.Sleep(100 * time.Millisecond)
 		travel.mu.Unlock()
+		close(unlocked)
 	}()
 	runPacedLoopback(t, src, sink, travel, home, 500, 1263)
 }
