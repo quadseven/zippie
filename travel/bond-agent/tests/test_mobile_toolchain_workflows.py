@@ -52,13 +52,12 @@ def test_shared_setup_checks_both_binary_versions():
     assert "for tool in gomobile gobind" in text
     assert 'go version -m "$GOBIN/$tool"' in text
     assert 'cmd/$tool@$version"' in active_text
-    assert 'go list -m -f \'{{.Version}}\' golang.org/x/mobile' in active_text
+    assert "go list -m -f '{{.Version}}' golang.org/x/mobile" in active_text
     assert '$1 == "mod" && $2 == "golang.org/x/mobile" && $3 == version' in active_text
     installs = [
         line.strip()
         for line in active_text.splitlines()
-        if re.search(r"\bgo\s+install\b", line)
-        and "golang.org/x/mobile/cmd/" in line
+        if re.search(r"\bgo\s+install\b", line) and "golang.org/x/mobile/cmd/" in line
     ]
     assert installs == ['go install "golang.org/x/mobile/cmd/$tool@$version"']
     assert not re.search(r"\bgomobile\s+init\b", active_text)
@@ -71,8 +70,7 @@ def test_workflows_do_not_reintroduce_unpinned_mobile_tool_installs_or_init():
         installs = [
             line.strip()
             for line in active_text.splitlines()
-            if re.search(r"\bgo\s+install\b", line)
-            and "golang.org/x/mobile/cmd/" in line
+            if re.search(r"\bgo\s+install\b", line) and "golang.org/x/mobile/cmd/" in line
         ]
         assert not installs
         assert not re.search(r"\bgomobile\s+init\b", active_text)
