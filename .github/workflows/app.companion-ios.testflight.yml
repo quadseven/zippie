@@ -204,6 +204,13 @@ jobs:
       - name: Generate the Xcode project
         run: $HOME/bin/xcodegen generate
 
+      # The shared setup uses GOTOOLCHAIN=local, so select the mobile module's
+      # declared Go version before installing its pinned binding tools.
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: travel/datapath-go/mobile/go.mod
+          cache-dependency-path: travel/datapath-go/mobile/go.sum
+
       # THE EXTENSION DOES NOT LINK WITHOUT THIS. The Go datapath is built
       # from source rather than committed (~23 MB of binary), so a runner with
       # no framework produces an extension that cannot start client mode -
@@ -212,11 +219,7 @@ jobs:
       - name: Build the Go datapath xcframework
         run: |
           set -euo pipefail
-          GOMOBILE_VERSION=v0.0.0-20260803200217-62cee1672c8e
-          go install "golang.org/x/mobile/cmd/gomobile@$GOMOBILE_VERSION"
-          go install "golang.org/x/mobile/cmd/gobind@$GOMOBILE_VERSION"
-          export PATH="$HOME/go/bin:$PATH"
-          gomobile init
+          source scripts/setup-gomobile.sh
           scripts/build-datapath-framework.sh
           # Assert rather than trust: a bind that half-failed leaves a
           # directory behind, and xcodebuild's error for a broken framework

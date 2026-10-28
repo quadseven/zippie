@@ -28,6 +28,7 @@ on:
     branches: [main]
     paths:
       - 'travel/**'
+      - 'companion/scripts/setup-gomobile.sh'
       - 'home/**'
       - 'hub/**'
       # The whole directory, not just the two manifest dirs it used to name:
@@ -111,8 +112,8 @@ jobs:
           CHANGED=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
           echo "files changed by this PR:"
           printf '%s\n' "$CHANGED" | sed 's/^/  /'
-          AGENT_RE='^(travel/|home/|hub/|deploy/oke/|\.github/workflows/check\.agent-tests\.yml$)'
-          DATAPATH_RE='^(travel/datapath-go/|\.github/workflows/check\.agent-tests\.yml$)'
+          AGENT_RE='^(travel/|companion/scripts/setup-gomobile\.sh$|home/|hub/|deploy/oke/|\.github/workflows/check\.agent-tests\.yml$)'
+          DATAPATH_RE='^(travel/datapath-go/|companion/scripts/setup-gomobile\.sh$|\.github/workflows/check\.agent-tests\.yml$)'
           agent=false; datapath=false
           if printf '%s\n' "$CHANGED" | grep -Eq "$AGENT_RE"; then agent=true; fi
           if printf '%s\n' "$CHANGED" | grep -Eq "$DATAPATH_RE"; then datapath=true; fi
@@ -382,30 +383,10 @@ jobs:
           echo "DEVELOPER_DIR=$XAPP/Contents/Developer" >> "$GITHUB_ENV"
           echo "using $XAPP"
 
-      - name: Install gomobile and gobind
+      - name: Install pinned mobile tools
         run: |
-          set -euo pipefail
-          # PINNED, not @latest. This runs on the machine that signs iOS
-          # releases, so `@latest` would fetch and EXECUTE whatever upstream
-          # published most recently, next to the Apple Distribution key.
-          #
-          # The version is the one the module already requires, so the tool and
-          # the library it binds against cannot drift apart - a mismatch there
-          # produces generated bindings that compile and misbehave.
-          #
-          # READ FROM go.mod rather than repeated as a literal (#94). The app
-          # workflow now installs the same tool to build the framework it
-          # links, and two hand-maintained copies of one version is the
-          # divergence this repo keeps closing elsewhere - the copy that is
-          # not updated is the one that silently binds against a different
-          # library.
-          GOMOBILE_VERSION=$(go list -m -f '{{.Version}}' golang.org/x/mobile)
-          go install "golang.org/x/mobile/cmd/gomobile@$GOMOBILE_VERSION"
-          go install "golang.org/x/mobile/cmd/gobind@$GOMOBILE_VERSION"
-          echo "$HOME/go/bin" >> "$GITHUB_PATH"
-
-      - name: gomobile init
-        run: gomobile init
+          source ../../../companion/scripts/setup-gomobile.sh
+          echo "$GOBIN" >> "$GITHUB_PATH"
 
       - name: Bind the iOS xcframework
         run: |
