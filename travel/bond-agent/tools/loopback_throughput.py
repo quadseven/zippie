@@ -736,6 +736,7 @@ def _impaired_travel_process(local_port, leg_ports, seconds, cfg, out_q):
         reorder_deadline_ms=cfg["reorder_ms"],
         classifier=ClassifierConfig(duplicate_enabled=cfg["duplicate"]),
         duplicate_fanout=cfg["fanout"],
+        adaptive_duplicate_loss_pct=cfg.get("adaptive_duplicate_loss_pct", 10.0),
         socket_factory=factory,
         selector_factory=lambda: sel,
     )
@@ -776,8 +777,15 @@ def _impaired_travel_process(local_port, leg_ports, seconds, cfg, out_q):
     out_q.put({"ready": True})
     deadline = time.monotonic() + seconds
     next_pass = time.monotonic()
+    start = next_pass
+    previous_wide = False
+    adaptive_changes = []
     while time.monotonic() < deadline:
         transport.run_once(IMPAIR_LOOP_TIMEOUT_S)
+        wide = transport.scheduler._duplicate_wide
+        if wide != previous_wide:
+            adaptive_changes.append((round(time.monotonic() - start, 3), wide))
+            previous_wide = wide
         # A delayed leg owes what is in its queue even when nothing new comes
         # past to push it out, and the loop thread is the only thread there is.
         impairer.pump()
@@ -788,6 +796,12 @@ def _impaired_travel_process(local_port, leg_ports, seconds, cfg, out_q):
 
     stats = transport.stats_dict()
     stats["select_calls"] = sel.calls
+    stats["adaptive_loss"] = {
+        p.path_id: transport._adaptive_loss_pct(p.path_id, transport._clock())
+        for p in transport.scheduler.healthy_paths
+    }
+    stats["adaptive_wide"] = transport.scheduler._duplicate_wide
+    stats["adaptive_changes"] = adaptive_changes
     stats["impairment"] = impairer.counters()
     stats["control"] = cfg["control"]
     stats["shed"] = control.shed_names()
@@ -977,6 +991,7 @@ def run_impaired(
     ack_every=0,
     drain_s=None,
     control="shed",
+    adaptive_duplicate_loss_pct=10.0,
 ):
     """One impaired run, travel -> home, and everything both ends counted."""
     duration = payloads / pps
@@ -998,6 +1013,7 @@ def run_impaired(
         "shed_ratio": shed_ratio,
         "reorder_ms": reorder_ms,
         "control": control,
+        "adaptive_duplicate_loss_pct": adaptive_duplicate_loss_pct,
     }
     h = _ImpairedHarness(legs, cfg, duration + drain_s)
     try:
@@ -1076,6 +1092,9 @@ def run_impaired(
         # harness's assumption dressed as a measurement.
         "policy": travel["policy"],
         "loop_us": travel["loop_us"],
+        "adaptive_loss": travel["adaptive_loss"],
+        "adaptive_wide": travel["adaptive_wide"],
+        "adaptive_changes": travel["adaptive_changes"],
         # THE THREE THINGS "WHY DID DELIVERY SUFFER" CAN MEAN, REPORTED
         # SEPARATELY RATHER THAN COLLAPSED TO ONE GUESS (#63). A single
         # "likely cause" label would have to pick a winner when more than one
@@ -1290,6 +1309,12 @@ def main(argv=None) -> int:
         "and #81's retransmit criterion can be measured without a router.",
     )
     imp.add_argument(
+        "--adaptive-duplicate-loss-pct",
+        type=float,
+        default=10.0,
+        help="loss threshold for adaptive duplicate fan-out; 0 disables widening",
+    )
+    imp.add_argument(
         "--impair-legs",
         default="",
         help="which legs to impair: `all`, or e.g. `1` or `0,2`. "
@@ -1403,6 +1428,7 @@ def main(argv=None) -> int:
                     reorder_ms=args.reorder_deadline_ms,
                     ack_every=args.ack_every,
                     control=args.control,
+                    adaptive_duplicate_loss_pct=args.adaptive_duplicate_loss_pct,
                 )
             )
         verdict = None

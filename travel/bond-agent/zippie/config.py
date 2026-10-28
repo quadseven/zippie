@@ -281,6 +281,7 @@ def parse_config(
         # typo costs a surprising fan-out rather than an agent that will not
         # start on a router that is currently somebody's only internet.
         duplicate_fanout=int(policy_raw.get("duplicate_fanout", 2)),
+        adaptive_duplicate_loss_pct=float(policy_raw.get("adaptive_duplicate_loss_pct", 10.0)),
         # Bond standdown (#124). Not validated here, same reasoning as the
         # shed ratio and the resolver-kick knobs above: an operator on a
         # router in a car may need to reach for this, and a bad value must

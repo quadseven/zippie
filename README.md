@@ -246,6 +246,15 @@ monthly_cap_gb = 50
 match = { type = "ssid", ssid = "PHONE-VZ" }
 ```
 
+For the Python packet datapath, `[policy] adaptive_duplicate_loss_pct` sets
+the per-leg loss percentage above which duplicate fan-out can widen. The
+default is 10; values from 5 inclusive to 100 exclusive are supported.
+Set it to 0 to disable widening; other values outside that range also disable it. The decision uses
+recent keepalive outcomes for every carrying leg, requires enough samples,
+and returns to the configured `duplicate_fanout` after sustained recovery.
+Unknown or stale loss keeps fan-out bounded. Widening sends extra copies and
+can increase bandwidth and CPU use.
+
 What you bring (none of it ships with the repo):
 
 | Role | Device | Notes |
