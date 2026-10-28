@@ -212,11 +212,7 @@ jobs:
       - name: Build the Go datapath xcframework
         run: |
           set -euo pipefail
-          GOMOBILE_VERSION=v0.0.0-20260803200217-62cee1672c8e
-          go install "golang.org/x/mobile/cmd/gomobile@$GOMOBILE_VERSION"
-          go install "golang.org/x/mobile/cmd/gobind@$GOMOBILE_VERSION"
-          export PATH="$HOME/go/bin:$PATH"
-          gomobile init
+          source scripts/setup-gomobile.sh
           scripts/build-datapath-framework.sh
           # Assert rather than trust: a bind that half-failed leaves a
           # directory behind, and xcodebuild's error for a broken framework

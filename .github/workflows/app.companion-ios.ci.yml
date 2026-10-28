@@ -152,19 +152,7 @@ jobs:
       - name: build the datapath xcframework from source
         run: |
           set -euo pipefail
-          # DERIVED FROM go.mod, not a second literal. check.agent-tests.yml
-          # pins the same tool and says the version "is the one the module
-          # already requires" - so reading it from the module keeps the two
-          # jobs from drifting apart, which a copied constant would not.
-          # Still pinned, and still never @latest: this is the machine that
-          # holds the Apple Distribution key.
-          GOMOBILE_VERSION=$(cd travel/datapath-go/mobile \
-            && go list -m -f '{{.Version}}' golang.org/x/mobile)
-          echo "gomobile pinned to $GOMOBILE_VERSION (from mobile/go.mod)"
-          go install "golang.org/x/mobile/cmd/gomobile@$GOMOBILE_VERSION"
-          go install "golang.org/x/mobile/cmd/gobind@$GOMOBILE_VERSION"
-          export PATH="$HOME/go/bin:$PATH"
-          gomobile init
+          source companion/scripts/setup-gomobile.sh
           rm -rf companion/Frameworks/Zippie.xcframework
           companion/scripts/build-datapath-framework.sh
           test -d companion/Frameworks/Zippie.xcframework \
