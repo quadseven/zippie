@@ -79,7 +79,7 @@ def _post(base, path, body, token=None):
 def test_a_401_announce_is_logged_at_warning(served, caplog):
     """The whole point. At INFO - what the agent actually runs at - a refused
     announce must still be visible."""
-    _agent_, base = served
+    _, base = served
     with caplog.at_level(logging.INFO, logger="zippie.agent"):
         code, _ = _post(
             base,
@@ -100,7 +100,7 @@ def test_a_401_announce_is_logged_at_warning(served, caplog):
 
 def test_the_rejection_log_names_the_caller(served, caplog):
     """'Something was refused' is not enough - which device, and on what path."""
-    _agent_, base = served
+    _, base = served
     with caplog.at_level(logging.INFO, logger="zippie.agent"):
         _post(base, "/api/legs/announce", {"name": "iphone"}, token="wrong")
 
@@ -137,6 +137,25 @@ def test_a_successful_announce_is_visible_too(served, caplog):
     assert code == 200
     joined = " ".join(r.getMessage() for r in caplog.records if r.levelno >= logging.INFO)
     assert "iphone" in joined, f"a successful announce logged nothing: {joined}"
+
+
+def test_a_phone_isp_name_survives_the_authenticated_announce(served):
+    agent, base = served
+    code, _ = _post(
+        base,
+        "/api/legs/announce",
+        {
+            "name": "iphone",
+            "host": "10.99.0.151",
+            "port": 51999,
+            "isp_name": "Example Provider",
+        },
+        token=agent.console_token(),
+    )
+
+    assert code == 200
+    leg = next(leg for leg in agent.dynamic.live() if leg.name == "iphone")
+    assert leg.isp_name == "Example Provider"
 
 
 def test_a_malformed_body_is_logged_with_its_reason(served, caplog):

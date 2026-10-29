@@ -2706,7 +2706,7 @@ class BondAgent:
                     cost_class=CostClass.METERED,
                     relay_endpoint=leg.relay_endpoint,
                 )
-                path = PathRuntime(name=name, config=cfg)
+                path = PathRuntime(name=name, config=cfg, isp_name=leg.isp_name)
                 self._dynamic_paths[name] = path
                 self.paths.append(path)
                 log.info("dynamic leg %s announced at %s", name, leg.relay_endpoint)
@@ -2734,6 +2734,9 @@ class BondAgent:
             )
             object.__setattr__(existing.config, "relay_endpoint", leg.relay_endpoint)
             self._drop_transport_path(name)
+        if existing.isp_name != leg.isp_name:
+            log.info("dynamic leg %s ISP name changed to %r", name, leg.isp_name)
+            existing.isp_name = leg.isp_name
         # THE OPERATOR'S NAME WINS OVER THE DEVICE'S (#80).
         #
         # Without this the two writers fight forever. reconcile_dynamic_legs
@@ -4738,6 +4741,7 @@ class BondAgent:
                         # in reconcile_dynamic_legs. Defaulting to 1 here made
                         # a silent announce evict every demoted leg (#67).
                         tier=(None if body.get("tier") is None else int(body["tier"])),
+                        isp_name=body.get("isp_name"),
                         lease_s=float(body.get("lease_s", 45)),
                     )
                 except (ValueError, TypeError) as exc:
@@ -4981,11 +4985,6 @@ class BondAgent:
         # the same tick rather than staying demoted until the next one.
         self.roll_usage_period()
         self.match_interfaces()
-        names = self._isp_name_resolver.update(
-            (path.name, path.interface, path.local_ip) for path in self.paths
-        )
-        for path in self.paths:
-            path.isp_name = names.get(path.name)
         # AFTER match_interfaces, same tick: needs this pass's path.interface
         # to know which radio to ask, and re-deriving every tick (rather than
         # once, on change) is what makes a repeater's label follow the live
@@ -4999,6 +4998,19 @@ class BondAgent:
         self.apply_auto_cost_class()
         self.ensure_tunnels()
         self.probe_paths()
+        router_paths = tuple(path for path in self.paths if path.name not in self._dynamic_paths)
+        names = self._isp_name_resolver.update(
+            (
+                path.name,
+                path.interface,
+                path.local_ip,
+                path.state in {PathState.UP, PathState.DEGRADED},
+            )
+            for path in router_paths
+        )
+        for path in self.paths:
+            if path.name not in self._dynamic_paths:
+                path.isp_name = names.get(path.name)
         self.sample_counters()
         self.apply_policy()
         # AFTER apply_policy, same tick: needs this pass's contributing/

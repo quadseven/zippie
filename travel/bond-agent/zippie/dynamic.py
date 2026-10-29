@@ -61,6 +61,9 @@ class DynamicLeg:
     # demoted - the bond ran on one leg for an hour on 2026-08-08 (#67).
     # Resolved at reconcile time to whatever tier is already carrying.
     tier: int | None = None
+    # Reported by the phone after a lookup bound to its own cellular path.
+    # The router cannot infer this from br-lan without naming its own egress.
+    isp_name: str | None = None
 
     @property
     def relay_endpoint(self) -> str:
@@ -111,6 +114,7 @@ class DynamicLegs:
         label: str = "",
         weight: int = 60,
         tier: int | None = None,
+        isp_name: str | None = None,
         lease_s: float = DEFAULT_LEASE_S,
     ) -> DynamicLeg:
         """Accept or renew a leg. Raises ValueError on anything unusable.
@@ -134,6 +138,18 @@ class DynamicLegs:
         # check: this still arrives over the network.
         if tier is not None and not (1 <= int(tier) <= 99):
             raise ValueError("tier must be 1..99")
+        if isp_name is not None:
+            if not isinstance(isp_name, str):
+                raise ValueError("isp_name must be text")
+            isp_name = isp_name.strip()
+            if isp_name and (
+                len(isp_name) > 64
+                or any(
+                    not character.isascii() or not character.isprintable() for character in isp_name
+                )
+            ):
+                raise ValueError("isp_name must be at most 64 printable ASCII characters")
+            isp_name = isp_name or None
         lease = max(5.0, min(float(lease_s), 300.0))
 
         leg = DynamicLeg(
@@ -143,6 +159,7 @@ class DynamicLegs:
             port=int(port),
             weight=int(weight),
             tier=(None if tier is None else int(tier)),
+            isp_name=isp_name,
             expires_at=self._clock() + lease,
         )
         with self._lock:
@@ -186,6 +203,4 @@ def is_private_v4(host: str) -> bool:
         return True
     if a == 192 and b == 168:
         return True
-    if a == 172 and 16 <= b <= 31:
-        return True
-    return False
+    return bool(a == 172 and 16 <= b <= 31)

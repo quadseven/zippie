@@ -8,8 +8,9 @@ import socket
 import struct
 import threading
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Callable, Iterable
+from typing import Callable
 
 DNS_SERVER = "208.67.222.222"
 DNS_PORT = 53
@@ -215,7 +216,7 @@ class ISPNameResolver:
         self._clock = clock
         self._thread_factory = thread_factory
         self._cache: dict[str, ISPIdentity] = {}
-        self._profiles: dict[str, tuple[str | None, str | None]] = {}
+        self._profiles: dict[str, tuple[str | None, str | None, bool]] = {}
         self._current: dict[str, str | None] = {}
         self._last_refresh = float("-inf")
         self._refresh_pending = False
@@ -265,12 +266,20 @@ class ISPNameResolver:
 
     def update(
         self,
-        legs: Iterable[tuple[str, str | None, str | None]],
+        legs: Iterable[tuple[str, str | None, str | None, bool]],
     ) -> dict[str, str | None]:
-        """Schedule a bounded refresh and return names without waiting for DNS."""
+        """Schedule a bounded refresh and return names without waiting for DNS.
+
+        The final tuple field is current path availability. A lost path clears
+        its display name immediately, even if its interface and local address
+        have not changed.
+        """
         snapshot = tuple(legs)
-        profiles = {name: (interface, local_ip) for name, interface, local_ip in snapshot}
-        start: tuple[tuple[str, str | None, str | None], ...] | None = None
+        profiles = {
+            name: (interface, local_ip, available)
+            for name, interface, local_ip, available in snapshot
+        }
+        start: tuple[tuple[str, str | None, str | None, bool], ...] | None = None
         now = self._clock()
         with self._lock:
             changed = profiles != self._profiles
@@ -282,12 +291,12 @@ class ISPNameResolver:
                 self._refresh_pending = True
             if now - self._last_refresh >= self._interval:
                 self._refresh_pending = True
-            eligible = tuple(item for item in snapshot if item[1])
+            eligible = tuple(item for item in snapshot if item[1] and item[3])
             if self._refresh_pending and not self._running and eligible:
                 self._running = True
                 self._refresh_pending = False
                 self._last_refresh = now
-                for name, _, _ in eligible:
+                for name, _, _, _ in eligible:
                     self._current[name] = None
                 start = eligible
             result = dict(self._current)
@@ -307,14 +316,16 @@ class ISPNameResolver:
 
     def _refresh(
         self,
-        legs: tuple[tuple[str, str | None, str | None], ...],
-        profiles: dict[str, tuple[str | None, str | None]],
+        legs: tuple[tuple[str, str | None, str | None, bool], ...],
+        profiles: dict[str, tuple[str | None, str | None, bool]],
     ) -> None:
         try:
-            for name, interface, local_ip in legs:
+            for name, interface, local_ip, available in legs:
+                if not available:
+                    continue
                 identity = self.lookup_now(interface or "")
                 with self._lock:
-                    if self._profiles.get(name) == (interface, local_ip):
+                    if self._profiles.get(name) == (interface, local_ip, available):
                         self._current[name] = identity.name if identity else None
         finally:
             with self._lock:

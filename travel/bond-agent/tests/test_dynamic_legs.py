@@ -100,6 +100,17 @@ def test_a_hostile_name_is_refused():
             d.announce(name=name, host="10.99.0.5", port=51999)
 
 
+def test_a_phone_isp_name_is_bounded_and_printable():
+    d = DynamicLegs(clock=Clock())
+    leg = d.announce(name="ok-leg", host="10.99.0.5", port=51999, isp_name="Example Provider")
+    assert leg.isp_name == "Example Provider"
+    assert d.announce(name="ok-leg", host="10.99.0.5", port=51999, isp_name="  ").isp_name is None
+
+    for invalid in ["x" * 65, "Provider\nInjected", "Provider \u2603", 7]:
+        with pytest.raises(ValueError):
+            d.announce(name="ok-leg", host="10.99.0.5", port=51999, isp_name=invalid)
+
+
 def test_out_of_range_values_are_refused():
     d = DynamicLegs(clock=Clock())
     with pytest.raises(ValueError):
@@ -183,6 +194,23 @@ def test_an_announced_leg_joins_the_agents_paths(tmp_path):
     assert leg.config.label == "iPhone (Verizon)"
 
 
+def test_a_dynamic_isp_name_updates_and_clears_with_the_announcement(tmp_path):
+    a = _agent(tmp_path)
+    a.dynamic.announce(
+        name="operator-iphone",
+        host="10.99.0.151",
+        port=51999,
+        isp_name="Example Provider",
+    )
+    a.reconcile_dynamic_legs()
+    leg = next(p for p in a.paths if p.name == "operator-iphone")
+    assert leg.isp_name == "Example Provider"
+
+    a.dynamic.announce(name="operator-iphone", host="10.99.0.151", port=51999, isp_name=None)
+    a.reconcile_dynamic_legs()
+    assert leg.isp_name is None
+
+
 def test_an_expired_leg_is_REMOVED_not_left_as_a_down_row(tmp_path):
     """Leaving it is exactly the phantom this replaces. The config file already
     kept a permanent down row for a phone that had left, and that was the bug."""
@@ -250,7 +278,7 @@ def _tick(agent):
     test, so it has to come from loop_once itself. Everything after
     match_interfaces wants a live router.
     """
-    import unittest.mock as mock
+    from unittest import mock
 
     # loop_once publishes status.json at the end; nothing creates run_dir until
     # the real agent starts.
