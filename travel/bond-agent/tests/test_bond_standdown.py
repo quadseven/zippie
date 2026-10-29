@@ -350,6 +350,7 @@ def test_standdown_still_fires_for_a_genuinely_different_interface(
 def test_an_idle_reserve_legs_stale_tail_does_not_stop_the_bond_standing_down(
     tmp_path,
     spy,
+    monkeypatch,
 ):
     """#124, one layer deeper than the incident itself: the mechanism that
     fixed #124 has the SAME failure shape #124 describes, once a second tier
@@ -388,6 +389,9 @@ def test_an_idle_reserve_legs_stale_tail_does_not_stop_the_bond_standing_down(
         ],
     }
     agent = BondAgent(parse_config(cfg))
+    # Control fallback here so this tier-selection assertion is independent
+    # of the host route table; the sole-uplink guard has separate coverage.
+    monkeypatch.setattr(net, "foreign_default_route_exists", lambda *a, **k: True)
     for path, wg in zip(agent.paths, ("pb0", "pb1")):
         path.wg_iface = wg
         path.interface = path.config.match.interface
