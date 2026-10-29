@@ -132,7 +132,7 @@ class DynamicLegs:
         isp_name: str | None = None,
         lease_s: float = DEFAULT_LEASE_S,
     ) -> DynamicLeg:
-        """Accept or renew a leg. Raises ValueError on anything unusable.
+        """Accept or renew a leg. Raises TypeError for wrong types and ValueError for unusable values.
 
         VALIDATED HARD, because this is the one path where a leg's identity
         comes off the network rather than out of a file an operator wrote. A
