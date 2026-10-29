@@ -7,7 +7,7 @@ import struct
 from pathlib import Path
 from types import SimpleNamespace
 
-from zippie.isp import DNSClient, ISPNameResolver, _answers, _provider_from_cymru
+from zippie.isp import DNSClient, ISPNameResolver, _answers, _origin_asn, _provider_from_cymru
 from zippie.models import PathState
 
 
@@ -34,7 +34,8 @@ class FakeDNS:
     def __init__(self):
         self.public_ip = "198.51.100.17"
         self.ptr = ["customer.provider.test"]
-        self.txt = ["AS64500 | 198.51.100.0/24 | ZZ | test | 2020-01-01 | Example Broadband"]
+        self.txt = ["64500 | 198.51.100.0/24 | ZZ | test | 2020-01-01"]
+        self.asn_txt = ["64500 | ZZ | test | 2020-01-04 | Example Broadband"]
         self.calls = []
 
     def query(self, interface, name, record_type):
@@ -45,6 +46,8 @@ class FakeDNS:
             return self.ptr
         if name.endswith(".origin.asn.cymru.com") and record_type == "TXT":
             return self.txt
+        if name.endswith(".asn.cymru.com") and record_type == "TXT":
+            return self.asn_txt
         return []
 
 
@@ -143,24 +146,21 @@ def test_dns_packet_parser_rejects_a_question_for_another_record_type():
     assert _answers(packet, ident, "myip.opendns.com", 12) == []
 
 
-def test_team_cymru_parser_rejects_malformed_records():
-    assert (
-        _provider_from_cymru(
-            "AS64500 | 198.51.100.0/24 | ZZ | test | 2020-01-01 | Example Broadband"
-        )
-        == "Example Broadband"
+def test_team_cymru_parser_validates_origin_and_asn_records():
+    origin = "64500 | 198.51.100.0/24 | ZZ | test | 2020-01-01"
+    assert _origin_asn(origin, "198.51.100.17") == "64500"
+    assert _provider_from_cymru("64500 | ZZ | test | 2020-01-04 | Example Broadband", "64500") == (
+        "Example Broadband"
     )
-    assert _provider_from_cymru("unrelated | text") is None
-    assert (
-        _provider_from_cymru(
-            "AS64500 | 198.51.100.0/24 | ZZ | test | not-a-date | Example Broadband"
-        )
-        is None
-    )
-    assert (
-        _provider_from_cymru("AS64500 | not-a-prefix | ZZ | test | 2020-01-01 | Example Broadband")
-        is None
-    )
+
+
+def test_team_cymru_parser_rejects_malformed_or_unrelated_records():
+    assert _origin_asn("unrelated | text", "198.51.100.17") is None
+    assert _origin_asn("64500 | not-a-prefix | ZZ | test | 2020-01-01", "198.51.100.17") is None
+    assert _origin_asn("64500 | 198.51.100.0/24 | ZZ | test | not-a-date", "198.51.100.17") is None
+    assert _origin_asn("64500 | 198.51.100.0/24 | ZZ | test | 2020-01-01", "203.0.113.8") is None
+    assert _provider_from_cymru("64501 | ZZ | test | 2020-01-04 | Wrong ASN", "64500") is None
+    assert _provider_from_cymru("64500 | ZZ | test | not-a-date | Bad Date", "64500") is None
 
 
 def test_dns_packet_parser_rejects_truncated_txt_rdata():
@@ -196,7 +196,9 @@ def test_team_cymru_txt_supplies_the_name_when_reverse_dns_has_no_name():
     assert result is not None
     assert result.name == "Example Broadband"
     assert result.source == "team_cymru"
-    assert [call[2] for call in dns.calls] == ["A", "PTR", "TXT"]
+    assert [call[2] for call in dns.calls] == ["A", "PTR", "TXT", "TXT"]
+    assert dns.calls[-2][1] == "17.100.51.198.origin.asn.cymru.com"
+    assert dns.calls[-1][1] == "AS64500.asn.cymru.com"
 
 
 def test_names_are_cached_by_public_ip_and_changed_ips_drop_the_old_name():

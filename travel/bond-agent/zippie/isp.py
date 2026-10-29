@@ -220,26 +220,91 @@ def _provider_from_ptr(hostname: str) -> str | None:
     return label.title()
 
 
-def _provider_from_cymru(record: str) -> str | None:
+def _cymru_fields(record: str, expected_count: int) -> list[str] | None:
     fields = [part.strip().strip('"').strip() for part in record.split("|")]
-    if len(fields) != 6:
-        return None
-    asn, network, country, registry, allocation_date, provider = fields
-    if not asn.upper().startswith("AS") or not asn[2:].isdigit():
-        return None
-    try:
-        ipaddress.IPv4Network(network, strict=False)
-    except ValueError:
-        return None
+    return fields if len(fields) == expected_count else None
+
+
+def _valid_cymru_metadata(country: str, registry: str, allocation_date: str) -> bool:
     if len(country) != 2 or not country.isascii() or not country.isalpha() or not registry:
-        return None
+        return False
     try:
         date.fromisoformat(allocation_date)
     except ValueError:
+        return False
+    return True
+
+
+def _origin_asn(record: str, expected_ip: str) -> str | None:
+    fields = _cymru_fields(record, 5)
+    if fields is None:
         return None
-    if not provider or provider.lower() in {"unknown", "n/a", "none"}:
+    asn, network, country, registry, allocation_date = fields
+    if not asn.isdigit() or not _valid_cymru_metadata(country, registry, allocation_date):
+        return None
+    try:
+        prefix = ipaddress.IPv4Network(network, strict=False)
+        if ipaddress.IPv4Address(expected_ip) not in prefix:
+            return None
+    except ValueError:
+        return None
+    return asn
+
+
+def _provider_from_cymru(record: str, expected_asn: str) -> str | None:
+    fields = _cymru_fields(record, 5)
+    if fields is None:
+        return None
+    asn, country, registry, allocation_date, provider = fields
+    if asn != expected_asn or not asn.isdigit():
+        return None
+    if not _valid_cymru_metadata(country, registry, allocation_date):
+        return None
+    if (
+        not provider
+        or provider.lower() in {"unknown", "n/a", "none"}
+        or len(provider) > 64
+        or not provider.isascii()
+        or not provider.isprintable()
+    ):
         return None
     return provider
+
+
+def _reverse_dns_provider_name(dns: DNSClient, interface: str, public_ip: str) -> str | None:
+    reverse_name = ".".join(reversed(public_ip.split("."))) + ".in-addr.arpa"
+    try:
+        answers = dns.query(interface, reverse_name, "PTR")
+    except (OSError, ValueError, struct.error):
+        return None
+    for answer in answers:
+        name = _provider_from_ptr(answer)
+        if name:
+            return name
+    return None
+
+
+def _team_cymru_provider_name(dns: DNSClient, interface: str, public_ip: str) -> str | None:
+    origin_query = ".".join(reversed(public_ip.split("."))) + ".origin.asn.cymru.com"
+    try:
+        origin_answers = dns.query(interface, origin_query, "TXT")
+    except (OSError, ValueError, struct.error):
+        return None
+    queried_asns: set[str] = set()
+    for answer in origin_answers:
+        asn = _origin_asn(answer, public_ip)
+        if asn is None or asn in queried_asns:
+            continue
+        queried_asns.add(asn)
+        try:
+            asn_answers = dns.query(interface, f"AS{asn}.asn.cymru.com", "TXT")
+        except (OSError, ValueError, struct.error):
+            continue
+        for asn_answer in asn_answers:
+            name = _provider_from_cymru(asn_answer, asn)
+            if name:
+                return name
+    return None
 
 
 class ISPNameResolver:
@@ -271,39 +336,24 @@ class ISPNameResolver:
             answers = self._dns.query(interface, PUBLIC_IP_NAME, "A")
         except (OSError, ValueError, struct.error):
             return None
-        public_ip = next(
-            (value for value in answers if _is_ipv4(value)),
-            None,
-        )
+        public_ip = next((value for value in answers if _is_ipv4(value)), None)
         if public_ip is None:
             return None
         cached = self._cache.get(public_ip)
         if cached is not None:
             return cached
 
-        reverse_name = ".".join(reversed(public_ip.split("."))) + ".in-addr.arpa"
-        try:
-            ptr_answers = self._dns.query(interface, reverse_name, "PTR")
-        except (OSError, ValueError, struct.error):
-            ptr_answers = []
-        for answer in ptr_answers:
-            name = _provider_from_ptr(answer)
-            if name:
-                identity = ISPIdentity(public_ip, name, "reverse_dns")
-                self._cache[public_ip] = identity
-                return identity
+        name = _reverse_dns_provider_name(self._dns, interface, public_ip)
+        if name:
+            identity = ISPIdentity(public_ip, name, "reverse_dns")
+            self._cache[public_ip] = identity
+            return identity
 
-        cymru_name = ".".join(reversed(public_ip.split("."))) + ".origin.asn.cymru.com"
-        try:
-            txt_answers = self._dns.query(interface, cymru_name, "TXT")
-        except (OSError, ValueError, struct.error):
-            txt_answers = []
-        for answer in txt_answers:
-            name = _provider_from_cymru(answer)
-            if name:
-                identity = ISPIdentity(public_ip, name, "team_cymru")
-                self._cache[public_ip] = identity
-                return identity
+        name = _team_cymru_provider_name(self._dns, interface, public_ip)
+        if name:
+            identity = ISPIdentity(public_ip, name, "team_cymru")
+            self._cache[public_ip] = identity
+            return identity
         return None
 
     def update(
