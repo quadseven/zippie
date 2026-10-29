@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlparse
 
-from zippie import __version__, build, net, policy, shaper, telemetry, wifi, wifi_uci
+from zippie import __version__, build, isp, net, policy, shaper, telemetry, wifi, wifi_uci
 from zippie.config import load_config, validate_dashboard_tls
 from zippie.counters import (
     DEFAULT_SERIES_MAX_RESPONSE_POINTS,
@@ -650,6 +650,7 @@ class BondAgent:
         self.paths: list[PathRuntime] = [
             PathRuntime(name=p.name, config=p, port=p.port) for p in config.paths if p.enabled
         ]
+        self._isp_name_resolver = isp.ISPNameResolver()
         self.primary: str | None = None
         # Liveness is judged on whether each tunnel's receive counter is still
         # MOVING. Handshake age and cumulative rx are both historical and stay
@@ -2705,7 +2706,7 @@ class BondAgent:
                     cost_class=CostClass.METERED,
                     relay_endpoint=leg.relay_endpoint,
                 )
-                path = PathRuntime(name=name, config=cfg)
+                path = PathRuntime(name=name, config=cfg, isp_name=leg.isp_name)
                 self._dynamic_paths[name] = path
                 self.paths.append(path)
                 log.info("dynamic leg %s announced at %s", name, leg.relay_endpoint)
@@ -2733,6 +2734,9 @@ class BondAgent:
             )
             object.__setattr__(existing.config, "relay_endpoint", leg.relay_endpoint)
             self._drop_transport_path(name)
+        if existing.isp_name != leg.isp_name:
+            log.info("dynamic leg %s ISP name changed to %r", name, leg.isp_name)
+            existing.isp_name = leg.isp_name
         # THE OPERATOR'S NAME WINS OVER THE DEVICE'S (#80).
         #
         # Without this the two writers fight forever. reconcile_dynamic_legs
@@ -4737,6 +4741,7 @@ class BondAgent:
                         # in reconcile_dynamic_legs. Defaulting to 1 here made
                         # a silent announce evict every demoted leg (#67).
                         tier=(None if body.get("tier") is None else int(body["tier"])),
+                        isp_name=body.get("isp_name"),
                         lease_s=float(body.get("lease_s", 45)),
                     )
                 except (ValueError, TypeError) as exc:
@@ -4993,6 +4998,19 @@ class BondAgent:
         self.apply_auto_cost_class()
         self.ensure_tunnels()
         self.probe_paths()
+        router_paths = tuple(path for path in self.paths if path.name not in self._dynamic_paths)
+        names = self._isp_name_resolver.update(
+            (
+                path.name,
+                path.interface,
+                path.local_ip,
+                path.state in {PathState.UP, PathState.DEGRADED},
+            )
+            for path in router_paths
+        )
+        for path in self.paths:
+            if path.name not in self._dynamic_paths:
+                path.isp_name = names.get(path.name)
         self.sample_counters()
         self.apply_policy()
         # AFTER apply_policy, same tick: needs this pass's contributing/
