@@ -119,7 +119,7 @@ def test_a_phone_isp_name_is_bounded_and_printable():
         is None
     )
 
-    for invalid in ["x" * 65, "Provider\nInjected", "Provider \u2603", 7]:
+    for invalid in ["x" * 65, "Provider\nInjected", "Provider \u2603"]:
         with pytest.raises(ValueError):
             d.announce(
                 name="ok-leg",
@@ -127,6 +127,13 @@ def test_a_phone_isp_name_is_bounded_and_printable():
                 port=51999,
                 isp_name=invalid,
             )
+    with pytest.raises(TypeError):
+        d.announce(
+            name="ok-leg",
+            host="10.99.0.5",  # leak-guard-allow
+            port=51999,
+            isp_name=7,
+        )
 
 
 def test_out_of_range_values_are_refused():

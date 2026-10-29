@@ -10,6 +10,7 @@ import threading
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import date
 from typing import Callable
 
 DNS_SERVER = "208.67.222.222"
@@ -90,10 +91,28 @@ def _txt_value(data: bytes) -> str:
     return "".join(values)
 
 
-def _answer_values(packet: bytes, offset: int, count: int, qtype: int) -> list[str]:
+def _answer_value(record_type: int, data: bytes, packet: bytes, offset: int) -> str | None:
+    if record_type == RECORD_TYPES["A"] and len(data) == 4:
+        return str(ipaddress.IPv4Address(data))
+    if record_type == RECORD_TYPES["PTR"]:
+        value, _ = _read_name(packet, offset)
+        return value or None
+    if record_type == RECORD_TYPES["TXT"]:
+        value = _txt_value(data)
+        return value or None
+    return None
+
+
+def _same_dns_name(name: str, expected: str) -> bool:
+    return name.rstrip(".").casefold() == expected.rstrip(".").casefold()
+
+
+def _answer_values(
+    packet: bytes, offset: int, count: int, qtype: int, expected_name: str
+) -> list[str]:
     values: list[str] = []
     for _ in range(count):
-        _, size = _read_name(packet, offset)
+        owner, size = _read_name(packet, offset)
         offset += size
         if offset + 10 > len(packet):
             raise ValueError("truncated DNS answer")
@@ -106,35 +125,36 @@ def _answer_values(packet: bytes, offset: int, count: int, qtype: int) -> list[s
         data_offset = offset
         data = packet[offset : offset + data_size]
         offset += data_size
-        if answer_class != 1 or answer_type != qtype:
+        if not _same_dns_name(owner, expected_name) or answer_class != 1 or answer_type != qtype:
             continue
-        if answer_type == RECORD_TYPES["A"] and data_size == 4:
-            values.append(str(ipaddress.IPv4Address(data)))
-        elif answer_type == RECORD_TYPES["PTR"]:
-            value, _ = _read_name(packet, data_offset)
-            if value:
-                values.append(value)
-        elif answer_type == RECORD_TYPES["TXT"]:
-            value = _txt_value(data)
-            if value:
-                values.append(value)
+        value = _answer_value(answer_type, data, packet, data_offset)
+        if value is not None:
+            values.append(value)
     return values
 
 
-def _answers(packet: bytes, expected_id: int, qtype: int) -> list[str]:
+def _answers(packet: bytes, expected_id: int, expected_name: str, qtype: int) -> list[str]:
     if len(packet) < 12:
         return []
     ident, flags, questions, answers, _, _ = struct.unpack("!HHHHHH", packet[:12])
     if ident != expected_id or not flags & 0x8000 or flags & 0x0200 or flags & 0x000F:
         return []
+    if questions != 1:
+        return []
     offset = 12
-    for _ in range(questions):
-        _, size = _read_name(packet, offset)
-        offset += size
-        if offset + 4 > len(packet):
-            raise ValueError("truncated DNS question")
-        offset += 4
-    return _answer_values(packet, offset, answers, qtype)
+    question_name, size = _read_name(packet, offset)
+    offset += size
+    if offset + 4 > len(packet):
+        raise ValueError("truncated DNS question")
+    question_type, question_class = struct.unpack("!HH", packet[offset : offset + 4])
+    offset += 4
+    if (
+        not _same_dns_name(question_name, expected_name)
+        or question_type != qtype
+        or question_class != 1
+    ):
+        return []
+    return _answer_values(packet, offset, answers, qtype, expected_name)
 
 
 class DNSClient:
@@ -166,8 +186,15 @@ class DNSClient:
             sock.settimeout(self.timeout_s)
             sock.setsockopt(socket.SOL_SOCKET, bind_option, interface.encode("ascii") + b"\0")
             sock.sendto(request, (self.resolver, DNS_PORT))
-            response, _ = sock.recvfrom(4096)
-            return _answers(response, ident, qtype)
+            response, source = sock.recvfrom(4096)
+            try:
+                source_ip = ipaddress.ip_address(source[0])
+                resolver_ip = ipaddress.ip_address(self.resolver)
+            except (IndexError, TypeError, ValueError):
+                return []
+            if source_ip != resolver_ip or source[1] != DNS_PORT:
+                return []
+            return _answers(response, ident, name, qtype)
         finally:
             sock.close()
 
@@ -194,10 +221,22 @@ def _provider_from_ptr(hostname: str) -> str | None:
 
 
 def _provider_from_cymru(record: str) -> str | None:
-    fields = [part.strip() for part in record.split("|")]
-    if len(fields) < 2:
+    fields = [part.strip().strip('"').strip() for part in record.split("|")]
+    if len(fields) != 6:
         return None
-    provider = fields[-1].strip().strip('"').strip()
+    asn, network, country, registry, allocation_date, provider = fields
+    if not asn.upper().startswith("AS") or not asn[2:].isdigit():
+        return None
+    try:
+        ipaddress.IPv4Network(network, strict=False)
+    except ValueError:
+        return None
+    if len(country) != 2 or not country.isascii() or not country.isalpha() or not registry:
+        return None
+    try:
+        date.fromisoformat(allocation_date)
+    except ValueError:
+        return None
     if not provider or provider.lower() in {"unknown", "n/a", "none"}:
         return None
     return provider

@@ -97,6 +97,21 @@ def announce_host(claimed: str, observed: str) -> str:
     return observed if is_private_v4(observed) else claimed
 
 
+def _normalize_isp_name(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError("isp_name must be text")
+    value = value.strip()
+    if not value:
+        return None
+    if len(value) > 64 or any(
+        not character.isascii() or not character.isprintable() for character in value
+    ):
+        raise ValueError("isp_name must be at most 64 printable ASCII characters")
+    return value
+
+
 class DynamicLegs:
     """Announced legs, with leases."""
 
@@ -138,18 +153,7 @@ class DynamicLegs:
         # check: this still arrives over the network.
         if tier is not None and not (1 <= int(tier) <= 99):
             raise ValueError("tier must be 1..99")
-        if isp_name is not None:
-            if not isinstance(isp_name, str):
-                raise ValueError("isp_name must be text")
-            isp_name = isp_name.strip()
-            if isp_name and (
-                len(isp_name) > 64
-                or any(
-                    not character.isascii() or not character.isprintable() for character in isp_name
-                )
-            ):
-                raise ValueError("isp_name must be at most 64 printable ASCII characters")
-            isp_name = isp_name or None
+        isp_name = _normalize_isp_name(isp_name)
         lease = max(5.0, min(float(lease_s), 300.0))
 
         leg = DynamicLeg(

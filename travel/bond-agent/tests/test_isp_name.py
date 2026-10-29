@@ -7,17 +7,25 @@ import struct
 from pathlib import Path
 from types import SimpleNamespace
 
-from zippie.isp import DNSClient, ISPNameResolver, _answers
+from zippie.isp import DNSClient, ISPNameResolver, _answers, _provider_from_cymru
 from zippie.models import PathState
 
 
-def _dns_answer_packet(qname, qtype, rdata):
+def _dns_answer_packet(qname, qtype, rdata, *, answer_name=None):
     ident = 0x1234
     wire_name = (
         b"".join(bytes((len(label),)) + label.encode("ascii") for label in qname.split(".")) + b"\0"
     )
     question = wire_name + struct.pack("!HH", qtype, 1)
-    answer = b"\xc0\x0c" + struct.pack("!HHIH", qtype, 1, 60, len(rdata)) + rdata
+    answer_owner = b"\xc0\x0c"
+    if answer_name is not None:
+        answer_owner = (
+            b"".join(
+                bytes((len(label),)) + label.encode("ascii") for label in answer_name.split(".")
+            )
+            + b"\0"
+        )
+    answer = answer_owner + struct.pack("!HHIH", qtype, 1, 60, len(rdata)) + rdata
     header = struct.pack("!HHHHHH", ident, 0x8180, 1, 1, 0, 0)
     return ident, header + question + answer
 
@@ -51,8 +59,9 @@ class InlineThread:
 
 
 class FakeSocket:
-    def __init__(self, answer):
+    def __init__(self, answer, source=("208.67.222.222", 53)):
         self.answer = answer
+        self.source = source
         self.options = []
         self.destination = None
         self.payload = None
@@ -74,7 +83,7 @@ class FakeSocket:
         rr = b"\xc0\x0c" + struct.pack("!HHIH", 1, 1, 60, 4) + self.answer
         return struct.pack(
             "!HHHHHH", int.from_bytes(ident, "big"), 0x8180, 1, 1, 0, 0
-        ) + question + rr, ("208.67.222.222", 53)
+        ) + question + rr, self.source
 
     def close(self):
         self.closed = True
@@ -88,6 +97,15 @@ def test_dns_client_binds_queries_to_the_requested_interface(monkeypatch):
     assert client.query("wwan0", "myip.opendns.com", "A") == ["198.51.100.17"]
     assert fake.options == [(socket.SOL_SOCKET, 25, b"wwan0\0")]
     assert fake.destination == ("208.67.222.222", 53)
+    assert fake.closed
+
+
+def test_dns_client_rejects_a_reply_from_an_unexpected_resolver(monkeypatch):
+    monkeypatch.setattr(socket, "SO_BINDTODEVICE", 25, raising=False)
+    fake = FakeSocket(bytes((198, 51, 100, 17)), source=("1.1.1.1", 53))
+    client = DNSClient(socket_factory=lambda *_args: fake)
+
+    assert client.query("wwan0", "myip.opendns.com", "A") == []
     assert fake.closed
 
 
@@ -105,15 +123,51 @@ def test_dns_packet_parser_decodes_compressed_ptr_and_txt_answers():
         bytes((len(txt_record),)) + txt_record,
     )
 
-    assert _answers(ptr_packet, ptr_id, 12) == [ptr_name]
-    assert _answers(txt_packet, txt_id, 16) == [txt_record.decode("ascii")]
+    assert _answers(ptr_packet, ptr_id, "17.100.51.198.in-addr.arpa", 12) == [ptr_name]
+    assert _answers(txt_packet, txt_id, "17.100.51.198.origin.asn.cymru.com", 16) == [
+        txt_record.decode("ascii")
+    ]
+
+
+def test_dns_packet_parser_rejects_a_mismatched_question_or_answer_owner():
+    data = bytes((198, 51, 100, 17))
+    ident, wrong_question = _dns_answer_packet("other.test", 1, data)
+    assert _answers(wrong_question, ident, "myip.opendns.com", 1) == []
+
+    ident, wrong_owner = _dns_answer_packet("myip.opendns.com", 1, data, answer_name="other.test")
+    assert _answers(wrong_owner, ident, "myip.opendns.com", 1) == []
+
+
+def test_dns_packet_parser_rejects_a_question_for_another_record_type():
+    ident, packet = _dns_answer_packet("myip.opendns.com", 1, bytes((198, 51, 100, 17)))
+    assert _answers(packet, ident, "myip.opendns.com", 12) == []
+
+
+def test_team_cymru_parser_rejects_malformed_records():
+    assert (
+        _provider_from_cymru(
+            "AS64500 | 198.51.100.0/24 | ZZ | test | 2020-01-01 | Example Broadband"
+        )
+        == "Example Broadband"
+    )
+    assert _provider_from_cymru("unrelated | text") is None
+    assert (
+        _provider_from_cymru(
+            "AS64500 | 198.51.100.0/24 | ZZ | test | not-a-date | Example Broadband"
+        )
+        is None
+    )
+    assert (
+        _provider_from_cymru("AS64500 | not-a-prefix | ZZ | test | 2020-01-01 | Example Broadband")
+        is None
+    )
 
 
 def test_dns_packet_parser_rejects_truncated_txt_rdata():
     ident, packet = _dns_answer_packet("example.test", 16, b"\x06short")
 
     try:
-        _answers(packet, ident, 16)
+        _answers(packet, ident, "example.test", 16)
     except ValueError as exc:
         assert "truncated DNS TXT" in str(exc)
     else:
