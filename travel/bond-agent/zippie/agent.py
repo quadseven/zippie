@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlparse
 
-from zippie import __version__, build, net, policy, shaper, telemetry, wifi, wifi_uci
+from zippie import __version__, build, isp, net, policy, shaper, telemetry, wifi, wifi_uci
 from zippie.config import load_config, validate_dashboard_tls
 from zippie.counters import (
     DEFAULT_SERIES_MAX_RESPONSE_POINTS,
@@ -650,6 +650,7 @@ class BondAgent:
         self.paths: list[PathRuntime] = [
             PathRuntime(name=p.name, config=p, port=p.port) for p in config.paths if p.enabled
         ]
+        self._isp_name_resolver = isp.ISPNameResolver()
         self.primary: str | None = None
         # Liveness is judged on whether each tunnel's receive counter is still
         # MOVING. Handshake age and cumulative rx are both historical and stay
@@ -4980,6 +4981,11 @@ class BondAgent:
         # the same tick rather than staying demoted until the next one.
         self.roll_usage_period()
         self.match_interfaces()
+        names = self._isp_name_resolver.update(
+            (path.name, path.interface, path.local_ip) for path in self.paths
+        )
+        for path in self.paths:
+            path.isp_name = names.get(path.name)
         # AFTER match_interfaces, same tick: needs this pass's path.interface
         # to know which radio to ask, and re-deriving every tick (rather than
         # once, on change) is what makes a repeater's label follow the live
