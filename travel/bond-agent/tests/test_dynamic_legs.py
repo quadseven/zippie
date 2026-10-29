@@ -102,13 +102,31 @@ def test_a_hostile_name_is_refused():
 
 def test_a_phone_isp_name_is_bounded_and_printable():
     d = DynamicLegs(clock=Clock())
-    leg = d.announce(name="ok-leg", host="10.99.0.5", port=51999, isp_name="Example Provider")
+    leg = d.announce(
+        name="ok-leg",
+        host="10.99.0.5",  # leak-guard-allow
+        port=51999,
+        isp_name="Example Provider",
+    )
     assert leg.isp_name == "Example Provider"
-    assert d.announce(name="ok-leg", host="10.99.0.5", port=51999, isp_name="  ").isp_name is None
+    assert (
+        d.announce(
+            name="ok-leg",
+            host="10.99.0.5",  # leak-guard-allow
+            port=51999,
+            isp_name="  ",
+        ).isp_name
+        is None
+    )
 
     for invalid in ["x" * 65, "Provider\nInjected", "Provider \u2603", 7]:
         with pytest.raises(ValueError):
-            d.announce(name="ok-leg", host="10.99.0.5", port=51999, isp_name=invalid)
+            d.announce(
+                name="ok-leg",
+                host="10.99.0.5",  # leak-guard-allow
+                port=51999,
+                isp_name=invalid,
+            )
 
 
 def test_out_of_range_values_are_refused():
@@ -198,7 +216,7 @@ def test_a_dynamic_isp_name_updates_and_clears_with_the_announcement(tmp_path):
     a = _agent(tmp_path)
     a.dynamic.announce(
         name="operator-iphone",
-        host="10.99.0.151",
+        host="10.99.0.151",  # leak-guard-allow
         port=51999,
         isp_name="Example Provider",
     )
@@ -206,7 +224,12 @@ def test_a_dynamic_isp_name_updates_and_clears_with_the_announcement(tmp_path):
     leg = next(p for p in a.paths if p.name == "operator-iphone")
     assert leg.isp_name == "Example Provider"
 
-    a.dynamic.announce(name="operator-iphone", host="10.99.0.151", port=51999, isp_name=None)
+    a.dynamic.announce(
+        name="operator-iphone",
+        host="10.99.0.151",  # leak-guard-allow
+        port=51999,
+        isp_name=None,
+    )
     a.reconcile_dynamic_legs()
     assert leg.isp_name is None
 

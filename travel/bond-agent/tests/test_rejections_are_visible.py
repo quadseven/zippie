@@ -146,7 +146,7 @@ def test_a_phone_isp_name_survives_the_authenticated_announce(served):
         "/api/legs/announce",
         {
             "name": "iphone",
-            "host": "10.99.0.151",
+            "host": "10.99.0.151",  # leak-guard-allow
             "port": 51999,
             "isp_name": "Example Provider",
         },

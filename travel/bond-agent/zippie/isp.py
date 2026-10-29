@@ -90,22 +90,9 @@ def _txt_value(data: bytes) -> str:
     return "".join(values)
 
 
-def _answers(packet: bytes, expected_id: int, qtype: int) -> list[str]:
-    if len(packet) < 12:
-        return []
-    ident, flags, questions, answers, _, _ = struct.unpack("!HHHHHH", packet[:12])
-    if ident != expected_id or not flags & 0x8000 or flags & 0x0200 or flags & 0x000F:
-        return []
-    offset = 12
-    for _ in range(questions):
-        _, size = _read_name(packet, offset)
-        offset += size
-        if offset + 4 > len(packet):
-            raise ValueError("truncated DNS question")
-        offset += 4
-
+def _answer_values(packet: bytes, offset: int, count: int, qtype: int) -> list[str]:
     values: list[str] = []
-    for _ in range(answers):
+    for _ in range(count):
         _, size = _read_name(packet, offset)
         offset += size
         if offset + 10 > len(packet):
@@ -132,6 +119,22 @@ def _answers(packet: bytes, expected_id: int, qtype: int) -> list[str]:
             if value:
                 values.append(value)
     return values
+
+
+def _answers(packet: bytes, expected_id: int, qtype: int) -> list[str]:
+    if len(packet) < 12:
+        return []
+    ident, flags, questions, answers, _, _ = struct.unpack("!HHHHHH", packet[:12])
+    if ident != expected_id or not flags & 0x8000 or flags & 0x0200 or flags & 0x000F:
+        return []
+    offset = 12
+    for _ in range(questions):
+        _, size = _read_name(packet, offset)
+        offset += size
+        if offset + 4 > len(packet):
+            raise ValueError("truncated DNS question")
+        offset += 4
+    return _answer_values(packet, offset, answers, qtype)
 
 
 class DNSClient:
