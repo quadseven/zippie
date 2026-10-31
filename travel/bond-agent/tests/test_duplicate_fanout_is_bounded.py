@@ -379,3 +379,10 @@ def test_start_transport_passes_the_configured_fan_out(captured):
 def test_start_transport_passes_the_default_when_the_toml_says_nothing(captured):
     seen = captured(_config())
     assert seen["kwargs"].get("duplicate_fanout") == DEFAULT_DUPLICATE_FANOUT
+
+
+def test_adaptive_threshold_config_reaches_real_transport_constructor(captured):
+    cfg = _config(adaptive_duplicate_loss_pct=25.0)
+    assert cfg.policy.adaptive_duplicate_loss_pct == 25.0
+    assert captured(cfg)["kwargs"]["adaptive_duplicate_loss_pct"] == 25.0
+    assert captured(_config())["kwargs"]["adaptive_duplicate_loss_pct"] == 10.0

@@ -532,6 +532,7 @@ class PolicyConfig:
     # datapath.DEFAULT_DUPLICATE_FANOUT; test_duplicate_fanout_is_bounded pins
     # them together so the two cannot drift.
     duplicate_fanout: int = 2
+    adaptive_duplicate_loss_pct: float = 10.0
 
     # BOND STANDDOWN (#124). "A bond with one dying leg beats an idle
     # healthy WAN, and takes the LAN with it" - the travel router 2026-08-11, the

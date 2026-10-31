@@ -247,6 +247,10 @@ class Scheduler:
         self.duplicate_fanout = max(MIN_DUPLICATE_FANOUT, int(duplicate_fanout))
         self._paths: OrderedDict[int, PathState] = OrderedDict()
         self._seq = 0
+        self._duplicate_wide = False
+        self._duplicate_carrying = frozenset()
+        self._duplicate_high = 0
+        self._duplicate_low = 0
         # Fractional accumulator per path for weighted round-robin. Integer
         # "send every Nth" scheduling clumps badly at uneven weights (169 vs
         # 70 measured live); accumulating credit spreads them smoothly, which
@@ -254,15 +258,23 @@ class Scheduler:
         self._credit: dict[int, float] = {}
 
     def add_path(self, path: PathState) -> None:
+        self._duplicate_wide = False
+        self._duplicate_high = self._duplicate_low = 0
         self._paths[path.path_id] = path
         self._credit.setdefault(path.path_id, 0.0)
 
     def remove_path(self, path_id: int) -> None:
+        if path_id in self._paths:
+            self._duplicate_wide = False
+            self._duplicate_high = self._duplicate_low = 0
         self._paths.pop(path_id, None)
         self._credit.pop(path_id, None)
 
     def set_healthy(self, path_id: int, healthy: bool) -> None:
         if path_id in self._paths:
+            if self._paths[path_id].healthy != healthy:
+                self._duplicate_wide = False
+                self._duplicate_high = self._duplicate_low = 0
             self._paths[path_id].healthy = healthy
 
     def set_weight(self, path_id: int, weight: int) -> None:
@@ -282,6 +294,9 @@ class Scheduler:
         still probed and can still earn its way back.
         """
         if path_id in self._paths:
+            if (self._paths[path_id].weight > 0) != (weight > 0):
+                self._duplicate_wide = False
+                self._duplicate_high = self._duplicate_low = 0
             self._paths[path_id].weight = max(0, weight)
 
     @property
@@ -336,6 +351,44 @@ class Scheduler:
         self._credit[chosen.path_id] -= 1.0
         return [chosen.path_id]
 
+    def update_duplicate_loss(self, losses: dict[int, float | None], threshold: float) -> None:
+        """Widen only on sustained loss across the actual carrying set.
+
+        Unknown samples fail closed. Three samples and a half-threshold exit
+        band avoid oscillating around the threshold; a changed set must earn
+        widening afresh so an unmeasured new path never inherits it.
+        """
+        healthy = self.healthy_paths
+        carrying = [p for p in healthy if p.weight > 0] or healthy
+        members = frozenset(p.path_id for p in carrying)
+        if members != self._duplicate_carrying:
+            self._duplicate_wide = False
+            self._duplicate_high = self._duplicate_low = 0
+            self._duplicate_carrying = members
+        values = [losses.get(p.path_id) for p in carrying]
+        if (
+            threshold <= 0
+            or len(carrying) <= self.duplicate_fanout
+            or any(v is None for v in values)
+        ):
+            self._duplicate_wide = False
+            self._duplicate_high = self._duplicate_low = 0
+            return
+        if self._duplicate_wide:
+            self._duplicate_low = (
+                self._duplicate_low + 1 if any(v < threshold / 2 for v in values) else 0
+            )
+            if self._duplicate_low >= 3:
+                self._duplicate_wide = False
+                self._duplicate_high = self._duplicate_low = 0
+        else:
+            self._duplicate_high = (
+                self._duplicate_high + 1 if all(v > threshold for v in values) else 0
+            )
+            if self._duplicate_high >= 3:
+                self._duplicate_wide = True
+                self._duplicate_high = self._duplicate_low = 0
+
     def _duplicate_targets(self, carrying: list[PathState]) -> list[int]:
         """The best `duplicate_fanout` legs, so a copy costs the same at 8 legs
         as at 2. See DEFAULT_DUPLICATE_FANOUT for why the bound exists at all.
@@ -365,6 +418,11 @@ class Scheduler:
         datapath whose ceiling is packets per second it must not start sorting
         on every duplicated packet to fix a problem it does not have.
         """
+        if (
+            self._duplicate_wide
+            and frozenset(p.path_id for p in carrying) == self._duplicate_carrying
+        ):
+            return [p.path_id for p in carrying]
         if len(carrying) <= self.duplicate_fanout:
             return [p.path_id for p in carrying]
         ranked = sorted(carrying, key=lambda p: -p.weight)

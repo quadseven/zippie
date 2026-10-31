@@ -4070,6 +4070,7 @@ class BondAgent:
             # finally is - a knob that stops at PolicyConfig is a knob nobody
             # can turn (#50).
             duplicate_fanout=self.config.policy.duplicate_fanout,
+            adaptive_duplicate_loss_pct=self.config.policy.adaptive_duplicate_loss_pct,
             auth_level=auth_level,
             identity=identity,
         )
