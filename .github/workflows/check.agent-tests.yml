@@ -64,7 +64,7 @@ jobs:
     timeout-minutes: 2
     steps:
       - name: "Block untrusted (non-collaborator) PRs on self-hosted runner"
-        if: ${{ github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) && github.event.pull_request.user.login != 'loom-lanes[bot]' }}
+        if: ${{ github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) && github.event.pull_request.user.login != 'loom-lanes[bot]' && github.event.pull_request.user.login != 'agent-anthropic-claude-code[bot]' }}
         run: |
           echo "::error::PR validation restricted to repo collaborators."
           exit 1
@@ -344,7 +344,8 @@ jobs:
     # and it was, until a commit security review caught it.
     # Transitively on guard: `changes` needs it, so a blocked PR never gets here.
     needs: changes
-    if: ${{ needs.changes.outputs.agent == 'true' }}
+    # The Claude Code App's PRs stay off the persistent mac mini.
+    if: ${{ needs.changes.outputs.agent == 'true' && github.event.pull_request.user.login != 'agent-anthropic-claude-code[bot]' }}
     name: zippie datapath mobile bind (xcframework + aar)
     # The mac mini: the ONLY machine with both Xcode and the Android SDK/NDK.
     # A hosted runner cannot do this and there are none in this org anyway.
