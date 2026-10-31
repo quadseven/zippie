@@ -49,7 +49,7 @@ jobs:
     timeout-minutes: 2
     steps:
       - name: "Block untrusted (non-collaborator) PRs on self-hosted runner"
-        if: ${{ github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) && github.event.pull_request.user.login != 'loom-lanes[bot]' }}
+        if: ${{ github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) && github.event.pull_request.user.login != 'loom-lanes[bot]' && github.event.pull_request.user.login != 'agent-anthropic-claude-code[bot]' }}
         run: |
           echo "::error::PR validation restricted to repo collaborators."
           exit 1
