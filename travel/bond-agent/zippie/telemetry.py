@@ -33,6 +33,8 @@ import time
 import urllib.error
 import urllib.request
 
+from zippie import leg_verdict
+
 log = logging.getLogger("zippie.telemetry")
 
 # Batches held for the sender thread. Small on purpose: a router with 128MB
@@ -630,7 +632,7 @@ def _build_samples(status: dict) -> list:
     return out
 
 
-def _free_leg_idle(paths: list[dict]) -> int:
+def _free_leg_idle(paths: list[dict], *, membership_known: bool = False) -> int:
     """1 when a free leg is present and carrying nothing while a metered leg carries.
 
     THE FREE WIRE NOBODY IS USING (zippie#258 AC5). That was the travel router's state for
@@ -647,9 +649,14 @@ def _free_leg_idle(paths: list[dict]) -> int:
     Returns an int rather than a bool so the caller emits an explicit 0. A gauge
     that only appears when things are wrong cannot be alerted on without
     notify_no_data, and no-data is not zero.
+
+    `membership_known` is False in route mode, where no link table exists and the
+    verdict is false for every leg, so weight is all there is to read.
     """
 
     def carrying(p: dict) -> bool:
+        if membership_known:
+            return leg_verdict.reads_carrying(p)
         return (p.get("effective_weight", 0) or 0) > 0
 
     metered_carrying = any(p.get("cost_class") not in (None, "free") and carrying(p) for p in paths)
@@ -682,7 +689,13 @@ def _samples(status: dict, deltas: _Deltas | None = None) -> list[tuple[str, flo
     # one was the live state on 2026-08-05 and nothing said so.
     if membership_known:
         out.append(("paths_in_bond", len([p for p in paths if p.get("in_bond")]), bond))
-    out.append(("free_leg_idle_while_metered_carries", _free_leg_idle(paths), bond))
+    out.append(
+        (
+            "free_leg_idle_while_metered_carries",
+            _free_leg_idle(paths, membership_known=membership_known),
+            bond,
+        )
+    )
     out.append(("agent_up", 1, bond))
     out.append(("uptime_s", status.get("uptime_s", 0), bond))
     # 0 here means address-loss withdrawal is degraded to probe speed. A

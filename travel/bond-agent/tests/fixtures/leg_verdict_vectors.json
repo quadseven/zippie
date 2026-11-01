@@ -1,0 +1,11 @@
+[
+  {"why": "the published verdict says yes", "leg": {"contributing": true, "effective_weight": 10, "in_bond": true}, "carrying": true},
+  {"why": "the verdict outranks raw fields: weight, in the bond, no bytes", "leg": {"contributing": false, "effective_weight": 10, "in_bond": true}, "carrying": false},
+  {"why": "older agent: in the bond with weight", "leg": {"effective_weight": 10, "in_bond": true}, "carrying": true},
+  {"why": "older agent: weight but out of the bond", "leg": {"effective_weight": 10, "in_bond": false}, "carrying": false},
+  {"why": "older agent: a missing in_bond reads false", "leg": {"effective_weight": 10}, "carrying": false},
+  {"why": "older agent: in the bond at weight zero", "leg": {"effective_weight": 0, "in_bond": true}, "carrying": false},
+  {"why": "a null verdict is no verdict", "leg": {"contributing": null, "effective_weight": 10, "in_bond": true}, "carrying": true},
+  {"why": "a weight that is not a number is no weight", "leg": {"effective_weight": "10", "in_bond": true}, "carrying": false},
+  {"why": "an empty row says nothing", "leg": {}, "carrying": false}
+]
