@@ -59,10 +59,19 @@ function stateWord(node) {
   return 'carrying';
 }
 
+/** The agent's verdict on a leg, read the way every other reader does. The
+ *  fallback serves an agent too old to publish it, and a missing in_bond reads
+ *  false. Pinned by travel/bond-agent/tests/fixtures/leg_verdict_vectors.json. */
+function legCarrying(leg) {
+  if (typeof leg.contributing === 'boolean') return leg.contributing;
+  const weight = leg.effective_weight;
+  return typeof weight === 'number' && weight > 0 && leg.in_bond === true;
+}
+
 /** A leg's tick class. Weight alone is NOT membership - a tier-gated leg keeps
  *  whatever weight it last had and carries nothing. */
 function legClass(leg) {
-  const carrying = (leg.effective_weight || 0) > 0 && (leg.in_bond !== false);
+  const carrying = legCarrying(leg);
   if (carrying) return leg.state === 'degraded' ? 'degraded' : 'carrying';
   if (leg.state === 'down') return 'down';
   return '';
@@ -150,7 +159,7 @@ function nodeRow(node) {
 function legRow(leg) {
   const row = document.createElement('div');
   row.className = 'leg';
-  const carrying = (leg.effective_weight || 0) > 0 && (leg.in_bond !== false);
+  const carrying = legCarrying(leg);
   row.innerHTML = `<span class="name"></span><span class="word"></span><span class="age"></span>`;
   row.querySelector('.name').textContent = leg.label || leg.name;
   // A LEG WITH NOTHING AT ITS ADDRESS IS NOT "UP". A companion leg whose

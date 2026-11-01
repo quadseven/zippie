@@ -665,25 +665,30 @@ def bond_legs(status: dict) -> list[dict]:
 
 
 def carrying_legs(legs: list[dict]) -> int:
-    """How many of those legs are carrying weight in the bond.
+    """How many of those legs the agent's verdict calls carrying.
 
     ONE DEFINITION, TWO READERS. /api/nodes shows this number to a human and
     the metric alarms on it. If they ever drifted apart, the page and the
     page-out would disagree about whether the car is online, and the graph
     would be the one everybody believed.
 
-    A weight that is not a number counts as no weight rather than raising: see
+    This reads the verdict and does not decide it: see the reading in
+    travel/bond-agent/zippie/leg_verdict.py, pinned by the shared vectors. A
+    weight that is not a number counts as no weight rather than raising: see
     bond_legs for why nothing on this path may throw.
     """
-    count = 0
-    for path in legs:
-        weight = path.get("effective_weight")
-        if not isinstance(weight, (int, float)) or weight <= 0:
-            continue
-        if path.get("in_bond") is False:
-            continue
-        count += 1
-    return count
+    return sum(1 for path in legs if leg_reads_carrying(path))
+
+
+def leg_reads_carrying(leg: dict) -> bool:
+    """One row of the status document, read the way every other reader does."""
+    published = leg.get("contributing")
+    if isinstance(published, bool):
+        return published
+    weight = leg.get("effective_weight")
+    return (
+        isinstance(weight, (int, float)) and weight > 0 and leg.get("in_bond") is True
+    )
 
 
 def statsd_tag(key: str, value: str) -> str:

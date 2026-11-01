@@ -83,10 +83,10 @@ globalThis.setInterval = () => 0;
 // scope. Rewriting it to add exports would mean testing a file that is not the
 // one the hub serves.
 const src = fs.readFileSync(SRC, 'utf8');
-const probe = '\nglobalThis.__probe = { render, expanded, worry, stateWord, legClass };\n';
+const probe = '\nglobalThis.__probe = { render, expanded, worry, stateWord, legClass, legCarrying };\n';
 await import('data:text/javascript;base64,'
   + Buffer.from(src + probe).toString('base64'));
-const { render, expanded, worry, stateWord, legClass } = globalThis.__probe;
+const { render, expanded, worry, stateWord, legClass, legCarrying } = globalThis.__probe;
 
 const settle = () => new Promise((r) => setTimeout(r, 0));
 const node = (name, extra = {}) => ({
@@ -192,6 +192,11 @@ check('a weighted leg OUT of the bond does not',
       legClass({ effective_weight: 5, state: 'up', in_bond: false }), '');
 check('a shed leg that is down still reads down',
       legClass({ effective_weight: 0, state: 'down', in_bond: false }), 'down');
+
+// The table every reader of Carrying runs, in every language (#369).
+const VECTORS = JSON.parse(fs.readFileSync(path.join(
+  HERE, '..', '..', 'travel', 'bond-agent', 'tests', 'fixtures', 'leg_verdict_vectors.json'), 'utf8'));
+for (const v of VECTORS) check(`leg verdict: ${v.why}`, legCarrying(v.leg), v.carrying);
 
 for (const r of results) {
   console.log(`${r.ok ? 'pass' : 'FAIL'}  ${r.name}`

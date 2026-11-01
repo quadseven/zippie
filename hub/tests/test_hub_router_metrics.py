@@ -37,6 +37,7 @@ import threading
 import time
 import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
@@ -609,6 +610,20 @@ def test_a_relay_leg_counts_even_with_no_interface():
         }
     )
     assert hub.carrying_legs(legs) == 1
+
+
+_LEG_VERDICT_VECTORS = json.loads(
+    (
+        Path(__file__).resolve().parents[2]
+        / "travel/bond-agent/tests/fixtures/leg_verdict_vectors.json"
+    ).read_text()
+)
+
+
+@pytest.mark.parametrize("vector", _LEG_VERDICT_VECTORS, ids=lambda v: v["why"])
+def test_the_hub_reads_a_leg_the_way_the_shared_vectors_say(vector):
+    """One verdict, published by the agent; the hub displays it (#369)."""
+    assert hub.carrying_legs([vector["leg"]]) == (1 if vector["carrying"] else 0)
 
 
 # ---------------------------------------------------------------------------
