@@ -10,6 +10,7 @@ other reader displays those fields rather than deciding again.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Mapping
 
 # Six seconds of silence on a leg before it is called dead. Keepalives go out
 # once per control tick (~1s), so this is roughly six consecutive misses -
@@ -50,3 +51,19 @@ def judge(facts: LegFacts) -> LegVerdict:
     contributing = in_bond and facts.weight > 0 and bytes_arriving(facts.rx_age_s)
     activity = "carrying" if contributing else "idle" if in_bond else "out"
     return LegVerdict(in_bond=in_bond, contributing=contributing, activity=activity)
+
+
+def reads_carrying(leg: Mapping[str, Any]) -> bool:
+    """Read one published status row. Not a second decision.
+
+    A row with `contributing` is the agent's verdict. A row from an agent too
+    old to publish it falls back to membership and weight, and a missing
+    `in_bond` reads false, so no evidence never reads as carrying. The hub, the
+    apps and `carrying.sh` cannot import this, so they each hold this reading
+    and `tests/fixtures/leg_verdict_vectors.json` pins all of them to it.
+    """
+    published = leg.get("contributing")
+    if isinstance(published, bool):
+        return published
+    weight = leg.get("effective_weight")
+    return isinstance(weight, (int, float)) and weight > 0 and leg.get("in_bond") is True

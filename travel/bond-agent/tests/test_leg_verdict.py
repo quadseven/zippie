@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
-from zippie.leg_verdict import LegFacts, judge
+from zippie.leg_verdict import LegFacts, judge, reads_carrying
 
 
 @pytest.mark.parametrize(
@@ -33,3 +36,11 @@ def test_the_verdict_table(linked, shed, weight, rx_age_s, in_bond, contributing
     assert verdict.in_bond is in_bond
     assert verdict.contributing is contributing
     assert verdict.activity == activity
+
+
+_VECTORS = json.loads((Path(__file__).parent / "fixtures/leg_verdict_vectors.json").read_text())
+
+
+@pytest.mark.parametrize("vector", _VECTORS, ids=[v["why"] for v in _VECTORS])
+def test_a_reader_of_the_published_row_matches_the_shared_vectors(vector):
+    assert reads_carrying(vector["leg"]) is vector["carrying"]

@@ -1062,6 +1062,28 @@ def test_a_free_wire_that_is_carrying_is_not_reported(monkeypatch):
     assert line is not None and ":0|g" in line, f"expected explicit 0, got {line}"
 
 
+def test_a_free_leg_that_lost_its_verdict_counts_as_idle_despite_its_weight():
+    """Weight is not carrying (#369): a tier-gated free leg keeps its weight."""
+    metered = {"cost_class": "metered", "effective_weight": 5, "contributing": True}
+    free = {"cost_class": "free", "effective_weight": 10, "contributing": False}
+
+    assert tel._free_leg_idle([metered, free], membership_known=True) == 1
+
+
+def test_a_metered_leg_held_out_of_the_bond_does_not_raise_the_alarm():
+    metered = {"cost_class": "metered", "effective_weight": 5, "contributing": False}
+    free = {"cost_class": "free", "effective_weight": 0, "contributing": False}
+
+    assert tel._free_leg_idle([metered, free], membership_known=True) == 0
+
+
+def test_route_mode_has_no_link_table_so_weight_still_decides():
+    metered = {"cost_class": "metered", "effective_weight": 5, "contributing": False}
+    free = {"cost_class": "free", "effective_weight": 0, "contributing": False}
+
+    assert tel._free_leg_idle([metered, free], membership_known=False) == 1
+
+
 def test_no_free_leg_at_all_is_an_explicit_zero_not_a_missing_metric(monkeypatch):
     """A gauge that vanishes cannot be alerted on: no-data is not zero."""
     status = {
