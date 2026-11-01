@@ -349,11 +349,11 @@
     const tier = activeTier(paths);
     const state = overallState(paths, tier);
     const upCount = paths.filter((p) => linkState(p, tier) === "up").length;
-    // CARRYING means weight > 0, not state === "up". The headline used upCount
-    // and read "1 of 3 carrying" while all three links were carrying traffic
-    // (65/17/17) - two were DEGRADED, which is a health label, not a statement
-    // about whether the kernel is routing over them.
-    const carryingCount = paths.filter((p) => (p.effective_weight || 0) > 0).length;
+    // CARRYING is the agent's verdict, not state === "up" and not weight. The
+    // headline used upCount and read "1 of 3 carrying" while all three links
+    // were carrying traffic (65/17/17) - two were DEGRADED, which is a health
+    // label. Weight alone counts a leg held out of the bond (#369).
+    const carryingCount = s.legs_carrying;
     const standbyCount = paths.filter((p) => linkState(p, tier) === "standby").length;
     $("beacon").dataset.state = state;
     $("headline").textContent =

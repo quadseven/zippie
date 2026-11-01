@@ -66,3 +66,9 @@ def test_the_router_guards_read_the_shared_vectors_the_same_way(vector, tmp_path
     )
 
     assert (done.returncode == 0) is vector["carrying"]
+
+
+def test_the_console_headline_counts_the_verdict_not_weight():
+    html = (Path(__file__).resolve().parents[3] / "dashboard/static/index.html").read_text()
+
+    assert "const carryingCount = s.legs_carrying;" in html
