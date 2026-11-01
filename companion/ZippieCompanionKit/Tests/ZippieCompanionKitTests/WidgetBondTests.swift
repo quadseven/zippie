@@ -30,7 +30,7 @@ final class WidgetBondTests: XCTestCase {
                       weight: Int? = 0,
                       tier: Int? = 1,
                       state: String? = "up",
-                      inBond: Bool? = nil,
+                      inBond: Bool? = true,
                       iface: String? = "br-lan") -> [String: Any] {
         var p: [String: Any] = ["name": name, "interface": iface ?? NSNull()]
         if let label { p["label"] = label }

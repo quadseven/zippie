@@ -169,8 +169,8 @@ final class BondStatusTests: XCTestCase {
     private let json = """
     {"mode":"aggregate","datapath":"route","primary":"hotspot","paths":[
       {"name":"ethernet","state":"down","effective_weight":0,"rtt_ms":null,"loss_pct":100.0},
-      {"name":"hotspot","state":"up","effective_weight":112,"rtt_ms":61.9,"loss_pct":0.0},
-      {"name":"dongle4g","state":"degraded","effective_weight":24,"rtt_ms":null,"loss_pct":0.0}]}
+      {"name":"hotspot","state":"up","effective_weight":112,"in_bond":true,"rtt_ms":61.9,"loss_pct":0.0},
+      {"name":"dongle4g","state":"degraded","effective_weight":24,"in_bond":true,"rtt_ms":null,"loss_pct":0.0}]}
     """.data(using: .utf8)!
 
     func testDecodesTheRealConsoleShape() throws {

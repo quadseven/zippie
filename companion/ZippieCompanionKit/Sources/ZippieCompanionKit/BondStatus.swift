@@ -60,6 +60,9 @@ public struct BondStatus: Codable, Sendable, Equatable {
         /// deciding "carrying" from weight showed four legs carrying while the
         /// transport held exactly one.
         public let inBond: Bool?
+        /// The agent's verdict on this leg: in the link table, with weight, and
+        /// bytes arriving. Read, never recomputed - see `isCarrying`.
+        public let contributing: Bool?
         /// The leg has transmitted and has NEVER been answered (#204).
         /// Categorically different from `degraded`, which is where a leg lands
         /// when it used to work and got worse.
@@ -90,6 +93,7 @@ public struct BondStatus: Codable, Sendable, Equatable {
             case usageGB = "usage_gb"
             case overSoftLimit = "over_soft_limit"
             case inBond = "in_bond"
+            case contributing
         }
 
         /// Held in reserve by the tier gate rather than failed.
@@ -125,18 +129,15 @@ public struct BondStatus: Codable, Sendable, Equatable {
             !((interface ?? "").isEmpty) || isCompanion
         }
 
-        /// A leg is only carrying if it has weight. `state == "up"` is not
-        /// enough - the anti-flap gate holds recovered legs at weight 0 while
-        /// they prove themselves, and showing those as carrying would
-        /// contradict the router's own console.
-        /// Carrying means the transport holds a link for it AND it has weight.
+        /// The agent's verdict, which this app displays rather than decides.
         ///
-        /// Weight alone is not enough - see inBond. A router too old to publish
-        /// membership falls back to weight, which is the previous behaviour and
-        /// wrong only in the tier-gated case that older agent could not produce.
+        /// `state == "up"` is not enough - the anti-flap gate holds recovered
+        /// legs at weight 0 while they prove themselves. A router too old to
+        /// publish a verdict falls back to membership and weight, and a missing
+        /// `in_bond` reads false, the same as every other reader (#369).
         public var isCarrying: Bool {
-            guard (effectiveWeight ?? 0) > 0 else { return false }
-            return inBond ?? true
+            if let contributing { return contributing }
+            return (effectiveWeight ?? 0) > 0 && inBond == true
         }
 
         /// A companion leg that has never had a byte back, and never measured

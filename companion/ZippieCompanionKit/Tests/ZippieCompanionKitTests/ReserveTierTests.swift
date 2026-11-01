@@ -143,12 +143,19 @@ extension ReserveTierTests {
         XCTAssertEqual(p.stateWord, "carrying, degraded")
     }
 
-    /// A router too old to publish membership must keep the previous
-    /// behaviour rather than reading every leg as excluded.
-    func testAnOlderRouterFallsBackToWeight() throws {
+    /// A row with no membership has no evidence, and no evidence never reads
+    /// as carrying. Every reader agrees (#369).
+    func testAMissingInBondReadsFalse() throws {
         let p = try decode(["name": "hotspot", "state": "up",
                             "effective_weight": 8, "interface": "apclix0"])
-        XCTAssertTrue(p.isCarrying, "membership absent was treated as excluded")
+        XCTAssertFalse(p.isCarrying)
+    }
+
+    func testThePublishedVerdictOutranksWeightAndMembership() throws {
+        let p = try decode(["name": "hotspot", "state": "up",
+                            "effective_weight": 8, "interface": "apclix0",
+                            "in_bond": true, "contributing": false])
+        XCTAssertFalse(p.isCarrying)
     }
 
     func testAZeroWeightLegIsNeverCarryingEvenIfInBond() throws {
