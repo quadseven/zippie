@@ -33,6 +33,12 @@
 # this wrong. python3 is already a hard dependency here: the agent is written in
 # it.
 #
+# THE AGENT DECIDES, THIS READS (#369). Each row publishes the leg verdict as
+# `contributing`: in the link table, with weight, and bytes arriving. The in_bond
+# and weight fallback serves an agent too old to publish it. This is the same
+# reading as zippie/leg_verdict.py, and tests/test_leg_verdict.py runs this file
+# against the shared vectors.
+#
 # FAILS CLOSED, deliberately. If the console cannot be read - agent down, port
 # shut, malformed body - this returns false, meaning "not carrying". Both callers
 # treat "not carrying" as "do not act", so the uncertain case never triggers a
@@ -48,9 +54,13 @@ try:
     d = json.load(sys.stdin)
 except Exception:
     sys.exit(1)          # unreadable body -> fail closed -> no action
-for p in d.get("paths", []):
-    if p.get("in_bond") and (p.get("effective_weight") or 0) > 0:
-        sys.exit(0)      # something really is carrying
+def carrying(p):
+    if isinstance(p.get("contributing"), bool):
+        return p["contributing"]
+    w = p.get("effective_weight")
+    return isinstance(w, (int, float)) and w > 0 and p.get("in_bond") is True
+if any(carrying(p) for p in d.get("paths", [])):
+    sys.exit(0)          # something really is carrying
 sys.exit(1)
 ' 2>/dev/null
 }
