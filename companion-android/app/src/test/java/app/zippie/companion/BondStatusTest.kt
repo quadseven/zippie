@@ -145,14 +145,25 @@ class BondStatusTest {
         BondStatus.decode("<html>login required</html>")
     }
 
-    /**
-     * A router old enough not to publish in_bond must keep the previous
-     * behaviour rather than reading as "nothing is carrying".
-     */
+    /** A row with no membership has no evidence: every reader agrees (#369). */
     @Test
-    fun `without in_bond the decision falls back to weight`() {
+    fun `without in_bond a leg does not read as carrying`() {
         val p = BondStatus.decode("""{"paths":[{"name":"x","effective_weight":10}]}""")
             .paths!!.single()
-        assertTrue(p.isCarrying)
+        assertFalse(p.isCarrying)
+    }
+
+    /** The table every reader of Carrying runs, in every language (#369). */
+    @Test
+    fun `every shared leg verdict vector reads the same here`() {
+        val file = java.io.File("../../travel/bond-agent/tests/fixtures/leg_verdict_vectors.json")
+        val table = org.json.JSONArray(file.readText())
+        assertTrue(table.length() > 0)
+        for (i in 0 until table.length()) {
+            val vector = table.getJSONObject(i)
+            val leg = vector.getJSONObject("leg").put("name", "leg").toString()
+            val p = BondStatus.decode("""{"paths":[$leg]}""").paths!!.single()
+            assertEquals(vector.getString("why"), vector.getBoolean("carrying"), p.isCarrying)
+        }
     }
 }

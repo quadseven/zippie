@@ -94,6 +94,11 @@ data class BondStatus(
          * transport held exactly one. That was a real bug on iOS.
          */
         val inBond: Boolean?,
+        /**
+         * The agent's verdict on this leg: in the link table, with weight, and
+         * bytes arriving. Read, never recomputed - see [isCarrying].
+         */
+        val contributing: Boolean? = null,
     ) {
         /**
          * Bytes this leg has actually moved, or null when nothing measured it.
@@ -107,14 +112,14 @@ data class BondStatus(
         val carriedRxBytes: Long? get() = linkRxBytes ?: rxBytes
 
         /**
-         * Carrying means the transport holds a link for it AND it has weight.
+         * The agent's verdict, which this app displays rather than decides.
          *
-         * Weight alone is not enough - see [inBond]. A router too old to publish
-         * membership falls back to weight, which is the previous behaviour and
-         * wrong only in the tier-gated case that older agent could not produce.
+         * A router too old to publish a verdict falls back to membership and
+         * weight, and a missing [inBond] reads false, the same as every other
+         * reader (#369).
          */
         val isCarrying: Boolean
-            get() = (effectiveWeight ?: 0) > 0 && (inBond ?: true)
+            get() = contributing ?: ((effectiveWeight ?: 0) > 0 && inBond == true)
 
         /**
          * Held back by the tier gate rather than failed.
@@ -198,7 +203,9 @@ data class BondStatus(
             label = o.stringOrNull("label"),
             state = o.stringOrNull("state"),
             tier = o.intOrNull("tier"),
-            effectiveWeight = o.intOrNull("effective_weight"),
+            // Strict: org.json turns the string "10" into 10, and a weight that is
+            // not a number is no weight (shared vectors, #369).
+            effectiveWeight = (o.opt("effective_weight") as? Number)?.toInt(),
             rttMs = o.doubleOrNull("rtt_ms"),
             lossPct = o.doubleOrNull("loss_pct"),
             txBytes = o.longOrNull("tx_bytes"),
@@ -220,6 +227,7 @@ data class BondStatus(
             usageGb = o.doubleOrNull("usage_gb"),
             overSoftLimit = o.booleanOrNull("over_soft_limit"),
             inBond = o.booleanOrNull("in_bond"),
+            contributing = o.booleanOrNull("contributing"),
         )
     }
 }
