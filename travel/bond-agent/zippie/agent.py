@@ -18,7 +18,18 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlparse
 
-from zippie import __version__, build, isp, net, policy, shaper, telemetry, wifi, wifi_uci
+from zippie import (
+    __version__,
+    build,
+    isp,
+    leg_verdict,
+    net,
+    policy,
+    shaper,
+    telemetry,
+    wifi,
+    wifi_uci,
+)
 from zippie.config import load_config, validate_dashboard_tls
 from zippie.counters import (
     DEFAULT_SERIES_MAX_RESPONSE_POINTS,
@@ -27,6 +38,7 @@ from zippie.counters import (
 )
 from zippie.datapath import HEADER_LEN
 from zippie.dynamic import DynamicLeg, DynamicLegs, announce_host
+from zippie.leg_verdict import PACKET_LINK_STALE_S
 from zippie.models import (
     AgentConfig,
     CostClass,
@@ -217,13 +229,6 @@ def _install_dashboard_listeners(
 # pb0..pbN tunnels route mode creates, so that switching datapath cannot
 # leave one mode holding an interface the other believes it owns.
 PACKET_IFACE = "pbz0"
-# Six seconds of silence on a leg before it is called dead. Keepalives go out
-# once per control tick (~1s), so this is roughly six consecutive misses -
-# deliberately looser than route mode's three, because a keepalive can be lost
-# to ordinary congestion whereas route mode's ICMP probe rides an established
-# tunnel. Evicting a weak-but-working LTE leg is worse than carrying a dead one
-# for an extra three seconds, since the scheduler retransmits around loss.
-PACKET_LINK_STALE_S = 6.0
 # Loss classification runs once per probe pass. Twelve consecutive readings
 # confirm either side of the degraded threshold without changing RTT policy.
 LOSS_STATE_STREAK = 12
@@ -2216,7 +2221,7 @@ class BondAgent:
         # payload-delivery loss.
         loss_pct = self._leg_loss_pct(transport, pid, self.config.policy.degraded_loss_pct)
 
-        if age is None or age >= PACKET_LINK_STALE_S:
+        if not leg_verdict.bytes_arriving(age):
             path.state = PathState.DOWN
             path.rtt_ms = None
             path.loss_pct = 100.0
@@ -3597,13 +3602,12 @@ class BondAgent:
             "the carrier, NOT through home, and is no longer inside the tunnel."
         )
 
-    def _leg_bytes_arriving(self, pid: int | None) -> bool:
-        """Has this leg's link heard anything inside the stale window?"""
+    def _leg_rx_age_s(self, pid: int | None) -> float | None:
+        """Seconds since this leg's link heard anything; None when unknown."""
         transport = getattr(self, "_transport", None)
         if transport is None or pid is None:
-            return False
-        age = transport.link_rx_age_s(pid)
-        return age is not None and age < PACKET_LINK_STALE_S
+            return None
+        return transport.link_rx_age_s(pid)
 
     def _leg_activity_facts(self, path: PathRuntime, pid: int | None) -> dict[str, Any]:
         """Is this leg in the bond, is it doing any work, and for how long not.
@@ -3667,12 +3671,18 @@ class BondAgent:
         in that state at all, never 0, because "not waiting" and "waiting for
         no time" are different things.
         """
-        in_bond = pid is not None and pid in self._transport_links and not path.shed_for_latency
-        contributing = in_bond and path.effective_weight > 0 and self._leg_bytes_arriving(pid)
+        verdict = leg_verdict.judge(
+            leg_verdict.LegFacts(
+                linked=pid is not None and pid in self._transport_links,
+                shed_for_latency=path.shed_for_latency,
+                weight=path.effective_weight,
+                rx_age_s=self._leg_rx_age_s(pid),
+            )
+        )
         return {
-            "in_bond": in_bond,
-            "contributing": contributing,
-            "activity": ("carrying" if contributing else "idle" if in_bond else "out"),
+            "in_bond": verdict.in_bond,
+            "contributing": verdict.contributing,
+            "activity": verdict.activity,
             # NOT the same as `state`. A leg here is not having a bad day, it
             # has never had a good one - see _flag_never_handshaked.
             "never_handshaked": path.never_handshaked,
