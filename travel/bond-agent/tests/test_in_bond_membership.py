@@ -11,6 +11,22 @@ from __future__ import annotations
 from zippie.models import PathConfig, PathMatch, PathRuntime
 
 
+class _SilentFor:
+    """A transport that last heard this leg `age_s` ago; None means never."""
+
+    def __init__(self, age_s):
+        self.age_s = age_s
+
+    def link_rx_age_s(self, _pid):
+        return self.age_s
+
+    def link_bytes(self):
+        return {}
+
+    def stats_dict(self):
+        return {}
+
+
 def _path(name="hotspot", **kw):
     cfg = PathConfig(name=name, match=PathMatch(type="interface", interface="eth0"), **kw)
     return PathRuntime(name=name, config=cfg)
@@ -28,7 +44,7 @@ def _agent(tmp_path):
     from zippie.agent import BondAgent
     from zippie.config import parse_config
 
-    return BondAgent(
+    agent = BondAgent(
         parse_config(
             {
                 "agent": {
@@ -47,6 +63,8 @@ def _agent(tmp_path):
             }
         )
     )
+    agent._transport = _SilentFor(1.0)
+    return agent
 
 
 def test_a_leg_in_the_transport_reports_in_bond(tmp_path, monkeypatch):
@@ -425,3 +443,65 @@ def test_an_idle_member_is_its_own_telemetry_series():
     )
     assert reserve["path.idle_in_bond"] == 0
     assert reserve["path.weight"] == 0
+
+
+# ------------------------------------------------------------------
+# BYTES ARRIVING IS THE THIRD HALF OF CARRYING (#369).
+#
+# CONTEXT.md: in the link table AND weight above zero AND bytes arriving. Weight
+# is recomputed once a tick, so between ticks it can outlive the bytes that
+# earned it, and a reader asking in that gap heard a silent leg called carrying.
+
+
+def _weighted_leg(agent, age_s):
+    from zippie.models import PathState
+
+    p = _path("hotspot")
+    p.state = PathState.UP
+    p.effective_weight = 40
+    agent._transport_ids[p.name] = 0
+    agent._transport_links.add(0)
+    agent._transport = _SilentFor(age_s)
+    return p
+
+
+def test_a_weighted_leg_with_recent_bytes_reads_carrying(tmp_path, monkeypatch):
+    a = _agent(tmp_path)
+
+    d = _status(a, _weighted_leg(a, age_s=1.0), monkeypatch)
+
+    assert d["contributing"] is True
+    assert d["activity"] == "carrying"
+
+
+def test_a_weighted_leg_gone_silent_does_not_read_carrying(tmp_path, monkeypatch):
+    a = _agent(tmp_path)
+
+    d = _status(a, _weighted_leg(a, age_s=6.0), monkeypatch)
+
+    assert d["in_bond"] is True, "still a link; only the bytes stopped"
+    assert d["contributing"] is False
+    assert d["activity"] == "idle"
+
+
+def test_a_weighted_leg_never_heard_does_not_read_carrying(tmp_path, monkeypatch):
+    a = _agent(tmp_path)
+
+    d = _status(a, _weighted_leg(a, age_s=None), monkeypatch)
+
+    assert d["contributing"] is False
+    assert d["activity"] == "idle"
+
+
+def test_the_legs_carrying_count_agrees_with_a_silent_row(tmp_path, monkeypatch):
+    a = _agent(tmp_path)
+    a.paths = [_weighted_leg(a, age_s=30.0)]
+    import zippie.agent as agent_mod
+
+    monkeypatch.setattr(agent_mod.net, "wg_peer_endpoint", lambda _i: None)
+    monkeypatch.setattr(agent_mod.net, "wan_gateways", lambda: {})
+
+    doc = a.status_dict()
+
+    assert doc["legs_carrying"] == 0
+    assert doc["legs_in_bond"] == 1
