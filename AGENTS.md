@@ -321,3 +321,4 @@ The deploy creates the `sqm.pbz0` section once and never re-pins it. With `shape
 The section `How work moves here` above is synced. These lines are where this repo differs.
 
 - Leak scan: exceptions are in `allowed-repo-refs` in `check.leak-scan.yml`.
+- Keep README.md to the standard sections (Status, Quick start, How to test, How it deploys, Layout, Docs) with a last-checked date; a change that makes it false fixes it in the same PR.

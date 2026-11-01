@@ -3,7 +3,8 @@
 **Superseded 2026-10-16.** FleetDM is decommissioned (infra#5389): its tunnel
 routes, workloads and data are gone, and Muster replaces it. The Fleet steps
 below are history. The bundle build and the managed Play notes still hold for
-any EMM that installs private apps.
+any EMM that installs private apps. The app reached Play Production and was
+last updated 2026-08-18, so the status below stops short of the current state.
 
 Fleet installs a custom Android app only as a **private app through managed
 Google Play**. This is the runbook for getting there. Written 2026-08-17, when
