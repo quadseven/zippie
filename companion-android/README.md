@@ -211,11 +211,9 @@ reports the exact `versionCode`, `versionName` and package it was asked for -
 reading them back out of the file with `aapt2` rather than trusting that the
 environment reached gradle.
 
-No workflow publishes to Google Play or anywhere else. The APK and bundle are
-workflow artifacts. The APK can be installed with `adb install`. Zippie
-Companion (`app.zippie.companion`) is in Play Production, last updated
-2026-08-18, and `app.muster.agent` is also registered. No workflow here put
-them there.
+Nothing is published to Google Play or anywhere else. The APK is a workflow
+artifact you download and `adb install`. The Play internal-testing route is a
+separate decision (a developer account, a review loop) and is not wired here.
 
 ### THE REAL SIGNING KEY DOES NOT EXIST YET
 
