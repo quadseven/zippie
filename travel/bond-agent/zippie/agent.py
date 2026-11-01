@@ -3597,6 +3597,14 @@ class BondAgent:
             "the carrier, NOT through home, and is no longer inside the tunnel."
         )
 
+    def _leg_bytes_arriving(self, pid: int | None) -> bool:
+        """Has this leg's link heard anything inside the stale window?"""
+        transport = getattr(self, "_transport", None)
+        if transport is None or pid is None:
+            return False
+        age = transport.link_rx_age_s(pid)
+        return age is not None and age < PACKET_LINK_STALE_S
+
     def _leg_activity_facts(self, path: PathRuntime, pid: int | None) -> dict[str, Any]:
         """Is this leg in the bond, is it doing any work, and for how long not.
 
@@ -3641,7 +3649,12 @@ class BondAgent:
         and held out), and collapsing either pair loses the half a reader
         needs.
 
-            carrying - in the bond with a real weight, probation included
+        BYTES ARRIVING IS THE THIRD HALF (#369), per CONTEXT.md. Weight is
+        recomputed once a tick, so between ticks it can outlive the bytes that
+        earned it. Same window as the DOWN branch of the packet probe, so the
+        idle keepalive cadence cannot read as silence.
+
+            carrying - in the bond with a real weight, bytes arriving, probation included
             idle     - in the bond, holding a slot, contributing nothing
             out      - not in the bond at all; `state` says why
 
@@ -3655,7 +3668,7 @@ class BondAgent:
         no time" are different things.
         """
         in_bond = pid is not None and pid in self._transport_links and not path.shed_for_latency
-        contributing = in_bond and path.effective_weight > 0
+        contributing = in_bond and path.effective_weight > 0 and self._leg_bytes_arriving(pid)
         return {
             "in_bond": in_bond,
             "contributing": contributing,

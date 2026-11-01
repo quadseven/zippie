@@ -361,6 +361,9 @@ class _EconTransport:
     def link_bytes(self):
         return self.totals
 
+    def link_rx_age_s(self, _path_id):
+        return 1.0
+
 
 def _econ_agent(tmp_path):
     cfg = parse_config(

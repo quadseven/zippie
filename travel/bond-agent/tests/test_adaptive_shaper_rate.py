@@ -130,6 +130,22 @@ def _agent(
     return agent
 
 
+class _HeardTransport:
+    """Every leg was heard a moment ago unless listed in `silent`."""
+
+    def __init__(self):
+        self.silent: set[int] = set()
+
+    def link_rx_age_s(self, link_id):
+        return 30.0 if link_id in self.silent else 1.0
+
+    def link_bytes(self):
+        return {}
+
+    def stats_dict(self):
+        return {}
+
+
 def _make_carrying(agent, name, *, rx_bps, tx_bps, link_id):
     path = next(p for p in agent.paths if p.name == name)
     path.rx_bps = rx_bps
@@ -137,6 +153,7 @@ def _make_carrying(agent, name, *, rx_bps, tx_bps, link_id):
     path.effective_weight = 100
     agent._transport_ids[name] = link_id
     agent._transport_links.add(link_id)
+    agent._transport = getattr(agent, "_transport", None) or _HeardTransport()
     return path
 
 
@@ -209,6 +226,26 @@ def test_a_leg_not_contributing_does_not_count(tmp_path, monkeypatch):
     leg1.tx_bps = 50_000_000.0
     agent._update_bond_shaper_rate()
     assert host.down_kbit == 8_000.0, "an uncontributing leg's throughput leaked into the total"
+
+
+def test_a_silent_leg_with_weight_does_not_count(tmp_path, monkeypatch):
+    """Bytes stopped and the weight has not caught up (#369): not carrying."""
+    host = _Host(cake=True)
+    agent = _agent(
+        tmp_path,
+        monkeypatch,
+        host,
+        shaper_capacity_fraction=1.0,
+        shaper_min_download_kbit=0.0,
+        shaper_min_upload_kbit=0.0,
+    )
+    _make_carrying(agent, "leg0", rx_bps=8_000_000.0, tx_bps=2_000_000.0, link_id=0)
+    _make_carrying(agent, "leg1", rx_bps=50_000_000.0, tx_bps=50_000_000.0, link_id=1)
+    agent._transport.silent.add(1)
+
+    agent._update_bond_shaper_rate()
+
+    assert host.down_kbit == 8_000.0, "a silent leg's throughput leaked into the total"
 
 
 def test_second_pass_within_hysteresis_does_not_reapply(tmp_path, monkeypatch):
