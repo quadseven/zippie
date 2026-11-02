@@ -308,6 +308,29 @@ final class PeerDiscoveryTests: XCTestCase {
         s.stop()
     }
 
+    /// Criterion 1 end to end through the fake browser's callback: a
+    /// verified peer is published, a refused one is not, and a vanished one
+    /// is removed from the published set.
+    func testVerifiedRefusedAndVanishedPeersThroughTheBrowser() async {
+        let v = FakeVerifier()
+        v.verifiedByID[1] = peer(id: 1)
+        v.verifiedByID[2] = peer(id: 2)
+        v.refusedIDs = [3]
+        let b = FakeBrowser()
+        let s = makeService(verifier: v, browser: b)
+        s.start()
+
+        b.deliver(added: [discovered(id: 1), discovered(id: 2), discovered(id: 3)], removed: [])
+        let verified = await eventually(s) { $0 == [self.peer(id: 1), self.peer(id: 2)] }
+        XCTAssertTrue(verified, "verified peers are published and the refused one is not")
+
+        b.deliver(added: [], removed: ["peer-2"])
+        let vanished = await eventually(s) { $0 == [self.peer(id: 1)] }
+        XCTAssertTrue(vanished, "the vanished peer is removed from the published set")
+        XCTAssertEqual(v.calls.count, 3, "every browsed peer went through the verifier")
+        s.stop()
+    }
+
     // MARK: - stale verification
 
     /// A peer removed while its proof is still verifying stays removed: the
