@@ -167,6 +167,54 @@ class NsdPeerDiscoveryTest {
     }
 
     @Test
+    fun `a stop that lands while the Go core is verifying delivers nothing`() {
+        val stopping = object : GoPeerCrypto {
+            override fun peerTxt(credentialJson: String, endpoint: String): String? = null
+            override fun verifyPeer(rosterJson: String, txtJson: String): VerificationResult {
+                discovery.stop()
+                return VerificationResult.Verified(peerOne)
+            }
+        }
+        discovery = NsdPeerDiscovery(source, stopping)
+        start()
+        val listener = source.listener!!
+        listener.onServiceFound("peer-1")
+        listener.onServiceResolved("peer-1", goodTxt.mapValues { it.value.toByteArray() })
+        assertTrue(verified.isEmpty())
+        assertFalse(discovery.isRunning)
+    }
+
+    @Test
+    fun `no callback runs while stop is in progress on another thread`() {
+        // stop() holds the discovery lock while it retires the run, so a
+        // callback either finishes before stop() starts or never runs.
+        val inCallback = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        discovery.start(
+            ROSTER,
+            onVerified = {},
+            onRefused = { _, _ ->
+                inCallback.countDown()
+                release.await()
+            },
+            onLost = {},
+        )
+        source.found("peer-1")
+        val listener = source.listener!!
+        val failing = Thread { listener.onResolveFailed("peer-1", 3) }
+        failing.start()
+        assertTrue(inCallback.await(2, java.util.concurrent.TimeUnit.SECONDS))
+        val stopper = Thread { discovery.stop() }
+        stopper.start()
+        stopper.join(200)
+        assertTrue("stop returned while a callback was still running", stopper.isAlive)
+        release.countDown()
+        stopper.join(2000)
+        failing.join(2000)
+        assertFalse(discovery.isRunning)
+    }
+
+    @Test
     fun `start twice registers one listener`() {
         start()
         start()

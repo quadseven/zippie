@@ -9,6 +9,8 @@ package app.zippie.companion
  * resolves still in flight and retires the listener, so an event the
  * platform delivers late (Android cannot cancel a resolve before API 34)
  * finds a retired listener and is dropped instead of reaching the app.
+ * App callbacks run under the discovery lock: keep them short and do not
+ * block in them on another thread that may call start() or stop().
  */
 class NsdPeerDiscovery(
     private val source: NsdSource,
@@ -36,12 +38,12 @@ class NsdPeerDiscovery(
     }
 
     override fun stop() {
-        val ending = synchronized(lock) {
+        val open = synchronized(lock) {
             val current = run ?: return
             run = null
-            current
+            current.retire()
         }
-        ending.retire().forEach(source::cancelResolve)
+        open.forEach(source::cancelResolve)
         source.stopDiscovery()
     }
 
@@ -77,48 +79,53 @@ class NsdPeerDiscovery(
             }
             val txtJson = txtRecordJson(txt)
             if (txtJson == null) {
-                onRefused(serviceName, REASON_MALFORMED_TXT)
+                deliver { onRefused(serviceName, REASON_MALFORMED_TXT) }
                 return
             }
+            // The Go call runs outside the lock; its answer is delivered under it.
             when (val result = crypto.verifyPeer(rosterJson, txtJson)) {
-                is VerificationResult.Refused -> if (isLive()) onRefused(serviceName, result.reason)
-                is VerificationResult.Verified -> {
-                    val first = synchronized(lock) {
-                        live && verified.putIfAbsent(serviceName, result.peer) == null
-                    }
-                    if (first) onVerified(result.peer)
+                is VerificationResult.Refused -> deliver { onRefused(serviceName, result.reason) }
+                is VerificationResult.Verified -> deliver {
+                    if (verified.putIfAbsent(serviceName, result.peer) == null) onVerified(result.peer)
                 }
             }
         }
 
         override fun onResolveFailed(serviceName: String, errorCode: Int) {
-            synchronized(lock) {
-                if (!live || !resolving.remove(serviceName)) return
+            deliver {
+                if (resolving.remove(serviceName)) onRefused(serviceName, "resolve_failed_$errorCode")
             }
-            onRefused(serviceName, "resolve_failed_$errorCode")
         }
 
         override fun onServiceLost(serviceName: String) {
-            val (wasResolving, wasVerified) = synchronized(lock) {
+            val wasResolving = synchronized(lock) {
                 if (!live) return
-                resolving.remove(serviceName) to (verified.remove(serviceName) != null)
+                // The app only ever saw verified peers, so only those can be lost.
+                if (verified.remove(serviceName) != null) onLost(serviceName)
+                resolving.remove(serviceName)
             }
             if (wasResolving) source.cancelResolve(serviceName)
-            // The app only ever saw verified peers, so only those can be lost.
-            if (wasVerified) onLost(serviceName)
         }
 
         override fun onDiscoveryFailed(errorCode: Int) {
-            val ending = synchronized(lock) {
+            val open = synchronized(lock) {
                 if (!live || run !== this) return
                 run = null
-                this
+                retire()
             }
-            ending.retire().forEach(source::cancelResolve)
+            open.forEach(source::cancelResolve)
             source.stopDiscovery()
         }
 
-        private fun isLive() = synchronized(lock) { live }
+        /**
+         * Runs an app callback only while this run is live, holding the
+         * lock so stop() cannot retire the run between the check and the
+         * call. Once stop() returns, no callback from this run can start.
+         * The lock is reentrant, so a callback may itself call stop().
+         */
+        private inline fun deliver(block: () -> Unit) = synchronized(lock) {
+            if (live) block()
+        }
     }
 
     companion object {
