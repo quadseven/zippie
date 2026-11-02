@@ -55,3 +55,28 @@ def test_membership_changes_clear_widening_even_between_samples():
     s.set_healthy(0, False)
     s.set_healthy(0, True)
     assert len(s.select(SendMode.DUPLICATE)) == 2
+
+
+def test_one_leg_recovering_ends_the_correlated_episode():
+    # Widening answers loss on every carrying leg. A leg that recovers ends
+    # that episode, so one leg that stays bad cannot hold the bond wide.
+    s = scheduler()
+    for _ in range(3):
+        s.update_duplicate_loss(dict.fromkeys(range(4), 30), 20)
+    assert len(s.select(SendMode.DUPLICATE)) == 4
+    for _ in range(2):
+        s.update_duplicate_loss({0: 30, 1: 30, 2: 30, 3: 5}, 20)
+    assert len(s.select(SendMode.DUPLICATE)) == 4
+    s.update_duplicate_loss({0: 30, 1: 30, 2: 30, 3: 5}, 20)
+    assert len(s.select(SendMode.DUPLICATE)) == 2
+
+
+def test_recovery_band_needs_consecutive_samples():
+    s = scheduler()
+    for _ in range(3):
+        s.update_duplicate_loss(dict.fromkeys(range(4), 30), 20)
+    for _ in range(2):
+        s.update_duplicate_loss({0: 30, 1: 30, 2: 30, 3: 5}, 20)
+    s.update_duplicate_loss(dict.fromkeys(range(4), 30), 20)
+    s.update_duplicate_loss({0: 30, 1: 30, 2: 30, 3: 5}, 20)
+    assert len(s.select(SendMode.DUPLICATE)) == 4

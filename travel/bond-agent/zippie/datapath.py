@@ -367,7 +367,17 @@ class Scheduler:
         self._step_duplicate_loss(values, threshold)
 
     def _step_duplicate_loss(self, values: list[float], threshold: float) -> None:
-        """One hysteresis step: three samples to enter, three to leave."""
+        """One hysteresis step: three samples to enter, three to leave.
+
+        Entry needs EVERY carrying leg above the threshold, because widening
+        answers correlated loss only. Exit is the complement with a band: ANY
+        carrying leg below half the threshold ends the correlated episode.
+        Requiring every leg to recover instead would let one persistently bad
+        leg hold the bond wide after the others heal, which is exactly the
+        single-bad-leg case that must never widen. Once narrowed, the
+        weight-ordered targets already favor the clean leg, since
+        policy.effective_weight folds measured loss into weight.
+        """
         if self._duplicate_wide:
             recovered = any(v < threshold / 2 for v in values)
             self._duplicate_low = self._duplicate_low + 1 if recovered else 0
