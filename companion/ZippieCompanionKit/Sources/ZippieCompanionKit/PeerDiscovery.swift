@@ -104,11 +104,12 @@ final class NWBrowserAdapter: PeerBrowsing {
         browser.cancel()
     }
 
-    /// Extracts a discovered peer from a browse result. The service name and
-    /// TXT record come from the result's metadata; host and port come from
-    /// the endpoint when it has been resolved to a host:port.
+    /// Extracts a discovered peer from a browse result. The TXT record comes
+    /// from the result's metadata; the name, and host and port when present,
+    /// come from the endpoint through `peerName(from:)`.
     private static func discovered(from result: NWBrowser.Result) -> DiscoveredPeer? {
-        guard case .bonjour(let txtRecord) = result.metadata else {
+        guard case .bonjour(let txtRecord) = result.metadata,
+              let name = peerName(from: result.endpoint) else {
             return nil
         }
         var host = ""
@@ -117,20 +118,35 @@ final class NWBrowserAdapter: PeerBrowsing {
             host = hostname(from: hn)
             port = p.rawValue
         }
-        return DiscoveredPeer(name: host, host: host, port: port, txt: txtRecord.dictionary)
+        return DiscoveredPeer(name: name, host: host, port: port, txt: txtRecord.dictionary)
     }
 
-    /// Extracts a service name from a removed change. The change carries the
-    /// removed result, so the name is read from that result's endpoint, the
-    /// same source `discovered` uses so added and removed names stay in step.
+    /// Extracts a service name from a removed change, through the same
+    /// `peerName(from:)` that `discovered` uses so added and removed names
+    /// stay in step.
     private static func name(from change: NWBrowser.Result.Change) -> String? {
         guard case .removed(let result) = change else {
             return nil
         }
-        if case let .hostPort(hn, _) = result.endpoint {
-            return hostname(from: hn)
+        return peerName(from: result.endpoint)
+    }
+
+    /// The key a peer is tracked by across appearances and disappearances.
+    /// Bonjour browse results carry a `.service` endpoint, so its service
+    /// name is the key; a resolved `.hostPort` falls back to the host. Any
+    /// other endpoint, or an empty name, yields nil and the result is
+    /// skipped rather than tracked under an empty key.
+    static func peerName(from endpoint: NWEndpoint) -> String? {
+        let name: String
+        switch endpoint {
+        case let .service(serviceName, _, _, _):
+            name = serviceName
+        case let .hostPort(host, _):
+            name = hostname(from: host)
+        default:
+            return nil
         }
-        return nil
+        return name.isEmpty ? nil : name
     }
 
     /// Turns a resolved endpoint host into a printable name.
@@ -148,23 +164,30 @@ final class NWBrowserAdapter: PeerBrowsing {
     }
 }
 
-/// Wraps NWListener to advertise `_zippie._tcp`.
+/// Wraps NWListener to advertise `_zippie._tcp` with this device's proof as
+/// the TXT record. The listener accepts no connections itself: peers dial the
+/// datapath, so any inbound connection here is cancelled at once.
 final class NWListenerAdvertiser: PeerAdvertising {
-    private let listener: NWListener
-    /// The Bonjour service name to advertise; wired to the listener once the
-    /// SDK's bonjour-service API is confirmed (see note below).
-    private let serviceName: String
+    enum SetupError: Error {
+        case invalidPort(UInt16)
+    }
 
-    init(serviceName: String, port: UInt16) throws {
-        let params = NWParameters()
+    private let listener: NWListener
+
+    init(serviceName: String, port: UInt16, txt: [String: String]) throws {
+        guard let nwPort = NWEndpoint.Port(rawValue: port) else {
+            throw SetupError.invalidPort(port)
+        }
+        let params = NWParameters.tcp
         params.includePeerToPeer = true
-        self.listener = try NWListener(using: params,
-                                       on: NWEndpoint.Port(rawValue: port)!)
-        self.serviceName = serviceName
-        // Advertise _zippie._tcp with the device's proof as the TXT record.
-        // The NWListener bonjour-service API is SDK-version dependent; wire it
-        // against the installed SDK before enabling. The listener binds the
-        // port regardless, degrading safely rather than crashing.
+        self.listener = try NWListener(using: params, on: nwPort)
+        listener.service = NWListener.Service(name: serviceName,
+                                              type: "_zippie._tcp",
+                                              domain: nil,
+                                              txtRecord: NWTXTRecord(txt))
+        listener.newConnectionHandler = { connection in
+            connection.cancel()
+        }
     }
 
     func start() {

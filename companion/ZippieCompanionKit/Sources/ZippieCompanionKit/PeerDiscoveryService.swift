@@ -8,9 +8,16 @@ import Foundation
 /// This is an actor. Every read and write of the verified-peer set happens on
 /// this actor, so there is exactly one writer, no lock, no race, and no nil
 /// dereference. The browser callback runs on `browseQueue` (never the main
-/// actor) and funnels through `deliver`, which hops to this actor. No sync I/O
-/// runs on an async path: the only async point is the awaited
-/// `verifier.verify(txt:)`.
+/// actor) and only yields the batch into an ordered stream, so it never waits
+/// on verification. One consumer task drains that stream onto this actor in
+/// arrival order, so a removal is never applied before the addition that came
+/// first. No sync I/O runs on an async path: the only async point is the
+/// awaited `verifier.verify(txt:)`.
+///
+/// Because `apply` suspends while a proof verifies, a later batch can remove
+/// the same peer meanwhile. A per-name generation counter makes the late
+/// verification result a no-op in that case, so a vanished peer is never
+/// republished by a stale verification.
 ///
 /// # The bugs this replaces
 ///
@@ -36,6 +43,12 @@ public actor PeerDiscoveryService {
         }
     }
 
+    /// One browser callback: the peers it added and the names it removed.
+    struct Batch: Sendable {
+        let added: [DiscoveredPeer]
+        let removed: [String]
+    }
+
     private let verifier: any PeerVerifying
     private nonisolated let browser: any PeerBrowsing
     private nonisolated let advertiser: (any PeerAdvertising)?
@@ -43,9 +56,15 @@ public actor PeerDiscoveryService {
     private nonisolated let browseQueue: DispatchQueue
 
     private var verified: [String: VerifiedPeer] = [:]
+    /// Bumped on every addition or removal of a name, so a verification that
+    /// finishes after a newer change to the same name is discarded.
+    private var generation: [String: UInt64] = [:]
 
     private let eventsStream: AsyncStream<PeerEvent>
     private let eventContinuation: AsyncStream<PeerEvent>.Continuation
+
+    private nonisolated let batches: AsyncStream<Batch>
+    private nonisolated let batchContinuation: AsyncStream<Batch>.Continuation
 
     /// The verified peers, sorted by client id for stable output to the app.
     public var peers: [VerifiedPeer] {
@@ -70,15 +89,20 @@ public actor PeerDiscoveryService {
         let (stream, continuation) = AsyncStream<PeerEvent>.makeStream()
         self.eventsStream = stream
         self.eventContinuation = continuation
+        let (batchStream, batchContinuation) = AsyncStream<Batch>.makeStream()
+        self.batches = batchStream
+        self.batchContinuation = batchContinuation
     }
 
     /// Start advertising and browsing. Browser results are delivered on
-    /// `browseQueue`, never the main actor.
+    /// `browseQueue`, never the main actor; the handler only enqueues them.
+    /// One-shot: after `stop()` the service does not restart.
     public nonisolated func start() {
-        browser.resultsChangedHandler = { [weak self] added, removed in
-            guard let self else { return }
-            Task { await self.deliver(added: added, removed: removed) }
+        let sink = batchContinuation
+        browser.resultsChangedHandler = { added, removed in
+            sink.yield(Batch(added: added, removed: removed))
         }
+        Task { await self.drain() }
         browser.start(queue: browseQueue)
         advertiser?.start()
     }
@@ -86,25 +110,50 @@ public actor PeerDiscoveryService {
     public nonisolated func stop() {
         browser.stop()
         advertiser?.stop()
+        batchContinuation.finish()
     }
 
-    /// The single entry point for browser results. Tests call this directly to
-    /// drive the service without a real network; production calls it from the
-    /// browser's `resultsChangedHandler`. All mutation of `verified` happens
-    /// here, on this actor.
-    public nonisolated func deliver(added: [DiscoveredPeer], removed: [String]) async {
+    /// Applies queued browser batches one at a time, in arrival order.
+    private func drain() async {
+        for await batch in batches {
+            await apply(added: batch.added, removed: batch.removed)
+        }
+        eventContinuation.finish()
+    }
+
+    /// Applies one batch of browser results and returns when it is done.
+    /// Tests call this directly to drive the service without a real network.
+    /// All mutation of `verified` happens on this actor.
+    public func deliver(added: [DiscoveredPeer], removed: [String]) async {
         await apply(added: added, removed: removed)
     }
 
+    private func bump(_ name: String) -> UInt64 {
+        let next = (generation[name] ?? 0) &+ 1
+        generation[name] = next
+        return next
+    }
+
     private func apply(added: [DiscoveredPeer], removed: [String]) async {
-        for name in removed where verified[name] != nil {
-            verified.removeValue(forKey: name)
-            eventContinuation.yield(.vanished(name))
+        for name in removed {
+            _ = bump(name)
+            if verified.removeValue(forKey: name) != nil {
+                eventContinuation.yield(.vanished(name))
+            }
         }
         for peer in added {
-            guard let verifiedPeer = await verifier.verify(txt: peer.txt) else {
+            let ticket = bump(peer.name)
+            let result = await verifier.verify(txt: peer.txt)
+            // A newer change to this name arrived while the proof verified:
+            // that change wins, and this stale result is dropped.
+            guard generation[peer.name] == ticket else { continue }
+            guard let verifiedPeer = result else {
                 // Refused: nothing said by an unverified advertisement is
-                // believed, so the peer is not published.
+                // believed. A re-advertisement that no longer verifies also
+                // withdraws whatever this name proved before.
+                if verified.removeValue(forKey: peer.name) != nil {
+                    eventContinuation.yield(.vanished(peer.name))
+                }
                 continue
             }
             if verified[peer.name] != verifiedPeer {
