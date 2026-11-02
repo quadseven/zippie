@@ -258,23 +258,20 @@ class Scheduler:
         self._credit: dict[int, float] = {}
 
     def add_path(self, path: PathState) -> None:
-        self._duplicate_wide = False
-        self._duplicate_high = self._duplicate_low = 0
+        self._reset_duplicate_loss()
         self._paths[path.path_id] = path
         self._credit.setdefault(path.path_id, 0.0)
 
     def remove_path(self, path_id: int) -> None:
         if path_id in self._paths:
-            self._duplicate_wide = False
-            self._duplicate_high = self._duplicate_low = 0
+            self._reset_duplicate_loss()
         self._paths.pop(path_id, None)
         self._credit.pop(path_id, None)
 
     def set_healthy(self, path_id: int, healthy: bool) -> None:
         if path_id in self._paths:
             if self._paths[path_id].healthy != healthy:
-                self._duplicate_wide = False
-                self._duplicate_high = self._duplicate_low = 0
+                self._reset_duplicate_loss()
             self._paths[path_id].healthy = healthy
 
     def set_weight(self, path_id: int, weight: int) -> None:
@@ -295,8 +292,7 @@ class Scheduler:
         """
         if path_id in self._paths:
             if (self._paths[path_id].weight > 0) != (weight > 0):
-                self._duplicate_wide = False
-                self._duplicate_high = self._duplicate_low = 0
+                self._reset_duplicate_loss()
             self._paths[path_id].weight = max(0, weight)
 
     @property
@@ -362,32 +358,32 @@ class Scheduler:
         carrying = [p for p in healthy if p.weight > 0] or healthy
         members = frozenset(p.path_id for p in carrying)
         if members != self._duplicate_carrying:
-            self._duplicate_wide = False
-            self._duplicate_high = self._duplicate_low = 0
+            self._reset_duplicate_loss()
             self._duplicate_carrying = members
         values = [losses.get(p.path_id) for p in carrying]
-        if (
-            threshold <= 0
-            or len(carrying) <= self.duplicate_fanout
-            or any(v is None for v in values)
-        ):
-            self._duplicate_wide = False
-            self._duplicate_high = self._duplicate_low = 0
+        if threshold <= 0 or len(carrying) <= self.duplicate_fanout or None in values:
+            self._reset_duplicate_loss()
             return
+        self._step_duplicate_loss(values, threshold)
+
+    def _step_duplicate_loss(self, values: list[float], threshold: float) -> None:
+        """One hysteresis step: three samples to enter, three to leave."""
         if self._duplicate_wide:
-            self._duplicate_low = (
-                self._duplicate_low + 1 if any(v < threshold / 2 for v in values) else 0
-            )
+            recovered = any(v < threshold / 2 for v in values)
+            self._duplicate_low = self._duplicate_low + 1 if recovered else 0
             if self._duplicate_low >= 3:
-                self._duplicate_wide = False
-                self._duplicate_high = self._duplicate_low = 0
+                self._reset_duplicate_loss()
         else:
-            self._duplicate_high = (
-                self._duplicate_high + 1 if all(v > threshold for v in values) else 0
-            )
+            lossy = all(v > threshold for v in values)
+            self._duplicate_high = self._duplicate_high + 1 if lossy else 0
             if self._duplicate_high >= 3:
                 self._duplicate_wide = True
                 self._duplicate_high = self._duplicate_low = 0
+
+    def _reset_duplicate_loss(self) -> None:
+        """Drop adaptive evidence: back to the configured bound."""
+        self._duplicate_wide = False
+        self._duplicate_high = self._duplicate_low = 0
 
     def _duplicate_targets(self, carrying: list[PathState]) -> list[int]:
         """The best `duplicate_fanout` legs, so a copy costs the same at 8 legs
