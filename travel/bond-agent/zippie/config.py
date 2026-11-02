@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from zippie.auth import parse_auth_level
+from zippie.datapath_port import parse_datapath_impl
 from zippie.models import (
     AgentConfig,
     BondMode,
@@ -263,6 +264,10 @@ def parse_config(
             else None
         ),
         transport_roam=bool(policy_raw.get("transport_roam", False)),
+        # Refused at load when no adapter has that name, so a typo or a "go"
+        # set ahead of the adapter stops the agent instead of quietly running
+        # the Python datapath under a config that claims otherwise.
+        datapath_impl=parse_datapath_impl(str(policy_raw.get("datapath_impl", "python"))),
         # Validated HERE, at load, rather than at first use. parse_auth_level
         # refuses an unrecognised rung, and a typo that silently meant "off"
         # would look exactly like a working rollout - the agent must refuse to

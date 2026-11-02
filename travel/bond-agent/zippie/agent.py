@@ -3836,7 +3836,7 @@ class BondAgent:
             return
         from zippie.auth import build_identity, parse_auth_level
         from zippie.classify import ClassifierConfig
-        from zippie.transport import Transport
+        from zippie.datapath_port import make_datapath
 
         # THE HEADER-MAC RUNG, read from zippie.toml and actually passed. A
         # knob that stops at PolicyConfig is a knob nobody can turn (#50), and
@@ -3858,7 +3858,13 @@ class BondAgent:
         # not. Transport has taken a `classifier` argument since it was
         # written, nothing supplied one, so every router ran the constructor
         # defaults and no zippie.toml key could change them (#50).
-        self._transport = Transport(
+        #
+        # THROUGH THE SEAM (#376). The agent holds a DatapathPort, never the
+        # Python Transport itself, and policy.datapath_impl picks the adapter.
+        # "python" is the default and the only one built, and its adapter is
+        # pure delegation, so every argument below reaches Transport unchanged.
+        self._transport = make_datapath(
+            self.config.policy.datapath_impl,
             ("127.0.0.1", self.config.policy.transport_port),
             reorder_deadline_ms=self.config.policy.reorder_deadline_ms,
             max_reorder_deadline_ms=self.config.policy.max_reorder_deadline_ms,
@@ -4095,7 +4101,7 @@ class BondAgent:
         healthy links would make unhealthy absorbing - a leg demoted once could
         never produce the evidence needed to come back."
         """
-        from zippie.transport import LinkEndpoint
+        from zippie.datapath_port import LinkEndpoint
 
         if usable and pid in self._transport_links and self._link_remotes.get(pid) != remote:
             # Dynamic DNS moved the home endpoint. A link cannot be re-pointed

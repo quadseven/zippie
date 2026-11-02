@@ -29,7 +29,7 @@ describe are the code and comments in this tree.
 - [Keeping the router alive](#keeping-the-router-alive) - D18 to D22
 - [Phones as infrastructure](#phones-as-infrastructure) - D23 to D27
 - [Telling the truth](#telling-the-truth) - D28 to D31
-- [Boundaries](#boundaries) - D32 to D37
+- [Boundaries](#boundaries) - D32 to D38
 
 ---
 
@@ -1533,6 +1533,44 @@ had 114 ms RTT and a 177 MB download ran at about 9.5 Mbps. Downstream
 capacity remains a separate problem tracked by #24. The home-end per-client
 egress policy in #312 controls traffic after it reaches home; it does not
 provide local breakout from the travel LAN.
+
+### D38. Routers stay on the Python datapath; Go sits behind a seam until it carries traffic
+
+**2026-11-02.** Two per-packet datapaths exist, the Python `Transport` and the
+Go `zippie-datapath`, and comments in both implied a router cutover to Go that
+no record ever stated. This entry states it: **routers do not cut over to Go
+now.** The Python datapath remains the router and home default.
+
+What changed instead is the seam. The agent reaches the datapath only through
+`DatapathPort` (travel/bond-agent/zippie/datapath_port.py), and
+`policy.datapath_impl` picks the adapter. `python` is the only adapter built,
+and it is pure delegation, so the wire is unchanged. A name with no adapter
+behind it, `go` included, is refused at load rather than quietly running
+Python under a config that claims a cutover.
+
+Parity is now a test rather than a habit.
+travel/bond-agent/tests/fixtures/datapath_wire_vectors.json pins frame bytes,
+the MAC-off and MAC-on wire at every auth rung, scheduler choices per send
+mode, and link-add and re-weight semantics. The Python suite and
+travel/datapath-go/zippie/vectors_test.go both read it in CI (the Go job
+runs on a vector-only change once #384 adds the file to its path filter).
+On the day it
+landed Go matched every frame and auth vector and missed three behaviours,
+each recorded in the file as a `go_gap` that the Go test skips with its
+reason and fails on once the gap closes:
+
+- the weight floor removal (#92): Go still raises a weight below 1 to 1;
+- weight zero carries nothing: Go still copies a duplicate onto a leg held at 0;
+- the duplicate fan-out bound (D4): Go copies onto every healthy leg.
+
+Each of those would leak traffic onto a leg the policy held out, which is the
+failure D4 and #92 were written to end. That is the reason a cutover waits:
+the Go adapter (over the control socket's `sync_links`) joins
+`DATAPATH_IMPLS` only after those gaps close and it has carried real traffic,
+since its own client-mode manifest says it has not. Retransmit is flagged
+0x20 in Python and 0x40 in Go on purpose (frame.go explains the collision
+with FlagEncrypted); that is not a gap, because neither end reads the other's
+bit.
 
 ## Two rules that generalize
 

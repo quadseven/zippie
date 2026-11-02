@@ -488,6 +488,12 @@ class PolicyConfig:
     # routing churn. Travel side keeps fixed remotes (it dials out), so this is
     # off there and on at home. Harmless in route mode.
     transport_roam: bool = False
+    # Which adapter behind the datapath seam (datapath_port.py, #376) carries
+    # packet mode. "python" is the only one built; the Go control-socket
+    # adapter stays out of this list until it has carried traffic (see
+    # DECISIONS.md D38). Validated at load, like auth_level. Unused in route
+    # mode.
+    datapath_impl: str = "python"
     # HEADER MAC (auth.py, #2172). Which rung of the rollout ladder this end
     # stands on, the file holding the shared secret, and the bond id both ends
     # put on the wire.
