@@ -160,6 +160,12 @@ def test_append_happens_once_per_control_loop_pass(monkeypatch):
     store = SeriesStore(maxlen=DEFAULT_SERIES_POINTS)
     a = object.__new__(agent_mod.BondAgent)
     a.paths = []
+
+    class _IdleISPResolver:
+        def update(self, legs):
+            return {}
+
+    a._isp_name_resolver = _IdleISPResolver()
     a._series = store
     for name in (
         "reconcile_dynamic_legs",

@@ -18,7 +18,18 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlparse
 
-from zippie import __version__, build, net, policy, shaper, telemetry, wifi, wifi_uci
+from zippie import (
+    __version__,
+    build,
+    isp,
+    leg_verdict,
+    net,
+    policy,
+    shaper,
+    telemetry,
+    wifi,
+    wifi_uci,
+)
 from zippie.config import load_config, validate_dashboard_tls
 from zippie.counters import (
     DEFAULT_SERIES_MAX_RESPONSE_POINTS,
@@ -27,6 +38,7 @@ from zippie.counters import (
 )
 from zippie.datapath import HEADER_LEN
 from zippie.dynamic import DynamicLeg, DynamicLegs, announce_host
+from zippie.leg_verdict import PACKET_LINK_STALE_S
 from zippie.models import (
     AgentConfig,
     CostClass,
@@ -217,13 +229,6 @@ def _install_dashboard_listeners(
 # pb0..pbN tunnels route mode creates, so that switching datapath cannot
 # leave one mode holding an interface the other believes it owns.
 PACKET_IFACE = "pbz0"
-# Six seconds of silence on a leg before it is called dead. Keepalives go out
-# once per control tick (~1s), so this is roughly six consecutive misses -
-# deliberately looser than route mode's three, because a keepalive can be lost
-# to ordinary congestion whereas route mode's ICMP probe rides an established
-# tunnel. Evicting a weak-but-working LTE leg is worse than carrying a dead one
-# for an extra three seconds, since the scheduler retransmits around loss.
-PACKET_LINK_STALE_S = 6.0
 # Loss classification runs once per probe pass. Twelve consecutive readings
 # confirm either side of the degraded threshold without changing RTT policy.
 LOSS_STATE_STREAK = 12
@@ -650,6 +655,7 @@ class BondAgent:
         self.paths: list[PathRuntime] = [
             PathRuntime(name=p.name, config=p, port=p.port) for p in config.paths if p.enabled
         ]
+        self._isp_name_resolver = isp.ISPNameResolver()
         self.primary: str | None = None
         # Liveness is judged on whether each tunnel's receive counter is still
         # MOVING. Handshake age and cumulative rx are both historical and stay
@@ -2215,7 +2221,7 @@ class BondAgent:
         # payload-delivery loss.
         loss_pct = self._leg_loss_pct(transport, pid, self.config.policy.degraded_loss_pct)
 
-        if age is None or age >= PACKET_LINK_STALE_S:
+        if not leg_verdict.bytes_arriving(age):
             path.state = PathState.DOWN
             path.rtt_ms = None
             path.loss_pct = 100.0
@@ -2705,7 +2711,7 @@ class BondAgent:
                     cost_class=CostClass.METERED,
                     relay_endpoint=leg.relay_endpoint,
                 )
-                path = PathRuntime(name=name, config=cfg)
+                path = PathRuntime(name=name, config=cfg, isp_name=leg.isp_name)
                 self._dynamic_paths[name] = path
                 self.paths.append(path)
                 log.info("dynamic leg %s announced at %s", name, leg.relay_endpoint)
@@ -2733,6 +2739,9 @@ class BondAgent:
             )
             object.__setattr__(existing.config, "relay_endpoint", leg.relay_endpoint)
             self._drop_transport_path(name)
+        if existing.isp_name != leg.isp_name:
+            log.info("dynamic leg %s ISP name changed to %r", name, leg.isp_name)
+            existing.isp_name = leg.isp_name
         # THE OPERATOR'S NAME WINS OVER THE DEVICE'S (#80).
         #
         # Without this the two writers fight forever. reconcile_dynamic_legs
@@ -3593,6 +3602,13 @@ class BondAgent:
             "the carrier, NOT through home, and is no longer inside the tunnel."
         )
 
+    def _leg_rx_age_s(self, pid: int | None) -> float | None:
+        """Seconds since this leg's link heard anything; None when unknown."""
+        transport = getattr(self, "_transport", None)
+        if transport is None or pid is None:
+            return None
+        return transport.link_rx_age_s(pid)
+
     def _leg_activity_facts(self, path: PathRuntime, pid: int | None) -> dict[str, Any]:
         """Is this leg in the bond, is it doing any work, and for how long not.
 
@@ -3637,7 +3653,12 @@ class BondAgent:
         and held out), and collapsing either pair loses the half a reader
         needs.
 
-            carrying - in the bond with a real weight, probation included
+        BYTES ARRIVING IS THE THIRD HALF (#369), per CONTEXT.md. Weight is
+        recomputed once a tick, so between ticks it can outlive the bytes that
+        earned it. Same window as the DOWN branch of the packet probe, so the
+        idle keepalive cadence cannot read as silence.
+
+            carrying - in the bond with a real weight, bytes arriving, probation included
             idle     - in the bond, holding a slot, contributing nothing
             out      - not in the bond at all; `state` says why
 
@@ -3650,12 +3671,18 @@ class BondAgent:
         in that state at all, never 0, because "not waiting" and "waiting for
         no time" are different things.
         """
-        in_bond = pid is not None and pid in self._transport_links and not path.shed_for_latency
-        contributing = in_bond and path.effective_weight > 0
+        verdict = leg_verdict.judge(
+            leg_verdict.LegFacts(
+                linked=pid is not None and pid in self._transport_links,
+                shed_for_latency=path.shed_for_latency,
+                weight=path.effective_weight,
+                rx_age_s=self._leg_rx_age_s(pid),
+            )
+        )
         return {
-            "in_bond": in_bond,
-            "contributing": contributing,
-            "activity": ("carrying" if contributing else "idle" if in_bond else "out"),
+            "in_bond": verdict.in_bond,
+            "contributing": verdict.contributing,
+            "activity": verdict.activity,
             # NOT the same as `state`. A leg here is not having a bad day, it
             # has never had a good one - see _flag_never_handshaked.
             "never_handshaked": path.never_handshaked,
@@ -4738,6 +4765,7 @@ class BondAgent:
                         # in reconcile_dynamic_legs. Defaulting to 1 here made
                         # a silent announce evict every demoted leg (#67).
                         tier=(None if body.get("tier") is None else int(body["tier"])),
+                        isp_name=body.get("isp_name"),
                         lease_s=float(body.get("lease_s", 45)),
                     )
                 except (ValueError, TypeError) as exc:
@@ -4994,6 +5022,19 @@ class BondAgent:
         self.apply_auto_cost_class()
         self.ensure_tunnels()
         self.probe_paths()
+        router_paths = tuple(path for path in self.paths if path.name not in self._dynamic_paths)
+        names = self._isp_name_resolver.update(
+            (
+                path.name,
+                path.interface,
+                path.local_ip,
+                path.state in {PathState.UP, PathState.DEGRADED},
+            )
+            for path in router_paths
+        )
+        for path in self.paths:
+            if path.name not in self._dynamic_paths:
+                path.isp_name = names.get(path.name)
         self.sample_counters()
         self.apply_policy()
         # AFTER apply_policy, same tick: needs this pass's contributing/

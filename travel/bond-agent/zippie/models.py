@@ -665,6 +665,7 @@ class PathRuntime:
     name: str
     config: PathConfig
     interface: str | None = None
+    isp_name: str | None = None
     # This leg's OWN address on that interface. Evidence of WHICH network it
     # is attached to, which is how a site-specific home address is chosen
     # without a per-trip toggle (#258).
@@ -903,6 +904,7 @@ class PathRuntime:
         return {
             "name": self.name,
             "interface": self.interface,
+            "isp_name": self.isp_name,
             "wg_iface": self.wg_iface,
             "port": self.port,
             "address": self.config.address_cidr,

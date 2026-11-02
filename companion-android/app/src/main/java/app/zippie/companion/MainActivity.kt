@@ -255,8 +255,8 @@ class MainActivity : ComponentActivity() {
      * Refresh BootReceiver's device-protected mirror of the router address,
      * port and data budget (#54), so the next reboot - which may leave the
      * phone locked with nobody to open the app - uses today's configuration
-     * rather than whatever was last synced. See BootConfigStore's class doc
-     * for why the announce token is never part of this mirror.
+     * rather than whatever was last synced. The announce token has its own
+     * device-protected store; see BootConfigStore for the accepted risk.
      *
      * A fresh, unscoped CoroutineScope rather than lifecycleScope: the write
      * is two small SharedPreferences commits and must finish even if the

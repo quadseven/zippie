@@ -61,6 +61,9 @@ class DynamicLeg:
     # demoted - the bond ran on one leg for an hour on 2026-08-08 (#67).
     # Resolved at reconcile time to whatever tier is already carrying.
     tier: int | None = None
+    # Reported by the phone after a lookup bound to its own cellular path.
+    # The router cannot infer this from br-lan without naming its own egress.
+    isp_name: str | None = None
 
     @property
     def relay_endpoint(self) -> str:
@@ -94,6 +97,21 @@ def announce_host(claimed: str, observed: str) -> str:
     return observed if is_private_v4(observed) else claimed
 
 
+def _normalize_isp_name(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError("isp_name must be text")
+    value = value.strip()
+    if not value:
+        return None
+    if len(value) > 64 or any(
+        not character.isascii() or not character.isprintable() for character in value
+    ):
+        raise ValueError("isp_name must be at most 64 printable ASCII characters")
+    return value
+
+
 class DynamicLegs:
     """Announced legs, with leases."""
 
@@ -111,9 +129,10 @@ class DynamicLegs:
         label: str = "",
         weight: int = 60,
         tier: int | None = None,
+        isp_name: str | None = None,
         lease_s: float = DEFAULT_LEASE_S,
     ) -> DynamicLeg:
-        """Accept or renew a leg. Raises ValueError on anything unusable.
+        """Accept or renew a leg. Raises TypeError for wrong types and ValueError for unusable values.
 
         VALIDATED HARD, because this is the one path where a leg's identity
         comes off the network rather than out of a file an operator wrote. A
@@ -134,6 +153,7 @@ class DynamicLegs:
         # check: this still arrives over the network.
         if tier is not None and not (1 <= int(tier) <= 99):
             raise ValueError("tier must be 1..99")
+        isp_name = _normalize_isp_name(isp_name)
         lease = max(5.0, min(float(lease_s), 300.0))
 
         leg = DynamicLeg(
@@ -143,6 +163,7 @@ class DynamicLegs:
             port=int(port),
             weight=int(weight),
             tier=(None if tier is None else int(tier)),
+            isp_name=isp_name,
             expires_at=self._clock() + lease,
         )
         with self._lock:
@@ -186,6 +207,4 @@ def is_private_v4(host: str) -> bool:
         return True
     if a == 192 and b == 168:
         return True
-    if a == 172 and 16 <= b <= 31:
-        return True
-    return False
+    return bool(a == 172 and 16 <= b <= 31)

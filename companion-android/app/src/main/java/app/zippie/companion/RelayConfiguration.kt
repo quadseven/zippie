@@ -147,7 +147,6 @@ data class RelayConfiguration(
         private const val KEY_CONSOLE_URL = "consoleUrl"
         private const val KEY_DAILY_BUDGET = "dailyBudgetBytes"
         private const val KEY_MONTHLY_BUDGET = "monthlyBudgetBytes"
-        private const val KEY_ANNOUNCE_TOKEN = "announceToken"
         private const val KEY_DD_TOKEN = "ddClientToken"
         private const val KEY_DD_SITE = "ddSite"
         /** LegName.KEY, restated so this file does not depend on that object. */
@@ -238,7 +237,6 @@ data class RelayConfiguration(
                 .putString(KEY_CONSOLE_URL, current.consoleUrl)
                 .putLong(KEY_DAILY_BUDGET, current.dailyBudgetBytes)
                 .putLong(KEY_MONTHLY_BUDGET, current.monthlyBudgetBytes)
-                .putString(KEY_ANNOUNCE_TOKEN, current.announceToken)
                 .putString(KEY_DD_TOKEN, current.ddClientToken)
                 .putString(KEY_DD_SITE, current.ddSite)
                 .apply()
@@ -255,7 +253,8 @@ data class RelayConfiguration(
         /** Per-field fallback, because a partially written store must still
          *  produce a usable configuration rather than an empty one. */
         fun load(context: Context): RelayConfiguration {
-            val p = prefs(context)
+            val storage = storageContext(context)
+            val p = storage.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val d = RelayConfiguration()
             return RelayConfiguration(
                 listenPort = p.getInt(KEY_LISTEN_PORT, d.listenPort),
@@ -268,7 +267,7 @@ data class RelayConfiguration(
                     .ifEmpty { d.consoleUrl },
                 dailyBudgetBytes = p.getLong(KEY_DAILY_BUDGET, d.dailyBudgetBytes),
                 monthlyBudgetBytes = p.getLong(KEY_MONTHLY_BUDGET, d.monthlyBudgetBytes),
-                announceToken = p.getString(KEY_ANNOUNCE_TOKEN, d.announceToken).orEmpty(),
+                announceToken = AnnounceTokenStore.read(p, stablePrefs(context), storage.isDeviceProtectedStorage),
                 ddClientToken = p.getString(KEY_DD_TOKEN, d.ddClientToken).orEmpty(),
                 ddSite = p.getString(KEY_DD_SITE, d.ddSite).orEmpty().ifEmpty { d.ddSite },
             )
@@ -281,7 +280,9 @@ data class RelayConfiguration(
          * configuration it read before the token was set.
          */
         fun saveAnnounceToken(context: Context, token: String) {
-            prefs(context).edit().putString(KEY_ANNOUNCE_TOKEN, token).apply()
+            val storage = storageContext(context)
+            val current = storage.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            AnnounceTokenStore.write(current, stablePrefs(context), storage.isDeviceProtectedStorage, token)
         }
 
         fun save(context: Context, config: RelayConfiguration) {
@@ -293,10 +294,10 @@ data class RelayConfiguration(
                 .putString(KEY_CONSOLE_URL, config.consoleUrl)
                 .putLong(KEY_DAILY_BUDGET, config.dailyBudgetBytes)
                 .putLong(KEY_MONTHLY_BUDGET, config.monthlyBudgetBytes)
-                .putString(KEY_ANNOUNCE_TOKEN, config.announceToken)
                 .putString(KEY_DD_TOKEN, config.ddClientToken)
                 .putString(KEY_DD_SITE, config.ddSite)
                 .apply()
+            saveAnnounceToken(context, config.announceToken)
         }
     }
 }

@@ -19,23 +19,11 @@ import android.content.SharedPreferences
  * Context.createDeviceProtectedStorageContext() instead, a physically
  * different location on disk that survives the locked window.
  *
- * WHAT DELIBERATELY DOES NOT LIVE HERE. RelayConfiguration.announceToken is
- * the router console's WRITE token - a credential, not configuration, and the
- * thing that lets this phone add a leg the router will dial. Mirroring it
- * into device-protected storage would make an authentication secret readable
- * by anyone with physical access to a locked, powered-on phone: unlike
- * credential-encrypted storage, device-protected storage is not gated by the
- * user's lock-screen credential at all, only by the OS's normal per-app
- * sandboxing. That is a real weakening of the security posture for a phone
- * whose whole point is sitting unattended in a car, so it is refused here.
- *
- * THE CONSEQUENCE, STATED RATHER THAN HIDDEN: a relay started before first
- * unlock RELAYS - it forwards bytes - but does not ANNOUNCE, because
- * RelayService (unedited by this change) still reads the token from
- * credential-encrypted storage via RelayConfiguration.load and finds it
- * empty there. See BootReceiver's class doc for exactly what does and does
- * not resume, and what would be needed to close that gap without weakening
- * where the token lives.
+ * THE ANNOUNCE TOKEN. The router write token lives in the separate
+ * device-protected relay store so unattended locked boots can announce. This
+ * accepts the risk that the credential is available before first unlock,
+ * protected by the app sandbox rather than the lock-screen credential. The
+ * per-device certificate migration is intended to replace this shared token.
  *
  * KEPT IN SYNC FROM MainActivity.onCreate, which cannot run before unlock -
  * a locked device shows the keyguard before any launcher activity gets a

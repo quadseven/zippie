@@ -1,6 +1,8 @@
 package zippie
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"net"
 	"testing"
@@ -51,7 +53,7 @@ func loopbackPair(t testing.TB, payloadSize int) (send *net.UDPConn, sink *net.U
 	}
 
 	tr, err := New(Config{
-		LocalBind: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0},
+		LocalBind:       &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0},
 		ReorderDeadline: 250 * time.Millisecond,
 		Classifier:      ClassifierConfig{DuplicateEnabled: false}, Epoch: 42,
 	})
@@ -126,17 +128,41 @@ func runThroughput(t testing.TB, packets, payloadSize int) (float64, int) {
 	return mbits, received
 }
 
+// runPacedLoopback checks correctness without mistaking a saturated local
+// UDP receive queue for a datapath loss. The separate benchmark deliberately
+// retains the burst workload for throughput measurement.
+func runPacedLoopback(t *testing.T, src, sink *net.UDPConn, travel, home *Transport, packets, payloadSize int) {
+	t.Helper()
+	want := make([]byte, payloadSize)
+	got := make([]byte, payloadSize+1)
+	deadline := time.Now().Add(30 * time.Second)
+	if err := sink.SetReadDeadline(deadline); err != nil {
+		t.Fatalf("sink deadline: %v", err)
+	}
+	if err := src.SetWriteDeadline(deadline); err != nil {
+		t.Fatalf("source deadline: %v", err)
+	}
+	for i := 0; i < packets; i++ {
+		binary.BigEndian.PutUint32(want[:4], uint32(i))
+		if _, err := src.Write(want); err != nil {
+			t.Fatalf("write payload %d: %v", i, err)
+		}
+		n, _, err := sink.ReadFromUDP(got)
+		if err != nil {
+			t.Fatalf("payload %d/%d: %v; travel=%v home=%v", i, packets, err, travel.StatsSnapshot(), home.StatsSnapshot())
+		}
+		if !bytes.Equal(got[:n], want) {
+			t.Fatalf("payload %d/%d changed or arrived out of order", i, packets)
+		}
+	}
+}
+
 func TestLoopbackDatapathCarriesEndToEnd(t *testing.T) {
-	// Correctness before speed: the two roles must actually move payload
-	// between them, through framing, scheduling, reassembly and delivery.
-	mbits, received := runThroughput(t, 500, 1263)
-	if received == 0 {
-		t.Fatal("nothing arrived at the far end: the datapath does not carry")
-	}
-	if received < 250 {
-		t.Fatalf("only %d/500 payloads arrived; at this level the datapath is losing them, not the socket", received)
-	}
-	t.Logf("loopback datapath: %d/500 payloads, %.1f Mbit/s", received, mbits)
+	// All distinct payloads must survive framing, scheduling, reassembly and
+	// local delivery. Saturation is measured by BenchmarkEndToEnd separately.
+	src, sink, travel, home, cleanup := loopbackPair(t, 1263)
+	defer cleanup()
+	runPacedLoopback(t, src, sink, travel, home, 500, 1263)
 }
 
 // BenchmarkEndToEnd reports the figure to compare against the Python
@@ -151,4 +177,21 @@ func BenchmarkEndToEnd(b *testing.B) {
 			}
 		})
 	}
+}
+
+func TestPacedLoopbackSurvivesSlowTravelReader(t *testing.T) {
+	src, sink, travel, home, cleanup := loopbackPair(t, 1263)
+	defer cleanup()
+	if err := travel.local.SetReadBuffer(1024); err != nil {
+		t.Fatalf("travel receive buffer: %v", err)
+	}
+	travel.mu.Lock()
+	unlocked := make(chan struct{})
+	defer func() { <-unlocked }()
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		travel.mu.Unlock()
+		close(unlocked)
+	}()
+	runPacedLoopback(t, src, sink, travel, home, 500, 1263)
 }
