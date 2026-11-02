@@ -1,0 +1,619 @@
+{
+ "about": "Shared wire and scheduling vectors for both datapaths (#376). Read by travel/bond-agent/tests/test_datapath_vectors.py and travel/datapath-go/zippie/vectors_test.go. A vector one side cannot meet carries go_gap with the reason; the Go test skips it and fails if the gap has quietly closed. All keys and payloads are invented.",
+ "frames": [
+  {
+   "why": "plain data, first sequence",
+   "seq": 0,
+   "path_id": 0,
+   "epoch": 16909060,
+   "flags": 0,
+   "payload_hex": "68656c6c6f",
+   "wire_hex": "504202000000000000000000000102030468656c6c6f"
+  },
+  {
+   "why": "duplicate flag, mid sequence",
+   "seq": 77,
+   "path_id": 3,
+   "epoch": 7,
+   "flags": 1,
+   "payload_hex": "00ff",
+   "wire_hex": "5042020103000000000000004d0000000700ff"
+  },
+  {
+   "why": "keepalive carrying an rtt",
+   "seq": 5,
+   "path_id": 1,
+   "epoch": 9,
+   "flags": 2,
+   "payload_hex": "002a",
+   "wire_hex": "5042020201000000000000000500000009002a"
+  },
+  {
+   "why": "keepalive reply sets both bits",
+   "seq": 5,
+   "path_id": 1,
+   "epoch": 9,
+   "flags": 10,
+   "payload_hex": "",
+   "wire_hex": "5042020a01000000000000000500000009"
+  },
+  {
+   "why": "nack names a missing sequence",
+   "seq": 0,
+   "path_id": 2,
+   "epoch": 9,
+   "flags": 4,
+   "payload_hex": "00000000000004d2",
+   "wire_hex": "504202040200000000000000000000000900000000000004d2"
+  },
+  {
+   "why": "largest path id and sequence",
+   "seq": 18446744073709551615,
+   "path_id": 255,
+   "epoch": 4294967295,
+   "flags": 0,
+   "payload_hex": "78",
+   "wire_hex": "50420200ffffffffffffffffffffffffff78"
+  },
+  {
+   "why": "empty payload is a bare header",
+   "seq": 1,
+   "path_id": 0,
+   "epoch": 0,
+   "flags": 0,
+   "payload_hex": "",
+   "wire_hex": "5042020000000000000000000100000000"
+  }
+ ],
+ "auth": [
+  {
+   "why": "data at the off rung",
+   "level": "off",
+   "peer_id": 7,
+   "secret_hex": "766563746f722d7365637265742d6e6f742d612d7265616c2d6b65792d303030",
+   "seq": 42,
+   "path_id": 1,
+   "epoch": 2712847316,
+   "flags": 0,
+   "payload_hex": "7769726567756172642d63697068657274657874",
+   "wire_hex": "5042020001000000000000002aa1b2c3d47769726567756172642d63697068657274657874"
+  },
+  {
+   "why": "keepalive at the off rung",
+   "level": "off",
+   "peer_id": 7,
+   "secret_hex": "766563746f722d7365637265742d6e6f742d612d7265616c2d6b65792d303030",
+   "seq": 9,
+   "path_id": 0,
+   "epoch": 2712847316,
+   "flags": 2,
+   "payload_hex": "",
+   "wire_hex": "50420202000000000000000009a1b2c3d4"
+  },
+  {
+   "why": "data at the observe rung",
+   "level": "observe",
+   "peer_id": 7,
+   "secret_hex": "766563746f722d7365637265742d6e6f742d612d7265616c2d6b65792d303030",
+   "seq": 42,
+   "path_id": 1,
+   "epoch": 2712847316,
+   "flags": 0,
+   "payload_hex": "7769726567756172642d63697068657274657874",
+   "wire_hex": "5042020001000000000000002aa1b2c3d47769726567756172642d63697068657274657874"
+  },
+  {
+   "why": "keepalive at the observe rung",
+   "level": "observe",
+   "peer_id": 7,
+   "secret_hex": "766563746f722d7365637265742d6e6f742d612d7265616c2d6b65792d303030",
+   "seq": 9,
+   "path_id": 0,
+   "epoch": 2712847316,
+   "flags": 2,
+   "payload_hex": "",
+   "wire_hex": "50420202000000000000000009a1b2c3d4"
+  },
+  {
+   "why": "data at the sign rung",
+   "level": "sign",
+   "peer_id": 7,
+   "secret_hex": "766563746f722d7365637265742d6e6f742d612d7265616c2d6b65792d303030",
+   "seq": 42,
+   "path_id": 1,
+   "epoch": 2712847316,
+   "flags": 0,
+   "payload_hex": "7769726567756172642d63697068657274657874",
+   "wire_hex": "5042030001000000000000002aa1b2c3d400000007809372fa259afb847769726567756172642d63697068657274657874"
+  },
+  {
+   "why": "keepalive at the sign rung",
+   "level": "sign",
+   "peer_id": 7,
+   "secret_hex": "766563746f722d7365637265742d6e6f742d612d7265616c2d6b65792d303030",
+   "seq": 9,
+   "path_id": 0,
+   "epoch": 2712847316,
+   "flags": 2,
+   "payload_hex": "",
+   "wire_hex": "50420302000000000000000009a1b2c3d40000000791826d7a7f2654e0"
+  },
+  {
+   "why": "data at the require rung",
+   "level": "require",
+   "peer_id": 7,
+   "secret_hex": "766563746f722d7365637265742d6e6f742d612d7265616c2d6b65792d303030",
+   "seq": 42,
+   "path_id": 1,
+   "epoch": 2712847316,
+   "flags": 0,
+   "payload_hex": "7769726567756172642d63697068657274657874",
+   "wire_hex": "5042030001000000000000002aa1b2c3d400000007809372fa259afb847769726567756172642d63697068657274657874"
+  },
+  {
+   "why": "keepalive at the require rung",
+   "level": "require",
+   "peer_id": 7,
+   "secret_hex": "766563746f722d7365637265742d6e6f742d612d7265616c2d6b65792d303030",
+   "seq": 9,
+   "path_id": 0,
+   "epoch": 2712847316,
+   "flags": 2,
+   "payload_hex": "",
+   "wire_hex": "50420302000000000000000009a1b2c3d40000000791826d7a7f2654e0"
+  }
+ ],
+ "build": [
+  {
+   "why": "single picks the heaviest healthy leg",
+   "mode": "single",
+   "epoch": 195948557,
+   "payload_hex": "706179",
+   "paths": [
+    {
+     "path_id": 0,
+     "weight": 10,
+     "healthy": true
+    },
+    {
+     "path_id": 1,
+     "weight": 30,
+     "healthy": true
+    }
+   ],
+   "packets": [
+    {
+     "targets": [
+      1
+     ],
+     "wire_hex": [
+      "504202000100000000000000000badf00d706179"
+     ]
+    },
+    {
+     "targets": [
+      1
+     ],
+     "wire_hex": [
+      "504202000100000000000000010badf00d706179"
+     ]
+    },
+    {
+     "targets": [
+      1
+     ],
+     "wire_hex": [
+      "504202000100000000000000020badf00d706179"
+     ]
+    }
+   ]
+  },
+  {
+   "why": "spray shares by weight credit",
+   "mode": "spray",
+   "epoch": 195948557,
+   "payload_hex": "706179",
+   "paths": [
+    {
+     "path_id": 0,
+     "weight": 3,
+     "healthy": true
+    },
+    {
+     "path_id": 1,
+     "weight": 1,
+     "healthy": true
+    }
+   ],
+   "packets": [
+    {
+     "targets": [
+      0
+     ],
+     "wire_hex": [
+      "504202000000000000000000000badf00d706179"
+     ]
+    },
+    {
+     "targets": [
+      0
+     ],
+     "wire_hex": [
+      "504202000000000000000000010badf00d706179"
+     ]
+    },
+    {
+     "targets": [
+      1
+     ],
+     "wire_hex": [
+      "504202000100000000000000020badf00d706179"
+     ]
+    },
+    {
+     "targets": [
+      0
+     ],
+     "wire_hex": [
+      "504202000000000000000000030badf00d706179"
+     ]
+    },
+    {
+     "targets": [
+      0
+     ],
+     "wire_hex": [
+      "504202000000000000000000040badf00d706179"
+     ]
+    },
+    {
+     "targets": [
+      0
+     ],
+     "wire_hex": [
+      "504202000000000000000000050badf00d706179"
+     ]
+    },
+    {
+     "targets": [
+      1
+     ],
+     "wire_hex": [
+      "504202000100000000000000060badf00d706179"
+     ]
+    },
+    {
+     "targets": [
+      0
+     ],
+     "wire_hex": [
+      "504202000000000000000000070badf00d706179"
+     ]
+    }
+   ]
+  },
+  {
+   "why": "duplicate on two legs shares one sequence",
+   "mode": "duplicate",
+   "epoch": 195948557,
+   "payload_hex": "706179",
+   "paths": [
+    {
+     "path_id": 0,
+     "weight": 10,
+     "healthy": true
+    },
+    {
+     "path_id": 1,
+     "weight": 20,
+     "healthy": true
+    }
+   ],
+   "packets": [
+    {
+     "targets": [
+      0,
+      1
+     ],
+     "wire_hex": [
+      "504202010000000000000000000badf00d706179",
+      "504202010100000000000000000badf00d706179"
+     ]
+    },
+    {
+     "targets": [
+      0,
+      1
+     ],
+     "wire_hex": [
+      "504202010000000000000000010badf00d706179",
+      "504202010100000000000000010badf00d706179"
+     ]
+    }
+   ]
+  },
+  {
+   "why": "an unhealthy leg takes nothing",
+   "mode": "spray",
+   "epoch": 195948557,
+   "payload_hex": "706179",
+   "paths": [
+    {
+     "path_id": 0,
+     "weight": 10,
+     "healthy": true
+    },
+    {
+     "path_id": 1,
+     "weight": 10,
+     "healthy": false
+    }
+   ],
+   "packets": [
+    {
+     "targets": [
+      0
+     ],
+     "wire_hex": [
+      "504202000000000000000000000badf00d706179"
+     ]
+    },
+    {
+     "targets": [
+      0
+     ],
+     "wire_hex": [
+      "504202000000000000000000010badf00d706179"
+     ]
+    },
+    {
+     "targets": [
+      0
+     ],
+     "wire_hex": [
+      "504202000000000000000000020badf00d706179"
+     ]
+    }
+   ]
+  },
+  {
+   "why": "duplicate is bounded to two legs",
+   "mode": "duplicate",
+   "epoch": 195948557,
+   "payload_hex": "706179",
+   "paths": [
+    {
+     "path_id": 0,
+     "weight": 10,
+     "healthy": true
+    },
+    {
+     "path_id": 1,
+     "weight": 30,
+     "healthy": true
+    },
+    {
+     "path_id": 2,
+     "weight": 20,
+     "healthy": true
+    }
+   ],
+   "packets": [
+    {
+     "targets": [
+      1,
+      2
+     ],
+     "wire_hex": [
+      "504202010100000000000000000badf00d706179",
+      "504202010200000000000000000badf00d706179"
+     ]
+    },
+    {
+     "targets": [
+      1,
+      2
+     ],
+     "wire_hex": [
+      "504202010100000000000000010badf00d706179",
+      "504202010200000000000000010badf00d706179"
+     ]
+    }
+   ],
+   "go_gap": "the duplicate fan-out bound (#51) is not ported: Go copies a duplicated packet onto every healthy leg"
+  },
+  {
+   "why": "a leg held at weight zero takes no spray",
+   "mode": "spray",
+   "epoch": 195948557,
+   "payload_hex": "706179",
+   "paths": [
+    {
+     "path_id": 0,
+     "weight": 10,
+     "healthy": true
+    },
+    {
+     "path_id": 1,
+     "weight": 0,
+     "healthy": true
+    }
+   ],
+   "packets": [
+    {
+     "targets": [
+      0
+     ],
+     "wire_hex": [
+      "504202000000000000000000000badf00d706179"
+     ]
+    },
+    {
+     "targets": [
+      0
+     ],
+     "wire_hex": [
+      "504202000000000000000000010badf00d706179"
+     ]
+    },
+    {
+     "targets": [
+      0
+     ],
+     "wire_hex": [
+      "504202000000000000000000020badf00d706179"
+     ]
+    },
+    {
+     "targets": [
+      0
+     ],
+     "wire_hex": [
+      "504202000000000000000000030badf00d706179"
+     ]
+    }
+   ]
+  },
+  {
+   "why": "a leg held at weight zero takes no duplicate copy",
+   "mode": "duplicate",
+   "epoch": 195948557,
+   "payload_hex": "706179",
+   "paths": [
+    {
+     "path_id": 0,
+     "weight": 10,
+     "healthy": true
+    },
+    {
+     "path_id": 1,
+     "weight": 0,
+     "healthy": true
+    }
+   ],
+   "packets": [
+    {
+     "targets": [
+      0
+     ],
+     "wire_hex": [
+      "504202000000000000000000000badf00d706179"
+     ]
+    },
+    {
+     "targets": [
+      0
+     ],
+     "wire_hex": [
+      "504202000000000000000000010badf00d706179"
+     ]
+    }
+   ],
+   "go_gap": "weight zero carries nothing (2026-08-05 select fix) is not ported: Go still copies a duplicated packet onto a healthy leg held at weight 0"
+  }
+ ],
+ "weights": [
+  {
+   "why": "a link added at weight zero stays at zero",
+   "add": [
+    {
+     "path_id": 0,
+     "weight": 0
+    }
+   ],
+   "set": [],
+   "expect": [
+    {
+     "path_id": 0,
+     "weight": 0
+    }
+   ]
+  },
+  {
+   "why": "a re-weight installs the new share",
+   "add": [
+    {
+     "path_id": 0,
+     "weight": 10
+    }
+   ],
+   "set": [
+    {
+     "path_id": 0,
+     "weight": 40
+    }
+   ],
+   "expect": [
+    {
+     "path_id": 0,
+     "weight": 40
+    }
+   ]
+  },
+  {
+   "why": "zero means zero, no floor",
+   "add": [
+    {
+     "path_id": 0,
+     "weight": 10
+    }
+   ],
+   "set": [
+    {
+     "path_id": 0,
+     "weight": 0
+    }
+   ],
+   "expect": [
+    {
+     "path_id": 0,
+     "weight": 0
+    }
+   ],
+   "go_gap": "the #92 weight floor removal is not ported: Go's SetWeight still raises anything below 1 to 1, so a leg held out at 0 takes a share"
+  },
+  {
+   "why": "a negative weight clamps to zero",
+   "add": [
+    {
+     "path_id": 0,
+     "weight": 10
+    }
+   ],
+   "set": [
+    {
+     "path_id": 0,
+     "weight": -5
+    }
+   ],
+   "expect": [
+    {
+     "path_id": 0,
+     "weight": 0
+    }
+   ],
+   "go_gap": "the #92 weight floor removal is not ported: Go's SetWeight still raises anything below 1 to 1, so a leg held out at 0 takes a share"
+  },
+  {
+   "why": "a re-weight of an unknown leg is ignored",
+   "add": [
+    {
+     "path_id": 0,
+     "weight": 10
+    }
+   ],
+   "set": [
+    {
+     "path_id": 9,
+     "weight": 50
+    }
+   ],
+   "expect": [
+    {
+     "path_id": 0,
+     "weight": 10
+    }
+   ]
+  }
+ ]
+}
