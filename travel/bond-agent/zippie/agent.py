@@ -26,6 +26,7 @@ from zippie import (
     net,
     policy,
     shaper,
+    status_doc,
     telemetry,
     wifi,
     wifi_uci,
@@ -36,7 +37,6 @@ from zippie.counters import (
     CounterSampler,
     SeriesStore,
 )
-from zippie.datapath import HEADER_LEN
 from zippie.dynamic import DynamicLeg, DynamicLegs, announce_host
 from zippie.leg_verdict import PACKET_LINK_STALE_S
 from zippie.models import (
@@ -50,6 +50,7 @@ from zippie.models import (
     PolicyConfig,
 )
 from zippie.pairing import PairingRequests
+from zippie.status_doc import projected_idle_mb_per_day as projected_idle_mb_per_day
 from zippie.store import HomeAddressStore, LegStore, UsageStore
 
 log = logging.getLogger("zippie.agent")
@@ -116,11 +117,6 @@ def _dashboard_tls_context(config: AgentConfig) -> ssl.SSLContext | None:
 # under a timeout. The handler class is shared with the HTTP listener and is
 # deliberately left untouched.
 _TLS_HANDSHAKE_TIMEOUT_S = 10.0
-
-# The plan description a leg publishes (PathConfig.carrier and its siblings),
-# which legs.json may replace on the console. billing_day is here for display
-# only; what it does to usage periods is _billing_days's business.
-_PLAN_FIELDS = ("carrier", "plan_name", "plan_type", "billing_day", "expected_kbps")
 
 
 class _TLSHTTPServer(ThreadingHTTPServer):
@@ -290,34 +286,6 @@ _HOME_IP_TTL_S = 300.0
 # pins them equal, because two hand-maintained copies of a constant in two
 # languages is exactly the shape that drifts silently.
 WATCHDOG_REARM_WINDOW_S = 86400.0
-
-_IPV4_UDP_HEADER_BYTES = 28
-_WIREGUARD_EMPTY_TRANSPORT_BYTES = 32
-
-
-def projected_idle_mb_per_day(
-    metered_legs: int, probe_interval_s: float, keepalive_s: int
-) -> float:
-    """Estimate packet-mode idle traffic, including IP/UDP and RTT-hint bytes.
-
-    The `probes` term below charges each request/reply pair as
-    `2 * (HEADER_LEN + _IPV4_UDP_HEADER_BYTES) + 2`: two framed probes and
-    the request's two RTT-hint payload bytes. The reply has no payload.
-    Periodic WireGuard keepalives are accounted separately below.
-    """
-    if metered_legs <= 0:
-        return 0.0
-    seconds_per_day = 86400
-    framed_probe = HEADER_LEN + _IPV4_UDP_HEADER_BYTES
-    probes = metered_legs * (2 * framed_probe + 2) * seconds_per_day / max(0.2, probe_interval_s)
-    keepalives = 0.0
-    if keepalive_s > 0:
-        keepalives = (
-            (_WIREGUARD_EMPTY_TRANSPORT_BYTES + HEADER_LEN + _IPV4_UDP_HEADER_BYTES)
-            * seconds_per_day
-            / keepalive_s
-        )
-    return (probes + keepalives) / 1_000_000
 
 
 def _command_output(proc) -> str:
@@ -3691,157 +3659,74 @@ class BondAgent:
             "held_out_elapsed_s": _elapsed_s(path.held_out_since_ms),
         }
 
-    def _path_status(self, path: PathRuntime) -> dict[str, Any]:
-        """to_dict() plus the two facts that were only visible by hand.
+    def _leg_facts(self, path: PathRuntime, link_totals: dict | None) -> status_doc.LegFacts:
+        """One leg's row inputs, read now so the document build reads nothing.
 
-        `peer_endpoint` is the address this leg's tunnel is DIALLING, which is
-        not the configured hostname and on 2026-08-02 was not the right host
-        either. `has_gateway` says whether the leg is a real uplink at all.
+        The two net reads here (`wg show` and the gateway table) are the only
+        subprocesses behind a status read, and they happen before the build,
+        never inside it (#374). `dialled` is READ FROM THE DECISION
+        (_leg_remote), not recomputed, so `home_via_lan` cannot contradict the
+        socket (#258).
         """
-        d = path.to_dict()
-        ep = net.wg_peer_endpoint(path.wg_iface) if path.wg_iface else None
-        d["peer_endpoint"] = ep
-        d["peer_endpoint_private"] = net.is_private_v4(ep)
-        d["has_gateway"] = bool(path.interface and path.interface in net.wan_gateways())
-        # The address:port this leg is dialled at, for companion legs only.
-        #
-        # Published so a phone can tell WHICH companion leg is itself. Without
-        # it the app sees two rows called "iPhone (Verizon)" and "Co-operator iPhone
-        # (Verizon)" and has no evidence which one it is - and guessing would
-        # tell Co-operator her phone is helping when the row belongs to someone else.
-        # Matching this against the phone's own wifi address and listen port is
-        # proof: it is literally the socket the router is sending to.
-        #
-        # Not a secret. It is an RFC1918 address on the LAN the reader is
-        # already joined to, and the console is only reachable from there or
-        # over the tailnet.
-        d["relay_endpoint"] = (path.config.relay_endpoint or "").strip()
-        # WHICH HOME THIS LEG IS ACTUALLY DIALLING (#258). Without it there is
-        # no way to tell from the console whether the LAN pairing engaged: a
-        # leg on the house wire and a leg dialling the house's own unreachable
-        # public address look identical from every other field, and the second
-        # one is the bug. Empty means the ordinary shared endpoint.
-        # READ THE DECISION, do not recompute it. Recomputing let this field
-        # disagree with the socket: a companion leg on the paired network dials
-        # the PHONE (relay_endpoint wins), while a second copy of the pairing
-        # logic here happily reported the LAN home for it. A status field that
-        # can contradict the thing it describes is worse than no field.
-        dialled = self._leg_remote(path, ("", 0))
-        lan = net.lan_home_endpoint(path.local_ip, self.config.home.lan_endpoints)
-        d["home_via_lan"] = (
-            f"{dialled[0]}:{dialled[1]}" if lan and dialled[0] == lan.address else ""
-        )
-        # The leg's own address, which is the EVIDENCE the pairing matched on.
-        # Reported so a reader can check the decision rather than trust it.
-        d["local_ip"] = path.local_ip or ""
-        # IS THIS LEG ACTUALLY IN THE BOND, as opposed to merely having a
-        # weight?
-        #
-        # These are NOT the same thing and conflating them is why the phone app
-        # showed four legs carrying while the transport held exactly one. A
-        # tier-gated leg keeps whatever weight the policy last computed - the
-        # weight is real, it is just not being used - so any reader deciding
-        # "carrying" from weight alone reports legs that are switched off.
-        #
-        # Membership is the transport's own link table, which is the only place
-        # that knows.
-        # ...AND NOT HELD OUT FOR LATENCY. Link membership alone stopped being
-        # sufficient when shedding arrived (#81): a shed leg deliberately STAYS
-        # a link so it keeps getting keepalives and can measure its way back -
-        # removing it freezes its tail and it never recovers. It carries
-        # nothing, though, so reporting it as in the bond is this module's own
-        # failure from the other side. Observed live 2026-08-09:
-        # `ethernet degraded rtt=2847.9 shed=True in_bond=True`.
         pid = self._transport_ids.get(path.name)
-        d.update(self._leg_activity_facts(path, pid))
-        # The RAW counters usage is derived from, and the id they are keyed by.
-        # Published because the first version of the accounting under-counted a
-        # 20 MB transfer as 100 KB, and there was no way to see whether the
-        # cause was the counter, the id mapping or the delta arithmetic.
-        # WHICH FIELDS ARE NOT WHAT THE CONFIG FILE SAYS.
-        #
-        # An override is invisible by design - it wins silently, which is the
-        # point. That turned into a real degradation tonight: a stray tier=2 on
-        # the hotspot leg took a working uplink OUT of the bond while
-        # zippie.toml still read tier = 1, so the config file was actively
-        # misleading and nothing on the console contradicted it.
-        #
-        # Publishing the overridden field names costs nothing and means the
-        # difference between the file and reality can always be seen.
-        over = self._leg_store.load().get(path.name) or {}
-        applied = sorted(k for k in over if k in LegStore.OVERRIDABLE)
-        d["overridden"] = applied
-        # THE PHONE APP'S PLAN DESCRIPTION WINS over the config file's, for the
-        # same reason an override does: it is the more recent human entry. Only
-        # keys to_dict already publishes, so legs.json cannot add any here, and
-        # not listed in `overridden` - naming a carrier changes no routing.
-        d.update({k: over[k] for k in _PLAN_FIELDS if over.get(k) is not None})
-        # DYNAMIC LEGS ARE MARKED. A leg that exists because a phone is
-        # announcing it right now is a different thing from one an operator
-        # typed into a file, and the difference decides whether "it vanished"
-        # is alarming or expected.
-        lease = self.dynamic.remaining(path.name)
-        d["dynamic"] = lease is not None
-        if lease is not None:
-            d["lease_s"] = round(lease, 1)
-        # A usable uplink this leg's pattern matched and nobody took (#212).
-        # Empty for every correctly-configured leg, so a non-empty list is
-        # always a real finding.
-        d["shadowed_interfaces"] = list(path.shadowed_interfaces)
-        d["link_id"] = pid
+        lan = net.lan_home_endpoint(path.local_ip, self.config.home.lan_endpoints)
+        link_bytes = None
+        if link_totals is not None and pid is not None:
+            link_bytes = tuple(link_totals.get(pid, (0, 0)))
+        return status_doc.LegFacts(
+            base=path.to_dict(),
+            effective_weight=path.effective_weight,
+            effective_cost_class=path.effective_cost_class,
+            peer_endpoint=net.wg_peer_endpoint(path.wg_iface) if path.wg_iface else None,
+            has_gateway=bool(path.interface and path.interface in net.wan_gateways()),
+            relay_endpoint=(path.config.relay_endpoint or "").strip(),
+            dialled=self._leg_remote(path, ("", 0)),
+            lan_home_address=lan.address if lan else None,
+            local_ip=path.local_ip or "",
+            activity=self._leg_activity_facts(path, pid),
+            overrides=dict(self._leg_store.load().get(path.name) or {}),
+            lease_s=self.dynamic.remaining(path.name),
+            shadowed_interfaces=tuple(path.shadowed_interfaces),
+            link_id=pid,
+            linked=pid is not None and pid in self._transport_links,
+            link_bytes=link_bytes,
+        )
+
+    def _link_totals(self) -> dict | None:
+        """The transport's per-link byte counters, or None when unreadable."""
         tr = getattr(self, "_transport", None)
-        if tr is not None and pid is not None:
-            try:
-                tx, rx = tr.link_bytes().get(pid, (0, 0))
-                d["link_tx_bytes"] = tx
-                d["link_rx_bytes"] = rx
-            except Exception:  # noqa: BLE001
-                pass
-        return d
+        link_bytes = getattr(tr, "link_bytes", None)
+        if link_bytes is None:
+            return None
+        try:
+            return link_bytes()
+        except Exception:  # noqa: BLE001
+            return None
 
-    def _watchdog_state(self) -> dict[str, Any]:
-        """The watchdog's own state, as numbers rather than only as events.
+    def _path_status(self, path: PathRuntime) -> dict[str, Any]:
+        """One leg's published row. See status_doc.path_status."""
+        return status_doc.path_status(self._leg_facts(path, self._link_totals()))
 
-        It is a shell script beside this agent and it emits Datadog EVENTS when
-        it trips, which is useful for a timeline and useless for an alert or a
-        graph. On 2026-08-02 its re-arm budget silently reached 2/2 twice; the
-        second time would have left the bond down until a human noticed, and
-        nothing in the metric stream said so. Read from the same files the
-        script writes - a missing file is simply "not tripped", never an error,
-        because telemetry must not invent state it cannot see.
+    def _watchdog_facts(self) -> status_doc.WatchdogFacts:
+        """Read the files the watchdog script writes.
 
-        THE WINDOW IS PART OF THE ANSWER. `watchdog.rearms` holds two fields,
-        `<count> <window_start_epoch>`, and the budget is count-within-window -
-        `rearm_budget()` in watchdog.sh resets the count once the window has
-        passed. This read only the first field until 2026-08-07, so it answered
-        "what integer is in the file", not "how much budget is left".
-
-        The difference is not cosmetic. Measured on the travel router 2026-08-06: the file
-        held `2 1785715991`, the window had opened 3.6 DAYS earlier against a
-        24h window, and the true in-window count was 0 - while `/api/status`
-        and `custom.zippie.watchdog.rearms_used` both reported 2 of a maximum
-        of 2, i.e. "the watchdog can no longer recover the bond". An operator
-        reading that during an incident intervenes by hand on a remote,
-        travelling router that was about to heal itself. It cost exactly that
-        confusion while deciding whether a deploy was safe (infra#2276).
-
-        Both numbers are reported now, because they answer different questions:
-        `rearms_used` is the live budget, `rearms_recorded` is the raw file.
+        A missing file is simply "not tripped", never an error, because
+        telemetry must not invent state it cannot see.
         """
         base = Path("/etc/zippie")
-        out: dict[str, Any] = {"tripped": (base / "watchdog.tripped").is_file()}
         recorded, window_start = self._read_rearm_file(base / "watchdog.rearms")
-        out["rearms_recorded"] = recorded
-        out["rearm_window_started_at"] = window_start
-        # Expired window means the script would reset the count to 0 on its next
-        # evaluation, so the budget is already fully available. Mirror that
-        # rather than waiting for a trip to make it true.
-        expired = (
-            window_start is not None and (time.time() - window_start) > WATCHDOG_REARM_WINDOW_S
+        return status_doc.WatchdogFacts(
+            tripped=(base / "watchdog.tripped").is_file(),
+            rearms_recorded=recorded,
+            rearm_window_started_at=window_start,
+            capped=(base / "watchdog.rearms.capped").is_file(),
+            now=time.time(),
+            window_s=WATCHDOG_REARM_WINDOW_S,
         )
-        out["rearms_used"] = 0 if expired else recorded
-        out["capped"] = (base / "watchdog.rearms.capped").is_file()
-        return out
+
+    def _watchdog_state(self) -> dict[str, Any]:
+        """The watchdog block. See status_doc.watchdog_state."""
+        return status_doc.watchdog_state(self._watchdog_facts())
 
     @staticmethod
     def _read_rearm_file(path: Path) -> tuple[int, float | None]:
@@ -3868,167 +3753,63 @@ class BondAgent:
         except (ValueError, IndexError):
             return count, None
 
-    def _economy_status(self) -> dict[str, Any] | None:
-        """Client work versus bytes bought from metered transport legs."""
-        from zippie.transport import LINK_BYTES_DEFINITION
-
-        transport = getattr(self, "_transport", None)
-        if transport is None:
+    def _economy_facts(
+        self, transport_stats: dict[str, Any] | None
+    ) -> status_doc.EconomyFacts | None:
+        """The economy block's inputs; None without a packet transport."""
+        if transport_stats is None:
             return None
-        stats = transport.stats_dict()
-        client_bytes = int(stats.get("client_payload_bytes", 0) or 0)
-        link_bytes = getattr(transport, "link_bytes", None)
-        totals = link_bytes() if link_bytes is not None else {}
-        metered_bytes = 0
-        metered_cost_classes = {CostClass.METERED, CostClass.EXPENSIVE}
-        metered_legs = 0
-        for path in self.paths:
-            # effective_cost_class, NOT config.cost_class (#25): a repeater
-            # leg sitting on a known-free network derives `free` every tick,
-            # and reading the static config value here is exactly how 2.7 GB
-            # of genuinely-free traffic got attributed to metered usage while
-            # the leg carried the majority of an hour's streaming on an
-            # unmetered AP.
-            if path.effective_cost_class not in metered_cost_classes:
-                continue
-            pid = self._transport_ids.get(path.name)
-            if pid is None or pid not in self._transport_links:
-                continue
-            metered_legs += 1
-            tx, rx = totals.get(pid, (0, 0))
-            metered_bytes += tx + rx
-        return {
-            "idle": self._packet_is_idle(),
-            "client_payload_bytes": client_bytes,
-            # WireGuard data is encrypted and padded. Removing its fixed
-            # visible header is the closest honest payload count available at
-            # this layer; name the limitation instead of implying decryption.
-            "client_payload_estimated": True,
-            "metered_bytes": metered_bytes,
-            # Which ruler metered_bytes was measured with (#183). A future
-            # comparison against a carrier bill has to know whether the
-            # IPv4+UDP headers are in the number, or it is silently off by
-            # 28 bytes per datagram. Same name as the usage.json field, so
-            # the file and the console speak one word for one ruler.
-            "bytes_definition": LINK_BYTES_DEFINITION,
-            "metered_amplification": (
-                round(metered_bytes / client_bytes, 2) if client_bytes else None
-            ),
-            "probe_interval_ms": round(self._transport_probe_interval_s() * 1000),
-            "persistent_keepalive_s": self._packet_keepalive_s,
-            "projected_idle_mb_day": round(
-                projected_idle_mb_per_day(
-                    metered_legs,
-                    self._idle_transport_probe_interval_s(),
-                    self._idle_persistent_keepalive_s(),
-                ),
-                2,
-            ),
-        }
+        return status_doc.EconomyFacts(
+            client_payload_bytes=int(transport_stats.get("client_payload_bytes", 0) or 0),
+            idle=self._packet_is_idle(),
+            probe_interval_s=self._transport_probe_interval_s(),
+            persistent_keepalive_s=self._packet_keepalive_s,
+            idle_probe_interval_s=self._idle_transport_probe_interval_s(),
+            idle_persistent_keepalive_s=self._idle_persistent_keepalive_s(),
+        )
+
+    def status_snapshot(self) -> status_doc.StatusSnapshot:
+        """Everything the status document says, read once under the lock.
+
+        The transport's stats are read ONCE and shared by the `transport` and
+        `economy` blocks, so the two cannot disagree within one document.
+        """
+        with self._lock:
+            transport = getattr(self, "_transport", None)
+            stats = transport.stats_dict() if transport is not None else None
+            totals = self._link_totals()
+            return status_doc.StatusSnapshot(
+                version=__version__,
+                build=build.build_info(config_sha256=self.config_meta.get("sha256")),
+                mode=self.config.policy.mode.value,
+                datapath=self.config.policy.datapath.value,
+                transport_stats=stats,
+                economy=self._economy_facts(stats),
+                metered_while_free=tuple(self._metered_while_free_last),
+                primary=self.primary,
+                legs=tuple(self._leg_facts(p, totals) for p in self.paths),
+                pairing_requests=self.pairing.pending(),
+                uptime_s=time.time() - self._started,
+                home=self.config.home.endpoint,
+                home_ip=self._home_ip,
+                watchdog=self._watchdog_facts(),
+                addr_monitor_alive=self.addr_monitor.alive,
+                addr_monitor_restarts=self.addr_monitor.restarts,
+                resolver_kicks=self._resolver.kicks,
+                standdown=self._standdown.standing_down,
+                standdowns=self._standdown.standdowns,
+                standdown_recoveries=self._standdown.recoveries,
+                standdown_holds=self._standdown.holds,
+                standdown_reason=self._standdown.reason,
+                shaper_auto_rate=self.config.policy.shaper_auto_rate,
+                shaper_applied_kbit=self._shaper_applied_kbit,
+                pid=os.getpid(),
+                config_meta=dict(self.config_meta),
+            )
 
     def status_dict(self) -> dict[str, Any]:
-        with self._lock:
-            path_dicts = [self._path_status(p) for p in self.paths]
-            return {
-                "version": __version__,
-                # WHAT IS ACTUALLY RUNNING. `version` is a hand-edited constant
-                # and read "0.1.0" on 2026-08-06 while the router ran a
-                # telemetry module three days stale, missing five metrics that
-                # shipped monitors already queried. A fingerprint over the
-                # module bytes cannot be wrong about that, and `matches_deploy`
-                # additionally catches edits made on the box after a deploy.
-                "build": build.build_info(config_sha256=self.config_meta.get("sha256")),
-                "mode": self.config.policy.mode.value,
-                "datapath": self.config.policy.datapath.value,
-                # Present only in packet mode; the spray/reorder/retransmit
-                # counters the epic (#2112) requires for observability parity.
-                # None in route mode so the console can tell the modes apart.
-                "transport": (
-                    self._transport.stats_dict()
-                    if getattr(self, "_transport", None) is not None
-                    else None
-                ),
-                "economy": self._economy_status(),
-                "metered_while_free": sorted(self._metered_while_free_last),
-                "primary": self.primary,
-                "active_paths": [p.name for p in self.paths if p.effective_weight > 0],
-                "paths": path_dicts,
-                # THE DISCREPANCY, MADE LEGIBLE, NOT IMPLIED (#26's third
-                # acceptance criterion). A reader was left to notice by hand
-                # that a bond "2 of 4 carrying" also listed 4 legs as
-                # `in_bond=True` - the gap between the two counts was real and
-                # meant something (two legs were held out, contributing
-                # nothing) but nothing said so directly. Both counts are
-                # published from the SAME per-leg `contributing`/`in_bond`
-                # facts `paths` already carries, so this can never disagree
-                # with the rows a reader is looking at.
-                "legs_carrying": sum(1 for d in path_dicts if d["contributing"]),
-                "legs_in_bond": sum(1 for d in path_dicts if d["in_bond"]),
-                "legs_total": len(path_dicts),
-                # Phones on ethernet waiting for the operator to approve them.
-                # Never carries the pairing code: this payload is open to the
-                # LAN, and the code is what proves the phone is in hand.
-                "pairing_requests": self.pairing.pending(),
-                "uptime_s": round(time.time() - self._started, 1),
-                "home": self.config.home.endpoint,
-                # WHAT THE NAME ACTUALLY RESOLVED TO, and whether that is
-                # private. A hijacking resolver upstream makes these disagree
-                # with the endpoint above, which is the 2026-08-02 outage in
-                # one line - see net.is_private_v4.
-                "home_ip": self._home_ip,
-                "home_ip_private": net.is_private_v4(self._home_ip),
-                "watchdog": self._watchdog_state(),
-                # False means address-loss withdrawal is degraded to probe
-                # speed -- visible here so a dead monitor cannot hide.
-                "addr_monitor_alive": self.addr_monitor.alive,
-                "addr_monitor_restarts": self.addr_monitor.restarts,
-                # How often a route flip had to restart the router's own
-                # resolver (#21). A climbing number means the bond is flapping
-                # hard enough to be restarting DNS repeatedly; a number stuck
-                # at zero on a box that HAS flipped means the kick is not
-                # firing, which is invisible from anywhere else.
-                "resolver_kicks": self._resolver.kicks,
-                # A bond with one dying leg beats an idle healthy WAN (#124).
-                # True means zippie's own route is deliberately withdrawn
-                # right now because the carrying set is worse than the idle
-                # physical WAN underneath it - `reason` says why, and the
-                # counters are the only way to see from off the device that
-                # this has ever fired, or that it is flapping.
-                "bond_standdown": self._standdown.standing_down,
-                "bond_standdowns": self._standdown.standdowns,
-                "bond_standdown_recoveries": self._standdown.recoveries,
-                # #202. Non-zero means the latency rule WANTED to withdraw the
-                # route and was refused because nothing sits underneath. Held
-                # is a different state from never-triggered, and reading it as
-                # "standdown is quiet" would hide a leg running hot.
-                # #202. Non-zero means the latency rule WANTED to withdraw
-                # and was refused because nothing sits underneath. Held is a
-                # different state from never-triggered, and reading it as
-                # "standdown is quiet" would hide a leg running hot.
-                "bond_standdown_held_sole_uplink": self._standdown.holds,
-                "bond_standdown_reason": self._standdown.reason,
-                # What the adaptive shaper (#41) last applied AND verified via
-                # `tc` (see _apply_shaper_rate) - None until the first
-                # successful apply, which on a fresh boot is ordinary: cake
-                # has to be attached (_ensure_bond_shaped) and at least one
-                # leg has to carry something before there is a rate to
-                # report. A wrong rate is otherwise invisible (#41's own
-                # words); this is the one place to see what it picked
-                # without SSHing in and running `tc qdisc show` by hand.
-                "shaper_auto_rate": self.config.policy.shaper_auto_rate,
-                "shaper_download_kbit": (
-                    self._shaper_applied_kbit[0] if self._shaper_applied_kbit else None
-                ),
-                "shaper_upload_kbit": (
-                    self._shaper_applied_kbit[1] if self._shaper_applied_kbit else None
-                ),
-                "pid": os.getpid(),
-                "config_path": self.config_meta.get("path"),
-                "config_sha256": self.config_meta.get("sha256"),
-                # Excludes per-device [home] values for comparison with the
-                # checked-in template. The raw hash above still checks the stamp.
-                "config_repo_sha256": self.config_meta.get("repo_sha256"),
-            }
+        """The published status document (#374: built by status_doc)."""
+        return status_doc.build(self.status_snapshot())
 
     def write_status_file(self) -> None:
         _, run = self._state_paths()
