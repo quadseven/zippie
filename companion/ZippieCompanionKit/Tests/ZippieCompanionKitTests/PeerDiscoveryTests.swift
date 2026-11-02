@@ -26,11 +26,15 @@ final class PeerDiscoveryTests: XCTestCase {
     private final class FakeVerifier: PeerVerifying, @unchecked Sendable {
         var verifiedByID: [UInt32: VerifiedPeer] = [:]
         var refusedIDs: [UInt32] = []
-        var calls: [[String: String]] = []
         var gate: Gate?
+        /// Guarded by `lock`: the verifier runs on the service actor while
+        /// the test reads `calls` from its own task.
+        private let lock = NSLock()
+        private var recorded: [[String: String]] = []
+        var calls: [[String: String]] { lock.withLock { recorded } }
 
         func verify(txt: [String: String]) async -> VerifiedPeer? {
-            calls.append(txt)
+            lock.withLock { recorded.append(txt) }
             if let gate { await gate.wait() }
             guard let idText = txt["id"], let id = UInt32(idText) else {
                 return nil
@@ -327,6 +331,8 @@ final class PeerDiscoveryTests: XCTestCase {
         b.deliver(added: [], removed: ["peer-2"])
         let vanished = await eventually(s) { $0 == [self.peer(id: 1)] }
         XCTAssertTrue(vanished, "the vanished peer is removed from the published set")
+        // Batches drain one at a time, so the removal above is applied only
+        // after the first batch, including peer 3's verification, finished.
         XCTAssertEqual(v.calls.count, 3, "every browsed peer went through the verifier")
         s.stop()
     }
