@@ -65,6 +65,32 @@ def test_an_edit_persists_and_takes_effect_immediately(tmp_path):
     assert b.paths[0].config.monthly_cap_gb == 15.0
 
 
+def test_a_non_finite_edit_is_refused_and_changes_nothing(tmp_path):
+    """`{"weight": 1e999}` parses as JSON. Persisted, it would have broken the
+    override step of every control pass that followed, from a file nothing
+    rewrites; the write must be refused before it lands."""
+    a = _agent(tmp_path)
+    with pytest.raises(ValueError):
+        a.set_leg_fields("att", {"weight": float("inf")})
+    assert a.paths[0].config.weight == 100
+    assert not (tmp_path / "legs.json").exists(), "the refused edit was persisted"
+
+
+def test_a_hand_edited_infinite_override_does_not_stop_the_control_pass(tmp_path, caplog):
+    """Defence in depth for the same bug: legs.json is hand-editable, and
+    `1e999` in it is inf to json. int(inf) is OverflowError, not ValueError,
+    and apply_leg_overrides runs on every tick."""
+    (tmp_path / "legs.json").write_text(
+        '{"version": 1, "legs": {"att": {"weight": 1e999, "tier": 3}}}'
+    )
+    a = _agent(tmp_path)
+    with caplog.at_level("WARNING", logger="zippie.agent"):
+        a.apply_leg_overrides()  # must not raise
+    assert a.paths[0].config.weight == 100, "an unusable override changed the weight"
+    assert a.paths[0].config.tier == 3, "a usable override beside it was dropped"
+    assert any("not usable" in r.getMessage() for r in caplog.records)
+
+
 def test_editing_an_unknown_leg_is_refused(tmp_path):
     """A typo must be obvious rather than silently creating overrides for a leg
     that does not exist."""

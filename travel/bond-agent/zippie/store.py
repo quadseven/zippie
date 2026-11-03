@@ -41,6 +41,7 @@ from __future__ import annotations
 import calendar
 import json
 import logging
+import math
 import os
 import socket
 import tempfile
@@ -84,6 +85,32 @@ def _atomic_write(path: Path, payload: str) -> None:
         except OSError:
             pass
         raise
+
+
+def refuse_unstorable(field: str, value: Any) -> None:
+    """Refuse a value that would be persisted and then break every reader.
+
+    The store writes BEFORE the agent applies (BondAgent.set_leg_fields), on
+    purpose, so a value that parses as JSON but cannot be coerced later is not
+    refused once - it comes back from legs.json on every control tick and at
+    every start, and nothing rewrites it. Python's json accepts `1e999`,
+    `Infinity` and `NaN`, and `int(float("inf"))` raises OverflowError, which
+    apply_leg_overrides did not catch: one PUT with `{"weight": 1e999}` would
+    have ended every later control pass at the override step, on a router whose
+    only route to the fix is the agent.
+
+    Only JSON scalars are storable. No field here takes a table or a list, and a
+    value nobody can coerce is refused at the one moment a human is looking.
+    """
+    if value is None or isinstance(value, (bool, str)):
+        return
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError(f"{field} must be a finite number, got {value!r}")
+        return
+    raise ValueError(
+        f"{field} must be a number, text, true/false or null, not {type(value).__name__}"
+    )
 
 
 #: The cycle day used when nobody has said otherwise. 1 makes the period a
@@ -496,6 +523,8 @@ class LegStore:
         unknown = set(fields) - allowed
         if unknown:
             raise ValueError(f"unknown field(s): {sorted(unknown)}")
+        for k, v in fields.items():
+            refuse_unstorable(k, v)
         legs = self.load()
         entry = dict(legs.get(name) or {})
         for k, v in fields.items():

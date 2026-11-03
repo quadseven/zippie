@@ -158,6 +158,19 @@ def test_a_phone_isp_name_survives_the_authenticated_announce(served):
     assert leg.isp_name == "Example Provider"
 
 
+def test_an_infinite_port_is_a_400_not_a_dropped_connection(served, caplog):
+    """`1e999` is valid JSON and inf to Python; int(inf) is OverflowError. The
+    handler caught ValueError and TypeError only, so the thread died with a
+    traceback and the phone saw a closed socket instead of an answer."""
+    agent, base = served
+    body = {"name": "pixel", "host": "192.0.2.5", "port": 1e999}
+    with caplog.at_level(logging.INFO, logger="zippie.agent"):
+        code, _ = _post(base, "/api/legs/announce", body, token=agent.console_token())
+    assert code == 400
+    joined = " ".join(r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
+    assert "400" in joined, "the refusal was not logged at WARNING"
+
+
 def test_a_malformed_body_is_logged_with_its_reason(served, caplog):
     """400s are the other way a phone gets silently turned away."""
     agent, base = served

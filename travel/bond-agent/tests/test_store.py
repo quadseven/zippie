@@ -122,6 +122,27 @@ def test_an_unknown_field_is_refused(tmp_path):
         s.update("att", {"montly_cap_gb": 15.0})  # note the typo
 
 
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), float("nan")])
+def test_a_non_finite_number_is_refused_before_it_is_persisted(tmp_path, value):
+    """json reads `1e999` as inf and `int(inf)` raises OverflowError. The store
+    writes before the agent applies, so a value like that would not be refused
+    once - it would come back from legs.json on every control tick."""
+    s = LegStore(tmp_path)
+    s.update("att", {"tier": 2})
+    with pytest.raises(ValueError):
+        s.update("att", {"weight": value})
+    assert s.load()["att"] == {"tier": 2}, "the refused value reached the file"
+
+
+@pytest.mark.parametrize("value", [{"a": 1}, [1, 2], ["x"]])
+def test_a_structured_value_is_refused(tmp_path, value):
+    """No field here takes a table or a list, and one persisted would be
+    coerced - or not - by every reader from then on."""
+    with pytest.raises(ValueError):
+        LegStore(tmp_path).update("att", {"label": value})
+    assert not (tmp_path / "legs.json").exists()
+
+
 def test_a_corrupt_override_file_applies_nothing(tmp_path):
     """Unlike usage, this is human input that cannot be recomputed. Applying
     half of it would mean applying the wrong caps."""

@@ -2885,7 +2885,10 @@ class BondAgent:
                         coerced = float(value)
                     else:
                         coerced = value
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
+                    # OverflowError is int(inf): json reads `1e999` as a float
+                    # and a hand-edited file can hold one. Uncaught, it ended
+                    # every control pass here, from a file nothing rewrites.
                     log.warning(
                         "leg %s: override %s=%r is not usable; ignoring", p.name, field, value
                     )
@@ -4554,7 +4557,10 @@ class BondAgent:
                         isp_name=body.get("isp_name"),
                         lease_s=float(body.get("lease_s", 45)),
                     )
-                except (ValueError, TypeError) as exc:
+                except (ValueError, TypeError, OverflowError) as exc:
+                    # OverflowError is int() of the inf that json makes of
+                    # `1e999`: a bad request, answered as one, not a traceback
+                    # in the handler thread.
                     self._reject(400, str(exc))
                     return
                 # The accepted side of the same story. Without it a leg appears
