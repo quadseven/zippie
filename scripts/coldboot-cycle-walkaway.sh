@@ -19,7 +19,7 @@
 # device, surviving the adb disconnection it causes. The phone restores itself
 # whether or not anything here is still alive.
 set -uo pipefail
-ROUTER=192.0.2.30
+ROUTER="${ZIPPIE_ROUTER:?set ZIPPIE_ROUTER to the LAN address of the travel router}"
 # No default: a stale address here silently traces a phone that is not
 # there, and every reading comes back empty and believable.
 PHONE_IP="${ZIPPIE_PHONE_IP:?set ZIPPIE_PHONE_IP to the LAN address of the phone under test}"

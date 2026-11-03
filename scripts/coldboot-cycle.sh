@@ -13,7 +13,7 @@
 # both devices when the ethernet drops, so the verdict and the failsafe cannot
 # depend on it.
 set -uo pipefail
-ROUTER=192.0.2.30
+ROUTER="${ZIPPIE_ROUTER:?set ZIPPIE_ROUTER to the LAN address of the travel router}"
 # No default: a stale address here silently traces a phone that is not
 # there, and every reading comes back empty and believable.
 PHONE_IP="${ZIPPIE_PHONE_IP:?set ZIPPIE_PHONE_IP to the LAN address of the phone under test}"

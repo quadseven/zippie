@@ -7,15 +7,13 @@
 # lived in /etc/zippie/zippie.toml with nothing to diff them against). Editing
 # this file and `cat`-ing it to /etc/zippie/zippie.toml is now how a change to
 # this router's paths gets reviewed, instead of an SSH session nobody can
-# diff. Deploying a change here is a MANUAL step - see
-# travel/gl-mt3000/README.md ("Config goes to /etc/zippie/zippie.toml the same
-# way (cat | ssh)"). scripts/deploy-openwrt.sh never reads or pushes this
-# file; it only ever copies travel/bond-agent/zippie/*.py.
+# diff. scripts/deploy-openwrt.sh reads this file, renders the router's own
+# identity into it and pushes the result to /etc/zippie/zippie.toml (#228); a
+# merge that touches it deploys it. Do not `cat | ssh` it by hand.
 #
 # server_public_key below is a PLACEHOLDER, not the real key - the real value
-# is deliberately not checked in (muster#101 tracks rotating it off a static
-# hardcoded value entirely). Before running the cat | ssh deploy step, replace
-# <server-public-key> with the real value from wherever muster#101 lands it.
+# is deliberately not checked in. The deploy renders it from the router's
+# cached keys and refuses to ship any reserved placeholder it finds.
 [home]
 endpoint = "dns-e.example-home.invalid"
 ports = [51900, 51901, 51902, 51903]

@@ -171,4 +171,4 @@ configs/, scripts/   samples, installers, deploy, guards
 
 ## License
 
-MIT. Not affiliated with GL.iNet or any commercial bonding vendor.
+AGPL-3.0. Not affiliated with GL.iNet or any commercial bonding vendor.
