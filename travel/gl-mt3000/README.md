@@ -178,7 +178,9 @@ only, so run it straight off `PYTHONPATH`:
 ssh root@<router> 'PYTHONPATH=/opt/zippie-agent python3 -m zippie.cli status'
 ```
 
-Config goes to `/etc/zippie/zippie.toml` the same way (`cat | ssh`).
+Config is rendered from `travel/gl-mt3000/zippie.toml` and pushed by
+`scripts/deploy-openwrt.sh`, which refuses to ship a placeholder value. Do not
+`cat | ssh` it by hand.
 
 ### 4. Import and start
 

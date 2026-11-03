@@ -211,7 +211,7 @@ PY
 # own credential, rather than a deploy pipeline splicing it in. muster proves
 # possession at the APPLICATION layer - the device signs a server-issued,
 # single-use nonce with a key in its keystore - so the proof does not depend on
-# the transport. (This used to cite docs/adr/0023, which does not exist here.)
+# the transport. docs/adr/0023-muster-delivered-router-secrets.md records it.
 RENDERED_CONFIG="$(mktemp)"
 LIVE_CONFIG="$(mktemp)"
 # The stamp is composed locally too, so its bytes can be hashed before and
@@ -225,6 +225,9 @@ trap 'rm -f "${RENDERED_CONFIG}" "${LIVE_CONFIG}" "${STAMP_LOCAL}"' EXIT
 ssh_run "cat ${REMOTE_CONFIG} 2>/dev/null" > "${LIVE_CONFIG}" || true
 
 say "rendering the router's own identity into the config"
+# `set -e` would exit on a failing renderer BEFORE the die below could say
+# that nothing was sent, so the status is captured and judged explicitly.
+set +e
 python3 - "${CONFIG_SRC}" "${LIVE_CONFIG}" "${RENDERED_CONFIG}" <<'RENDER'
 import re
 import sys
@@ -337,7 +340,9 @@ if offenders:
         "that parses perfectly and cannot work."
     )
 RENDER
-[[ $? -eq 0 ]] || die "the config could not be rendered for this router. NOTHING was sent."
+render_rc=$?
+set -e
+[[ ${render_rc} -eq 0 ]] || die "the config could not be rendered for this router. NOTHING was sent."
 
 CONFIG_SRC="${RENDERED_CONFIG}"
 # ---------------------------------------------------------------------------
@@ -984,7 +989,10 @@ ssh_run "rm -f /www/*TESTKEY*.apk /www/*throwaway*.apk 2>/dev/null || true"
 # nothing on failure.
 say "enabling zippie at boot"
 ssh_run "/etc/init.d/zippie enable" || true
-rcd=$(ssh_run "ls /etc/rc.d/ 2>/dev/null | grep -c '^S[0-9]*zippie\$'")
+# `|| true` INSIDE the remote command: `grep -c` exits 1 on zero matches, and
+# under `set -e` that ended the script here, with the rollback still armed and
+# the explanation below never printed.
+rcd=$(ssh_run "ls /etc/rc.d/ 2>/dev/null | grep -c '^S[0-9]*zippie\$' || true")
 [[ "${rcd}" -ge 1 ]] || die "zippie is STILL not enabled at boot: no S-symlink in
     /etc/rc.d. The router will come up with no agent, and on a cold boot with a
     phone uplink that means no console, so the phone can never announce and the
