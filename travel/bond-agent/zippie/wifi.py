@@ -24,14 +24,6 @@ def detect_backend() -> str | None:
     return None
 
 
-def list_preferred_ssids(paths: list[PathConfig]) -> list[str]:
-    out: list[str] = []
-    for p in paths:
-        if p.enabled and p.match.type == "ssid" and p.match.ssid:
-            out.append(p.match.ssid)
-    return out
-
-
 def nmcli_available() -> bool:
     return net.which("nmcli") is not None
 

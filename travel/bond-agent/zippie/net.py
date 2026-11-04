@@ -341,21 +341,6 @@ def ensure_sysctl() -> None:
     run_or_dry(["sysctl", "-w", "net.ipv4.fib_multipath_use_neigh=1"], check=False)
 
 
-def generate_wg_keypair() -> tuple[str, str]:
-    if which("wg"):
-        priv = run(["wg", "genkey"], check=True).stdout.strip()
-        pub = run(["wg", "pubkey"], check=True, input_text=priv + "\n").stdout.strip()
-        return priv, pub
-    # Pure fallback for dry-run / unit tests without wireguard-tools
-    import base64
-    import secrets
-
-    priv_raw = secrets.token_bytes(32)
-    priv = base64.b64encode(priv_raw).decode("ascii")
-    pub = base64.b64encode(secrets.token_bytes(32)).decode("ascii")
-    return priv, pub
-
-
 def write_wg_config(
     path: str,
     *,
@@ -968,48 +953,6 @@ def clear_firewall() -> None:
         _iptables(table, "-X", _FW_CHAIN)
 
 
-def ip_rule_add(fwmark: int, table: int, priority: int) -> None:
-    run_or_dry(
-        [
-            "ip",
-            "rule",
-            "add",
-            "fwmark",
-            hex(fwmark),
-            "table",
-            str(table),
-            "priority",
-            str(priority),
-        ],
-        check=False,
-    )
-
-
-def ip_rule_del(fwmark: int, table: int) -> None:
-    run_or_dry(
-        ["ip", "rule", "del", "fwmark", hex(fwmark), "table", str(table)],
-        check=False,
-    )
-
-
-def ip_route_replace_default(table: int, dev: str, metric: int = 10) -> None:
-    run_or_dry(
-        [
-            "ip",
-            "route",
-            "replace",
-            "default",
-            "dev",
-            dev,
-            "table",
-            str(table),
-            "metric",
-            str(metric),
-        ],
-        check=True,
-    )
-
-
 # Zippie's default route ALWAYS carries this metric, and nothing else uses it.
 #
 # This is what makes the agent unable to strand the device it runs on. The
@@ -1233,42 +1176,6 @@ class ResolverKicker:
             return False
         self.kicks += 1
         return True
-
-
-def bind_udp_probe(
-    endpoint_host: str, endpoint_port: int, source_dev: str | None, timeout_s: float = 1.0
-) -> float | None:
-    """ICMP-less RTT probe: TCP connect to a known port via SO_BINDTODEVICE when possible.
-
-    Returns RTT ms or None on failure. Uses TCP to home WireGuard port is wrong;
-    we probe a small HTTP health port on the home server instead (default 8788).
-    Callers should pass the health host/port.
-    """
-    import socket
-
-    host = endpoint_host
-    port = endpoint_port
-    start = time.perf_counter()
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(timeout_s)
-    try:
-        if source_dev and hasattr(socket, "SO_BINDTODEVICE"):
-            try:
-                sock.setsockopt(
-                    socket.SOL_SOCKET, socket.SO_BINDTODEVICE, source_dev.encode() + b"\0"
-                )
-            except OSError as exc:
-                log.debug("SO_BINDTODEVICE %s failed: %s", source_dev, exc)
-        sock.connect((host, port))
-        sock.sendall(b"PING\n")
-        data = sock.recv(16)
-        if not data:
-            return None
-        return (time.perf_counter() - start) * 1000.0
-    except OSError:
-        return None
-    finally:
-        sock.close()
 
 
 def ping_rtt_ms(

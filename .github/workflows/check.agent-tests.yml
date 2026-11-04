@@ -113,7 +113,7 @@ jobs:
           echo "files changed by this PR:"
           printf '%s\n' "$CHANGED" | sed 's/^/  /'
           AGENT_RE='^(travel/|companion/scripts/setup-gomobile\.sh$|home/|hub/|deploy/oke/|\.github/workflows/check\.agent-tests\.yml$)'
-          DATAPATH_RE='^(travel/datapath-go/|companion/scripts/setup-gomobile\.sh$|\.github/workflows/check\.agent-tests\.yml$)'
+          DATAPATH_RE='^(travel/datapath-go/|travel/bond-agent/tests/fixtures/datapath_wire_vectors\.json$|companion/scripts/setup-gomobile\.sh$|\.github/workflows/check\.agent-tests\.yml$)'
           agent=false; datapath=false
           if printf '%s\n' "$CHANGED" | grep -Eq "$AGENT_RE"; then agent=true; fi
           if printf '%s\n' "$CHANGED" | grep -Eq "$DATAPATH_RE"; then datapath=true; fi

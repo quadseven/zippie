@@ -58,7 +58,7 @@ KEPT_FACTS = [
     "DECISIONS.md",
     "CONTEXT.md",
     "AGENTS.md",
-    "MIT.",
+    "AGPL-3.0.",
 ]
 
 # Characters that draw boxes: never in a public README.

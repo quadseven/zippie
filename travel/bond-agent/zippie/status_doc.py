@@ -24,10 +24,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from zippie.datapath import HEADER_LEN
+from zippie.datapath_port import LINK_BYTES_DEFINITION
 from zippie.models import CostClass
 from zippie.net import is_private_v4
 from zippie.store import LegStore
-from zippie.transport import LINK_BYTES_DEFINITION
 
 _IPV4_UDP_HEADER_BYTES = 28
 _WIREGUARD_EMPTY_TRANSPORT_BYTES = 32
