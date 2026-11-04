@@ -184,10 +184,6 @@ def test_the_factory_refuses_an_unknown_adapter():
         make_datapath("go", ("127.0.0.1", 0))
 
 
-# Known gap, not a pass: the workflow edit needs a pusher with the GitHub
-# `workflows` permission, which the agent identity lacks (#384). Strict, so
-# this fails the day the regex lands and the marker must come off.
-@pytest.mark.xfail(strict=True, reason="DATAPATH_RE does not name the vector file yet (#384)")
 def test_a_vector_change_runs_the_go_suite_too():
     """A vector-only PR must not skip the Go side, or Go reads stale bytes."""
     workflow = Path(__file__).resolve().parents[3] / ".github/workflows/check.agent-tests.yml"
