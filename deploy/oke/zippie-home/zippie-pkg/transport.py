@@ -40,6 +40,7 @@ import os
 import selectors
 import socket
 import struct
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass, replace
@@ -650,6 +651,7 @@ class Transport:
         # where the copies go; folding them together would put a scheduling
         # decision behind a name that says classification.
         duplicate_fanout: int = DEFAULT_DUPLICATE_FANOUT,
+        adaptive_duplicate_loss_pct: float = 10.0,
         reorder_deadline_ms: int = 150,
         nack_delay_ms: int = 60,
         # THE EXPLICIT UPPER BOUND adaptive recovery may widen the reorder
@@ -727,6 +729,8 @@ class Transport:
         # one, and only a downstream DATA frame can move it to the new epoch.
         self._home_probe_answered = False
         self.scheduler = Scheduler(duplicate_fanout=duplicate_fanout)
+        self._adaptive_duplicate_loss_pct = adaptive_duplicate_loss_pct
+        self._last_duplicate_loss_sample = self._clock()
         self.reassembler = Reassembler(reorder_deadline_ms=reorder_deadline_ms, _clock=_clock)
         self.retransmit = RetransmitBuffer(retransmit, _clock=_clock)
         self.nacks = NackTracker(
@@ -821,6 +825,12 @@ class Transport:
         # probe carrying its own identifier - is what makes "this specific
         # probe was lost" knowable at all (#115).
         self._ka_loss: dict[int, deque[bool]] = {}
+        # Adaptive fan-out needs fresh episode evidence, not the long-lived
+        # loss ring used by policy across link withdrawal and re-adoption.
+        self._adaptive_ka: dict[int, deque[tuple[float, bool]]] = {}
+        self._adaptive_pending: dict[int, set[int]] = {}
+        self._adaptive_epoch: dict[int, int] = {}
+        self._adaptive_lock = threading.RLock()
         self._sel = selector_factory()
         self._running = False
 
@@ -857,7 +867,8 @@ class Transport:
         if link.max_kbps > 0:
             self._buckets[link.path_id] = _TokenBucket(link.max_kbps)
         self._sel.register(sock, selectors.EVENT_READ, ("link", link.path_id))
-        self.scheduler.add_path(PathState(link.path_id, link.name, weight=link.weight))
+        with self._adaptive_lock:
+            self.scheduler.add_path(PathState(link.path_id, link.name, weight=link.weight))
         # Seed the clock so a brand-new link does not read as "stale since the
         # epoch" for the one tick before its first keepalive is answered, which
         # would evict it before it ever had a chance to prove itself.
@@ -890,7 +901,9 @@ class Transport:
         self._buckets.pop(path_id, None)
         self._link_rx.pop(path_id, None)
         self._link_rtt.pop(path_id, None)
-        self._ka_sent.pop(path_id, None)
+        with self._adaptive_lock:
+            self._ka_sent.pop(path_id, None)
+            self._clear_adaptive_evidence(path_id)
         # _ka_loss is DELIBERATELY NOT CLEARED HERE (#115), unlike every dict
         # above it. A bad-enough leg is dropped from the transport and
         # re-adopted a pass or two later by the SAME tier-gate cycle that
@@ -916,7 +929,9 @@ class Transport:
         # tools/loopback_throughput.py's _ImpairingFactory for the same rule
         # applied to the impairment instrument itself, which persists its own
         # per-leg counters across exactly this cycle for exactly this reason).
-        self.scheduler.remove_path(path_id)
+        with self._adaptive_lock:
+            self._clear_adaptive_evidence(path_id)
+            self.scheduler.remove_path(path_id)
 
     def forget_link(self, path_id: int) -> None:
         """Retire everything `remove_link` deliberately KEPT for this path id.
@@ -936,7 +951,9 @@ class Transport:
         Called ONLY on a change of owner (#163), never on the withdraw/re-adopt
         cycle, so #115's retention is untouched.
         """
-        self._ka_loss.pop(path_id, None)
+        with self._adaptive_lock:
+            self._ka_loss.pop(path_id, None)
+            self._clear_adaptive_evidence(path_id)
         # Cumulative byte counters go too. The agent baselines usage per leg
         # NAME and re-baselines when a total goes backwards, so a stale total
         # here is survivable - but leaving it means the new leg's first delta is
@@ -946,8 +963,18 @@ class Transport:
         self._link_tx_bytes.pop(path_id, None)
         self._link_rx_bytes.pop(path_id, None)
 
+    def _clear_adaptive_evidence(self, path_id: int) -> None:
+        with self._adaptive_lock:
+            self._adaptive_epoch[path_id] = self._adaptive_epoch.get(path_id, 0) + 1
+            self._adaptive_ka.pop(path_id, None)
+            self._adaptive_pending.pop(path_id, None)
+
     def set_link_health(self, path_id: int, healthy: bool) -> None:
-        self.scheduler.set_healthy(path_id, healthy)
+        with self._adaptive_lock:
+            path = self.scheduler._paths.get(path_id)
+            if path is not None and path.healthy != healthy:
+                self._clear_adaptive_evidence(path_id)
+            self.scheduler.set_healthy(path_id, healthy)
 
     def _pack(self, frame: Frame) -> bytes:
         """Serialise a frame at this endpoint's rung.
@@ -974,8 +1001,10 @@ class Transport:
             # Probe only paths that have actually sent a frame upstream.
             if self._home_downstream and path_id not in self._link_rx_bytes:
                 continue
-            self._ka_probe += 1
-            probe = self._ka_probe
+            with self._adaptive_lock:
+                self._ka_probe += 1
+                probe = self._ka_probe
+                adaptive_epoch = self._adaptive_epoch.get(path_id, 0)
             # The probe's OWN identifier, where a data frame carries its
             # sequence. Every responder - this module and the Go datapath -
             # already echoes `seq` back unchanged, so this needs nothing new on
@@ -995,25 +1024,41 @@ class Transport:
                     epoch=self._epoch,
                 )
             )
-            if self._send_on(path_id, wire):
+            # Reserve before I/O so a concurrent receive can match an
+            # immediate reply. No lock is held while calling the socket.
+            with self._adaptive_lock:
                 outstanding = self._ka_sent.setdefault(path_id, {})
                 outstanding[probe] = self._clock()
-                # A leg that never answers must not accumulate a timestamp per
-                # probe for the months this runs on a 128 MB router. The oldest
-                # go first; they are the least likely to still be in flight.
-                #
-                # EVICTED HERE MEANS LOST, and is recorded as such: a probe
-                # that has outlived 8 newer ones (~4 s at the default
-                # interval) without an answer is never coming back as
-                # anything a reader would want counted as "still waiting"
-                # (#115). The other place a probe is ever resolved is
-                # _on_link_data, on an actual reply.
-                while len(outstanding) > _KA_OUTSTANDING_MAX:
-                    outstanding.pop(next(iter(outstanding)))
-                    self._note_ka_outcome(path_id, lost=True)
+                if self._adaptive_epoch.get(path_id, 0) == adaptive_epoch:
+                    self._adaptive_pending.setdefault(path_id, set()).add(probe)
+            sent = self._send_on(path_id, wire)
+            with self._adaptive_lock:
+                outstanding = self._ka_sent.get(path_id)
+                if not sent:
+                    if outstanding is not None:
+                        outstanding.pop(probe, None)
+                    pending = self._adaptive_pending.get(path_id)
+                    if pending is not None:
+                        pending.discard(probe)
+                elif outstanding is not None:
+                    # A probe older than eight newer ones is counted as lost.
+                    while len(outstanding) > _KA_OUTSTANDING_MAX:
+                        expired = next(iter(outstanding))
+                        outstanding.pop(expired)
+                        self._note_ka_outcome(path_id, lost=True, probe=expired)
 
-    def _note_ka_outcome(self, path_id: int, *, lost: bool) -> None:
-        self._ka_loss.setdefault(path_id, deque(maxlen=_KA_LOSS_WINDOW)).append(lost)
+    def _note_ka_outcome(self, path_id: int, *, lost: bool, probe: int | None = None) -> None:
+        with self._adaptive_lock:
+            self._ka_loss.setdefault(path_id, deque(maxlen=_KA_LOSS_WINDOW)).append(lost)
+            pending = self._adaptive_pending.get(path_id)
+            if pending is None or probe not in pending:
+                return
+            pending.remove(probe)
+            now = self._clock()
+            recent = self._adaptive_ka.setdefault(path_id, deque(maxlen=_KA_LOSS_WINDOW))
+            if recent and now - recent[-1][0] >= PEER_SILENT_S:
+                recent.clear()
+            recent.append((now, lost))
 
     def link_rx_age_s(self, path_id: int) -> float | None:
         """Seconds since anything arrived on this leg; None if unknown."""
@@ -1074,10 +1119,11 @@ class Transport:
         identifiers, which is what makes "this specific probe was lost"
         knowable here at all.
         """
-        outcomes = self._ka_loss.get(path_id)
-        if not outcomes:
-            return None
-        return 100.0 * sum(outcomes) / len(outcomes)
+        with self._adaptive_lock:
+            outcomes = self._ka_loss.get(path_id)
+            if not outcomes:
+                return None
+            return 100.0 * sum(outcomes) / len(outcomes)
 
     def link_loss_resolution_pct(self, path_id: int) -> float | None:
         """The smallest non-zero value link_loss_pct can currently return.
@@ -1103,13 +1149,18 @@ class Transport:
         decision there also leaves link_loss_pct itself unchanged, so what the
         console displays means exactly what it did before.
         """
-        outcomes = self._ka_loss.get(path_id)
-        if not outcomes:
-            return None
-        return 100.0 / len(outcomes)
+        with self._adaptive_lock:
+            outcomes = self._ka_loss.get(path_id)
+            if not outcomes:
+                return None
+            return 100.0 / len(outcomes)
 
     def set_link_weight(self, path_id: int, weight: int) -> None:
-        self.scheduler.set_weight(path_id, weight)
+        with self._adaptive_lock:
+            path = self.scheduler._paths.get(path_id)
+            if path is not None and (path.weight > 0) != (weight > 0):
+                self._clear_adaptive_evidence(path_id)
+            self.scheduler.set_weight(path_id, weight)
 
     # ---- send / receive --------------------------------------------------
 
@@ -1142,21 +1193,21 @@ class Transport:
             # the scheduler stops choosing it, and carry on -- one dead link is
             # the situation this whole system exists to survive.
             self.stats.send_errors += 1
-            self.scheduler.set_healthy(path_id, False)
+            self.set_link_health(path_id, False)
             log.debug("send failed on %s: %s", link.name, exc)
             return False
 
     def send_payload(self, payload: bytes) -> int:
         """Frame a WireGuard datagram and put it on the wire. Returns copies sent."""
-        healthy = self.scheduler.healthy_paths
         client_bytes = _wireguard_client_bytes_estimate(payload)
         overhead = client_bytes is None and not self._home_downstream
         if client_bytes is not None:
             self._last_client_payload_at = self._clock()
-        mode = self.classifier.mode_for(
-            len(payload), paths_available=len(healthy), overhead=overhead
-        )
-        targets, frames = self.scheduler.build(payload, mode, self._epoch, pack=self._pack)
+        with self._adaptive_lock:
+            mode = self.classifier.mode_for(
+                len(payload), paths_available=len(self.scheduler.healthy_paths), overhead=overhead
+            )
+            targets, frames = self.scheduler.build(payload, mode, self._epoch, pack=self._pack)
         if not targets:
             self.stats.no_path += 1
             return 0
@@ -1177,12 +1228,16 @@ class Transport:
             self.retransmit.record(seq, payload, targets[0])
         return sent
 
+    def _healthy_path_ids(self) -> list[int]:
+        with self._adaptive_lock:
+            return [path.path_id for path in self.scheduler.healthy_paths]
+
     def _send_nack(self, seq: int) -> None:
         """Ask the far end for a missing sequence, on any healthy link."""
         frame = self._pack(
             Frame(seq=seq, path_id=0, payload=b"", flags=FLAG_NACK, epoch=self._epoch)
         )
-        for path_id in [p.path_id for p in self.scheduler.healthy_paths]:
+        for path_id in self._healthy_path_ids():
             if self._send_on(path_id, frame):
                 return
 
@@ -1192,9 +1247,10 @@ class Transport:
             return
         payload, avoid = answer
         # Resending down the link that just lost it turns one loss into three.
-        candidates = [p.path_id for p in self.scheduler.healthy_paths if p.path_id != avoid]
+        healthy = self._healthy_path_ids()
+        candidates = [path_id for path_id in healthy if path_id != avoid]
         if not candidates:
-            candidates = [p.path_id for p in self.scheduler.healthy_paths]
+            candidates = healthy
         if not candidates:
             return
         wire = self._pack(
@@ -1395,12 +1451,13 @@ class Transport:
         )
         first_ever = self._peer_epoch is None
         data = not frame.is_keepalive and not (frame.flags & FLAG_NACK)
-        answered = (
-            frame.is_keepalive
-            and frame.is_keepalive_reply
-            and path_id is not None
-            and frame.seq in self._ka_sent.get(path_id, {})
-        )
+        with self._adaptive_lock:
+            answered = (
+                frame.is_keepalive
+                and frame.is_keepalive_reply
+                and path_id is not None
+                and frame.seq in self._ka_sent.get(path_id, {})
+            )
         takeover = (data or answered) and idle
         if not first_ever and not takeover:
             return False
@@ -1446,7 +1503,7 @@ class Transport:
         # on loopback. The bond looked alive from both ends and moved
         # nothing.
         if not self._home_downstream or not self._home_probe_overdue(path_id):
-            self.scheduler.set_healthy(path_id, True)
+            self.set_link_health(path_id, True)
 
     def _home_probe_overdue(self, path_id: int) -> bool:
         """True when this path's probes have gone unanswered long enough to
@@ -1464,11 +1521,12 @@ class Transport:
         """
         if not self._home_probe_answered:
             return False
-        outstanding = self._ka_sent.get(path_id, {})
-        return (
-            len(outstanding) >= 3
-            and self._clock() - next(iter(outstanding.values())) >= HOME_STANDDOWN_S
-        )
+        with self._adaptive_lock:
+            outstanding = self._ka_sent.get(path_id, {})
+            return (
+                len(outstanding) >= 3
+                and self._clock() - next(iter(outstanding.values())) >= HOME_STANDDOWN_S
+            )
 
     def _answer_control(self, frame: Frame, path_id: int | None) -> bool:
         """CONTROL-FRAME REPLIES: NACK answers and keepalives. Owns the
@@ -1499,7 +1557,7 @@ class Transport:
                     # Travel measured this path's round trip. Give slow paths
                     # a smaller share while retaining a positive recovery
                     # share for every path still sending frames upstream.
-                    self.scheduler.set_weight(path_id, max(1, 5000 // max(50, rtt_ms)))
+                    self.set_link_weight(path_id, max(1, 5000 // max(50, rtt_ms)))
             # Answer on the SAME leg it arrived on. Replying over whichever
             # link the scheduler happens to like would measure that link
             # instead, and the answer would prove nothing about the leg
@@ -1524,23 +1582,24 @@ class Transport:
         has to be matched to the probe that caused it, or a DROPPED probe is
         indistinguishable from a SLOW one.
         """
-        outstanding = self._ka_sent.get(path_id)
-        sent = outstanding.pop(probe, None) if outstanding else None
-        if sent is None:
-            return
-        self._link_rtt[path_id] = (self._clock() - sent) * 1000.0
-        self._note_ka_outcome(path_id, lost=False)
-        if self._home_downstream:
-            self._home_probe_answered = True
-            self.scheduler.set_healthy(path_id, True)
-        # Anything older than the probe just answered is LOST, not
-        # merely slow - the far end answers in order on a given
-        # leg. Dropping them stops a stale timestamp being matched
-        # later and reported as a huge round trip, and each one
-        # counts against this leg's loss window (#115).
-        for older in [p for p in outstanding if p < probe]:
-            outstanding.pop(older, None)
-            self._note_ka_outcome(path_id, lost=True)
+        with self._adaptive_lock:
+            outstanding = self._ka_sent.get(path_id)
+            sent = outstanding.pop(probe, None) if outstanding else None
+            if sent is None:
+                return
+            self._link_rtt[path_id] = (self._clock() - sent) * 1000.0
+            self._note_ka_outcome(path_id, lost=False, probe=probe)
+            if self._home_downstream:
+                self._home_probe_answered = True
+                self.set_link_health(path_id, True)
+            # Anything older than the probe just answered is LOST, not
+            # merely slow - the far end answers in order on a given
+            # leg. Dropping them stops a stale timestamp being matched
+            # later and reported as a huge round trip, and each one
+            # counts against this leg's loss window (#115).
+            for older in [p for p in outstanding if p < probe]:
+                outstanding.pop(older, None)
+                self._note_ka_outcome(path_id, lost=True, probe=older)
 
     def _note_gaps(self, seq: int) -> None:
         """Register missing sequences so they can be asked for once they are
@@ -1650,7 +1709,8 @@ class Transport:
             template = self._links.get(0)
             if template is not None:
                 link = replace(template, path_id=path_id)
-                self.scheduler.add_path(PathState(path_id, link.name, weight=link.weight))
+                with self._adaptive_lock:
+                    self.scheduler.add_path(PathState(path_id, link.name, weight=link.weight))
         if link is None or link.remote == addr:
             return
         self._links[path_id] = replace(link, remote=addr)
@@ -1683,11 +1743,39 @@ class Transport:
                 self._last_home_probe_at = self._clock()
             for path_id in self._links:
                 if not self._heard_recently(path_id) or self._home_probe_overdue(path_id):
-                    self.scheduler.set_healthy(path_id, False)
+                    self.set_link_health(path_id, False)
+        now = self._clock()
+        if now - self._last_duplicate_loss_sample >= 2.0:
+            self._last_duplicate_loss_sample = now
+            with self._adaptive_lock:
+                losses = {
+                    path.path_id: self._adaptive_loss_pct(path.path_id, now)
+                    for path in self.scheduler.healthy_paths
+                }
+                self.scheduler.update_duplicate_loss(losses, self._adaptive_duplicate_loss_pct)
         self._deliver_to_wireguard(self.reassembler.tick())
         for seq in self.nacks.due():
             self._send_nack(seq)
         self._maybe_adapt_recovery()
+
+    def _adaptive_loss_pct(self, path_id: int, now: float) -> float | None:
+        """Use enough recent probe outcomes from the current link episode.
+
+        Payload traffic cannot refresh this evidence, and re-adoption must not
+        inherit a previous episode's loss window. Keep at most two minutes of
+        probes and require a recent outcome as well as sufficient resolution.
+        """
+        with self._adaptive_lock:
+            threshold = self._adaptive_duplicate_loss_pct
+            if not 5.0 <= threshold < 100.0:
+                return None
+            outcomes = self._adaptive_ka.get(path_id)
+            if not outcomes or now - outcomes[-1][0] >= PEER_SILENT_S:
+                return None
+            recent = [lost for observed, lost in outcomes if now - observed <= 120.0]
+            if not recent or 100.0 / len(recent) > threshold / 2:
+                return None
+            return 100.0 * sum(recent) / len(recent)
 
     def _worst_known_rtt_ms(self) -> float | None:
         """Max RTT among legs `_heard_recently` still trusts (#62).
@@ -1820,7 +1908,7 @@ class Transport:
             # that vanishes causes none - this read 1 for the whole 7 h the
             # router was gone on 2026-09-04 (#4, PEER_SILENT_S).
             "healthy": sum(
-                1 for p in self.scheduler.healthy_paths if self._heard_recently(p.path_id)
+                1 for path_id in self._healthy_path_ids() if self._heard_recently(path_id)
             ),
             "peer_silent_s": round(self.peer_silent_s(), 1),
             "client_payload_bytes": client_payload_bytes,

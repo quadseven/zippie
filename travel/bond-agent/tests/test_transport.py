@@ -600,3 +600,301 @@ class TestReceivingRestoresHealth:
         sock.deliver(Frame(seq=0, path_id=0, payload=b"", flags=FLAG_KEEPALIVE).pack())
         t.run_once()
         assert 0 in [x.path_id for x in t.scheduler.healthy_paths]
+
+
+def test_transport_samples_carrying_loss_for_adaptive_fanout(monkeypatch):
+    from zippie.datapath import PathState, SendMode
+
+    clock = _Clock()
+    transport, _ = _transport(_clock=clock, adaptive_duplicate_loss_pct=20)
+    for path_id in range(4):
+        transport.scheduler.add_path(PathState(path_id, str(path_id)))
+    losses = dict.fromkeys(range(4), 30.0)
+    monkeypatch.setattr(transport, "_adaptive_loss_pct", lambda path_id, now: losses.get(path_id))
+    monkeypatch.setattr(transport, "link_loss_resolution_pct", lambda _path_id: 5.0)
+    monkeypatch.setattr(transport, "_heard_recently", lambda _path_id: True)
+    for _ in range(3):
+        clock.advance(2)
+        transport.tick()
+    assert transport.scheduler.select(SendMode.DUPLICATE) == [0, 1, 2, 3]
+    losses[0] = None
+    clock.advance(2)
+    transport.tick()
+    assert transport.scheduler.select(SendMode.DUPLICATE) == [0, 1]
+    transport.close()
+
+
+def test_adaptive_fanout_consumes_real_keepalive_loss():
+    from zippie.datapath import SendMode
+
+    clock = _Clock()
+    transport, _ = _transport(_clock=clock, adaptive_duplicate_loss_pct=20)
+    for path_id in range(4):
+        transport.add_link(LinkEndpoint(path_id, str(path_id), None, ("127.0.0.1", 51900)))
+    for cycle in range(20):
+        transport.send_keepalives()
+        for path_id in range(4):
+            probe = max(transport._ka_sent[path_id])
+            if cycle % 3:
+                transport._note_keepalive_reply(probe, path_id)
+                transport._link_rx[path_id] = clock()
+        clock.advance(2)
+        transport.tick()
+    assert all(transport.link_loss_pct(path_id) > 20 for path_id in range(4))
+    assert transport.scheduler.select(SendMode.DUPLICATE) == [0, 1, 2, 3]
+    from zippie.transport import PEER_SILENT_S
+
+    clock.advance(PEER_SILENT_S + 2)
+    transport.tick()
+    assert transport.scheduler.select(SendMode.DUPLICATE) == [0, 1]
+    transport.close()
+
+
+def test_adaptive_fanout_rejects_coarse_keepalive_loss_samples():
+    from zippie.datapath import SendMode
+
+    clock = _Clock()
+    transport, _ = _transport(_clock=clock, adaptive_duplicate_loss_pct=20)
+    for path_id in range(4):
+        transport.add_link(LinkEndpoint(path_id, str(path_id), None, ("127.0.0.1", 51900)))
+    transport.send_keepalives()
+    transport.send_keepalives()
+    for path_id in range(4):
+        transport._note_keepalive_reply(max(transport._ka_sent[path_id]), path_id)
+        transport._link_rx[path_id] = clock()
+        assert transport.link_loss_pct(path_id) == 50
+    for _ in range(5):
+        clock.advance(2)
+        transport.tick()
+    assert transport.scheduler.select(SendMode.DUPLICATE) == [0, 1]
+    transport.close()
+
+
+def _adaptive_outcome(transport, path_id, *, lost):
+    transport._ka_probe += 1
+    probe = transport._ka_probe
+    transport._adaptive_pending.setdefault(path_id, set()).add(probe)
+    transport._note_ka_outcome(path_id, lost=lost, probe=probe)
+
+
+def test_payload_only_traffic_cannot_refresh_old_probe_loss():
+    from zippie.datapath import SendMode
+    from zippie.transport import PEER_SILENT_S
+
+    clock = _Clock()
+    transport, _ = _transport(_clock=clock, adaptive_duplicate_loss_pct=20)
+    for path_id in range(4):
+        transport.add_link(LinkEndpoint(path_id, str(path_id), None, ("127.0.0.1", 51900)))
+        for cycle in range(10):
+            _adaptive_outcome(transport, path_id, lost=cycle < 3)
+    for _ in range(3):
+        clock.advance(2)
+        transport.tick()
+    assert transport.scheduler.select(SendMode.DUPLICATE) == [0, 1, 2, 3]
+    clock.advance(PEER_SILENT_S)
+    for path_id in range(4):
+        transport._link_rx[path_id] = clock()
+    transport.tick()
+    assert transport.scheduler.select(SendMode.DUPLICATE) == [0, 1]
+    assert transport.link_loss_pct(0) == 30
+    for path_id in range(4):
+        _adaptive_outcome(transport, path_id, lost=True)
+    for _ in range(3):
+        clock.advance(2)
+        transport.tick()
+    assert transport.scheduler.select(SendMode.DUPLICATE) == [0, 1]
+    transport.close()
+
+
+def test_readopted_same_id_requires_fresh_adaptive_probe_window():
+    from zippie.datapath import SendMode
+
+    clock = _Clock()
+    transport, _ = _transport(_clock=clock, adaptive_duplicate_loss_pct=20)
+    for path_id in range(4):
+        transport.add_link(LinkEndpoint(path_id, str(path_id), None, ("127.0.0.1", 51900)))
+        for cycle in range(10):
+            _adaptive_outcome(transport, path_id, lost=cycle < 3)
+    for _ in range(3):
+        clock.advance(2)
+        transport.tick()
+    assert transport.scheduler.select(SendMode.DUPLICATE) == [0, 1, 2, 3]
+    transport.remove_link(0)
+    transport.add_link(LinkEndpoint(0, "0", None, ("127.0.0.1", 51900)))
+    assert len(transport.scheduler.select(SendMode.DUPLICATE)) == 2
+    clock.advance(2)
+    transport.tick()
+    assert len(transport.scheduler.select(SendMode.DUPLICATE)) == 2
+    assert transport.link_loss_pct(0) == 30
+    transport.close()
+
+
+def test_low_threshold_below_resolution_is_disabled():
+    clock = _Clock()
+    transport, _ = _transport(_clock=clock, adaptive_duplicate_loss_pct=4.9)
+    for _ in range(40):
+        _adaptive_outcome(transport, 0, lost=True)
+    assert transport._adaptive_loss_pct(0, clock()) is None
+    transport.close()
+
+
+@pytest.mark.parametrize("toggle", ["weight", "health"])
+def test_returning_eligible_leg_needs_fresh_probe_outcomes(toggle):
+    from zippie.datapath import SendMode
+
+    clock = _Clock()
+    transport, _ = _transport(_clock=clock, adaptive_duplicate_loss_pct=20)
+    for path_id in range(4):
+        transport.add_link(LinkEndpoint(path_id, str(path_id), None, ("127.0.0.1", 51900)))
+        for cycle in range(10):
+            _adaptive_outcome(transport, path_id, lost=cycle < 3)
+    for _ in range(3):
+        clock.advance(2)
+        transport.tick()
+    assert len(transport.scheduler.select(SendMode.DUPLICATE)) == 4
+    if toggle == "weight":
+        transport.set_link_weight(0, 0)
+        transport.set_link_weight(0, 100)
+    else:
+        transport.set_link_health(0, False)
+        transport.set_link_health(0, True)
+    for _ in range(3):
+        clock.advance(2)
+        transport.tick()
+    assert len(transport.scheduler.select(SendMode.DUPLICATE)) == 2
+    assert transport.link_loss_pct(0) == 30
+    transport.close()
+
+
+@pytest.mark.parametrize("toggle", ["weight", "health"])
+def test_late_old_probes_do_not_seed_new_eligibility_episode(toggle):
+    clock = _Clock()
+    transport, _ = _transport(_clock=clock, adaptive_duplicate_loss_pct=20)
+    transport.add_link(LinkEndpoint(0, "0", None, ("127.0.0.1", 51900)))
+    transport.send_keepalives()
+    transport.send_keepalives()
+    old_probe = max(transport._ka_sent[0])
+    if toggle == "weight":
+        transport.set_link_weight(0, 0)
+        transport.set_link_weight(0, 100)
+    else:
+        transport.set_link_health(0, False)
+        transport.set_link_health(0, True)
+    transport._note_keepalive_reply(old_probe, 0)
+    assert transport.link_loss_pct(0) == 50
+    assert transport._adaptive_loss_pct(0, clock()) is None
+    assert len(transport._adaptive_ka.get(0, [])) == 0
+    transport.close()
+
+
+def test_probe_sent_during_eligibility_change_is_not_adaptive_evidence(monkeypatch):
+    clock = _Clock()
+    transport, _ = _transport(_clock=clock, adaptive_duplicate_loss_pct=20)
+    transport.add_link(LinkEndpoint(0, "0", None, ("127.0.0.1", 51900)))
+
+    def send_with_transition(path_id, _wire):
+        transport.set_link_weight(path_id, 0)
+        transport.set_link_weight(path_id, 100)
+        return True
+
+    monkeypatch.setattr(transport, "_send_on", send_with_transition)
+    transport.send_keepalives()
+    probe = max(transport._ka_sent[0])
+    transport._note_keepalive_reply(probe, 0)
+    assert transport.link_loss_pct(0) == 0
+    assert not transport._adaptive_ka.get(0)
+    transport.close()
+
+
+def test_concurrent_eligibility_change_during_probe_send(monkeypatch):
+    import threading
+
+    clock = _Clock()
+    transport, _ = _transport(_clock=clock, adaptive_duplicate_loss_pct=20)
+    transport.add_link(LinkEndpoint(0, "0", None, ("127.0.0.1", 51900)))
+    sending = threading.Event()
+    resume = threading.Event()
+
+    def blocked_send(_path_id, _wire):
+        sending.set()
+        assert resume.wait(3)
+        return True
+
+    monkeypatch.setattr(transport, "_send_on", blocked_send)
+    worker = threading.Thread(target=transport.send_keepalives)
+    worker.start()
+    try:
+        assert sending.wait(3)
+        transport.set_link_weight(0, 0)
+        transport.set_link_weight(0, 100)
+    finally:
+        resume.set()
+        worker.join(3)
+    assert not worker.is_alive()
+    probe = max(transport._ka_sent[0])
+    transport._note_keepalive_reply(probe, 0)
+    assert transport.link_loss_pct(0) == 0
+    assert not transport._adaptive_ka.get(0)
+    transport.close()
+
+
+def test_immediate_keepalive_replies_do_not_leave_orphaned_probe_ids(monkeypatch):
+    clock = _Clock()
+    transport, _ = _transport(_clock=clock, adaptive_duplicate_loss_pct=20)
+    transport.add_link(LinkEndpoint(0, "0", None, ("127.0.0.1", 51900)))
+
+    def reply_during_send(path_id, wire):
+        frame = Frame.unpack(wire)
+        transport._note_keepalive_reply(frame.seq, path_id)
+        return True
+
+    monkeypatch.setattr(transport, "_send_on", reply_during_send)
+    for _ in range(50):
+        transport.send_keepalives()
+    assert transport.link_loss_pct(0) == 0
+    assert not transport._ka_sent.get(0)
+    assert not transport._adaptive_pending.get(0)
+    assert len(transport._adaptive_ka[0]) == 40
+    transport.close()
+
+
+def test_failed_probe_send_clears_its_reserved_probe(monkeypatch):
+    clock = _Clock()
+    transport, _ = _transport(_clock=clock, adaptive_duplicate_loss_pct=20)
+    transport.add_link(LinkEndpoint(0, "0", None, ("127.0.0.1", 51900)))
+    monkeypatch.setattr(transport, "_send_on", lambda *_args: False)
+    transport.send_keepalives()
+    assert not transport._ka_sent.get(0)
+    assert not transport._adaptive_pending.get(0)
+    assert transport.link_loss_pct(0) is None
+    transport.close()
+
+
+def test_nack_send_uses_snapshot_without_locking_socket_io(monkeypatch):
+    import threading
+
+    transport, _ = _transport()
+    transport.add_link(LinkEndpoint(0, "0", None, ("127.0.0.1", 51900)))
+    sending = threading.Event()
+    resume = threading.Event()
+    sent = []
+
+    def blocked_send(path_id, _wire):
+        sent.append(path_id)
+        sending.set()
+        assert resume.wait(3)
+        return True
+
+    monkeypatch.setattr(transport, "_send_on", blocked_send)
+    worker = threading.Thread(target=transport._send_nack, args=(1,))
+    worker.start()
+    try:
+        assert sending.wait(3)
+        transport.remove_link(0)
+    finally:
+        resume.set()
+        worker.join(3)
+    assert not worker.is_alive()
+    assert sent == [0]
+    assert transport._healthy_path_ids() == []
+    transport.close()
