@@ -29,7 +29,7 @@ describe are the code and comments in this tree.
 - [Keeping the router alive](#keeping-the-router-alive) - D18 to D22
 - [Phones as infrastructure](#phones-as-infrastructure) - D23 to D27
 - [Telling the truth](#telling-the-truth) - D28 to D31
-- [Boundaries](#boundaries) - D32 to D38
+- [Boundaries](#boundaries) - D32 to D39
 
 ---
 
@@ -1571,6 +1571,38 @@ since its own client-mode manifest says it has not. Retransmit is flagged
 0x20 in Python and 0x40 in Go on purpose (frame.go explains the collision
 with FlagEncrypted); that is not a gap, because neither end reads the other's
 bit.
+
+### D39. Packet mode trades throughput for failover
+
+**2026-11-05.** Evidence: #133, and the D5 and D38 entries above.
+
+**What packet mode is for.** Packet mode exists for seamless failover: a leg
+can vanish mid-connection and the tunnel carries on over the legs that remain.
+Route mode cannot give that property, because a flow pinned to a leg dies with
+it. Its throughput ceiling is a deliberate trade for that property, not a
+defect waiting on a fix inside this datapath.
+
+**Where aggregation goes instead.** Bandwidth aggregation, two links behaving
+as one faster link, is the Go datapath's job (travel/datapath-go). It speaks the
+same wire format, is already built for client mode, and needs no eBPF or XDP
+rewrite. The choice is reversible without touching the home end, because the
+home end sees the same frames whichever datapath sent them. D38 still governs
+when that happens: routers stay on the Python datapath until the Go gaps it
+lists close and Go has carried real traffic.
+
+**The readings behind the question, as context only.** On 2026-08-03, with
+both legs healthy, the legs measured 18.2 and 25.1 Mbit/s raw outside the
+tunnel, and the bond carried 4.9, 4.6 and 4.1 Mbit/s at 1, 4 and 8 streams.
+More streams made it slightly worse, which points at a shared bottleneck.
+
+**What is not known.** D5 found that the loopback ceiling was four per-packet
+scans whose cost grew with the backlog, not the CPU, and fixed them. No
+on-router reading has been taken since that fix. The explanation that the
+remaining router ceiling is the per-packet CPU cost of a single-threaded
+CPython loop is a hypothesis, not a measured fact. The figures above predate
+the fix and do not describe the current code. This decision does not depend
+on them: it holds whatever the current ceiling is, because failover is the
+property being bought.
 
 ## Two rules that generalize
 
