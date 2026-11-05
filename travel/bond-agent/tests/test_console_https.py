@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from zippie import agent as agent_module
+from zippie import console as console_module
 from zippie.agent import BondAgent
 from zippie.config import parse_config
 
@@ -209,7 +209,7 @@ def test_certificate_paths_require_a_tls_port(tmp_path):
 
 def test_listener_start_failure_closes_both_sockets(tmp_path, monkeypatch):
     opened = []
-    original_open = agent_module._open_dashboard_listeners
+    original_open = console_module._open_dashboard_listeners
 
     def capture_open(config, handler):
         servers = original_open(config, handler)
@@ -226,7 +226,7 @@ def test_listener_start_failure_closes_both_sockets(tmp_path, monkeypatch):
             raise RuntimeError("thread start failed")
         return original_start(thread)
 
-    monkeypatch.setattr(agent_module, "_open_dashboard_listeners", capture_open)
+    monkeypatch.setattr(console_module, "_open_dashboard_listeners", capture_open)
     monkeypatch.setattr(threading.Thread, "start", fail_second_start)
     agent = _agent(tmp_path, tls=True)
 
