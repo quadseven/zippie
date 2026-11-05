@@ -50,6 +50,7 @@ from zippie.models import (
 from zippie.pairing import PairingRequests
 from zippie.status_doc import projected_idle_mb_per_day as projected_idle_mb_per_day
 from zippie.store import HomeAddressStore, LegStore, UsageStore
+from zippie.usage_ledger import TransportLinkCounters, UsageLedger
 
 log = logging.getLogger("zippie.agent")
 
@@ -466,10 +467,10 @@ class BondAgent:
         self._pid_owner: dict[int, str] = {}
         # Durable per-leg state. usage.json is what we MEASURED; legs.json is
         # what the operator TOLD us and overrides the config file.
-        self._usage_store = UsageStore(self.config.state_dir)
+        # The usage ledger owns usage.json, the delta marks and the throughput
+        # baselines (zippie/usage_ledger.py, #375).
+        self.usage_ledger = UsageLedger(UsageStore(self.config.state_dir))
         self._leg_store = LegStore(self.config.state_dir)
-        # Last-seen cumulative bytes per leg, for delta accounting.
-        self._usage_marks: dict[str, int] = {}
         # Legs that announce themselves and expire. NOT in zippie.toml, on
         # purpose - see zippie/dynamic.py for why a phone in a config file was
         # the wrong model.
@@ -478,10 +479,6 @@ class BondAgent:
         # announce. In memory only - see zippie/pairing.py.
         self.pairing = PairingRequests()
         self._dynamic_paths: dict[str, PathRuntime] = {}
-        # (total_bytes, monotonic_at) per leg, for deriving throughput.
-        self._usage_at: dict[str, tuple[int, float]] = {}
-        self._tx_at: dict[str, int] = {}
-        self._rx_at: dict[str, int] = {}
         # The values that came from zippie.toml, captured before any override
         # touches them. Without this, overrides are ONE WAY: clearing one leaves
         # the overridden value in place until a restart re-reads the file, so
@@ -2241,23 +2238,12 @@ class BondAgent:
     def load_usage_state(self) -> None:
         """Restore this period's usage, and apply the operator's overrides.
 
-        The old version of this READ usage.json and nothing ever wrote it - the
-        file did not exist on the live router, so usage_gb reset to zero every
-        restart and monthly_cap_gb could never be reached. Caps were
-        decorative. save_usage_state is the other half.
-
-        THE ROLLOVER LIVES HERE AS WELL AS IN THE LOOP, and this is the copy
-        that actually fires. The router is unplugged far more than it runs, so
-        the boundary is almost always crossed while nothing is executing -
-        a rollover that only ran in the control loop would be a rollover that
-        never happened. The store does the comparison; startup is simply the
-        first caller.
+        Startup only; the rules, including the rollover that fires here for a
+        router switched off across its boundary, live in UsageLedger.load.
+        Overrides follow because legs.json is the operator's word and wins over
+        the config file.
         """
-        for name, gb in self._usage_store.load(billing_days=self._billing_days()).items():
-            for p in self.paths:
-                if p.name == name:
-                    p.usage_gb = gb
-        self._publish_usage_periods()
+        self.usage_ledger.load(self.paths, self._billing_days())
         self.apply_leg_overrides()
 
     def _billing_days(self) -> dict[str, Any]:
@@ -2281,141 +2267,28 @@ class BondAgent:
                 out[str(name)] = entry["billing_day"]
         return out
 
-    def _publish_usage_periods(self) -> None:
-        """Copy the store's period bookkeeping onto the paths.
+    def roll_usage_period(self) -> tuple[str, ...]:
+        """Zero any counter whose billing period has ended. Every tick.
 
-        So the console, the status file and telemetry can say WHICH period a
-        number covers and what the last one totalled. Kept visible on purpose:
-        a previous-period total that only exists inside a JSON file on the
-        router is not an explanation anyone will have when a cap alert fires.
+        Returns the legs that rolled; see UsageLedger.roll for the rules.
         """
-        for p in self.paths:
-            rec = self._usage_store.periods.get(p.name)
-            if rec is None:
-                continue
-            p.usage_period_start = rec.period_start
-            p.previous_usage_gb = rec.previous_usage_gb
+        return self.usage_ledger.roll(self.paths, self._billing_days())
 
-    def roll_usage_period(self) -> None:
-        """Zero any counter whose billing period has ended.
-
-        Runs every tick, for the case startup cannot cover: a router that stays
-        up across its own boundary. Same store method as startup, so there is
-        one implementation of "has the period changed" rather than two.
-
-        Assignment is guarded on the value actually CHANGING, which it only
-        does at a real boundary. That guard is not decoration: assigning
-        usage_gb from a store on every tick is precisely the bug that once
-        recorded a 30 MB transfer as 100 KB, and this must never become another
-        version of it.
-
-        The transport's own marks (`_usage_marks`) are deliberately left alone.
-        They are absolute counters, and accumulate_usage tracks their DELTAS -
-        clearing them here would make the next tick treat the link as newly
-        sighted and drop a tick's traffic on the floor at every boundary.
-        """
-        rolled = self._usage_store.roll(
-            {p.name: p.usage_gb for p in self.paths},
-            billing_days=self._billing_days(),
-        )
-        for p in self.paths:
-            new = rolled.get(p.name)
-            if new is not None and new != p.usage_gb:
-                p.usage_gb = new
-                # Get the zero, and the previous-period total beside it, into
-                # the file. Losing the write is survivable - the next start
-                # recomputes the same roll from the same stored period - but a
-                # file a human cats should agree with what the agent believes.
-                self._usage_store.mark_dirty()
-        self._publish_usage_periods()
-
-    def accumulate_usage(self) -> None:
+    def accumulate_usage(self) -> dict[str, int]:
         """Turn the transport's per-link byte counters into this period's usage.
 
-        DELTAS, NOT ABSOLUTES. The transport's counters start at zero on every
-        process start, so assigning them straight to usage_gb would erase the
-        month on each restart - which is the same class of mistake as never
-        writing the file at all.
-
-        WHICH PERIOD the total belongs to is roll_usage_period's job, not this
-        one's. This only ever adds, so on its own it produced a counter that
-        grew forever - see quadseven/infra#2301.
-
-        A counter going BACKWARDS means the transport restarted underneath us.
-        The delta for that tick is dropped rather than added as a negative,
-        because a negative would silently refund usage and let a leg exceed its
-        cap.
-
-        The physical interface counter cannot be used here: in packet mode legs
-        share one virtual interface, and a companion leg's interface is br-lan,
-        whose counters include every byte the LAN moves.
+        The counter source is the real transport adapter, built per tick so it
+        sees this tick's pid mapping. Returns the bytes added per leg; see
+        UsageLedger.accumulate for the rules.
         """
-        transport = getattr(self, "_transport", None)
-        if transport is None:
-            return
-        try:
-            totals = transport.link_bytes()
-        except Exception as exc:  # noqa: BLE001
-            log.debug("link_bytes: %s", exc)
-            return
-        now = time.monotonic()
+        counters = TransportLinkCounters(getattr(self, "_transport", None), self._transport_ids)
+        return self.usage_ledger.accumulate(self.paths, counters, now=time.monotonic())
 
-        for path in self.paths:
-            pid = self._transport_ids.get(path.name)
-            if pid is None or pid not in totals:
-                continue
-            tx, rx = totals[pid]
-            now_total = tx + rx
-            # Rate baseline is recorded FIRST, before the usage early-return
-            # below. Setting it after meant the first sighting of a leg never
-            # seeded it, so throughput needed three ticks rather than two and
-            # a leg that came and went inside that window never produced one.
-            prev = self._usage_at.get(path.name)
-            self._usage_at[path.name] = (now_total, now)
-            prev_tx = self._tx_at.get(path.name)
-            prev_rx = self._rx_at.get(path.name)
-            self._tx_at[path.name] = tx
-            self._rx_at[path.name] = rx
-
-            last = self._usage_marks.get(path.name)
-            self._usage_marks[path.name] = now_total
-            if last is None or now_total < last:
-                # First sight, or the transport restarted. Re-baseline.
-                continue
-            delta = now_total - last
-            if delta:
-                path.usage_gb += delta / 1_000_000_000.0
-                self._usage_store.mark_dirty()
-
-            # THROUGHPUT, from the same deltas.
-            #
-            # tx_bps/rx_bps were in the schema, serialized, and null on every
-            # sample forever: sample_counters computes them from
-            # /sys/class/net/<wg_iface>, and packet mode has no per-leg wg
-            # interface. So the console, the series and any graph built on them
-            # had a throughput field that was never once populated.
-            #
-            # The transport's own per-link counters are the packet-mode truth,
-            # and this loop already holds their deltas.
-            if prev is not None:
-                prev_total, prev_at = prev
-                span = now - prev_at
-                # A tick that took no measurable time yields no rate. Dividing
-                # by it would produce an infinity that renders as a spike.
-                if span > 0.05 and now_total >= prev_total:
-                    dtx = max(0, tx - (prev_tx if prev_tx is not None else tx))
-                    drx = max(0, rx - (prev_rx if prev_rx is not None else rx))
-                    # Split by the direction each counter actually moved rather
-                    # than halving, or an upload reads as symmetric traffic.
-                    path.tx_bps = (dtx * 8.0) / span
-                    path.rx_bps = (drx * 8.0) / span
-
-    def save_usage_state(self, *, force: bool = False) -> None:
+    def save_usage_state(self, *, force: bool = False) -> bool:
         """Persist measured usage. Rate-limited inside the store; forced on
         shutdown, which is the write that actually matters on a router that
         gets unplugged."""
-        self._usage_store.mark_dirty()
-        self._usage_store.maybe_flush({p.name: p.usage_gb for p in self.paths}, force=force)
+        return self.usage_ledger.save(self.paths, force=force)
 
     def _joinable_tier(self, exclude: str | None = None) -> int:
         """The tier an announced leg should land on to JOIN rather than evict.

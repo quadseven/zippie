@@ -324,7 +324,7 @@ def _agent(tmp_path, paths=None):
 def _freeze(agent, day: date) -> FrozenToday:
     """Give the agent's own usage store a calendar the test controls."""
     today = FrozenToday(day)
-    agent._usage_store = UsageStore(agent.config.state_dir, clock=FakeClock(), today=today)
+    agent.usage_ledger.store = UsageStore(agent.config.state_dir, clock=FakeClock(), today=today)
     return today
 
 
