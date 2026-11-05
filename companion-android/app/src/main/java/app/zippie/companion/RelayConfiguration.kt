@@ -47,9 +47,21 @@ data class RelayConfiguration(
      * NO DEFAULT. It named one specific household's router, on every install.
      */
     val consoleLanHost: String = "",
-    /** The console over the tailnet. Answers from anywhere on earth, which is
-     *  exactly why reaching it proves nothing about where this phone is.
-     *  NO DEFAULT: it named a specific tailnet host. */
+    /**
+     * The console over the tailnet. Answers from anywhere on earth, which is
+     * exactly why reaching it proves nothing about where this phone is.
+     * NO DEFAULT: it named a specific tailnet host.
+     *
+     * DECIDED (#154): this is the ONLY off-LAN path, so off the router's LAN
+     * the app requires the tailnet. The name resolves publicly to a
+     * CGNAT tailnet address that only Tailscale routes, so a phone without it
+     * gets a timeout rather than an error. [BondStatusClient.unreachableReason]
+     * checks this phone's own addresses when every candidate fails, and the
+     * screen says "not on the tailnet" instead of "not answering". A public
+     * console endpoint was rejected because it adds an authenticated public
+     * surface to a device that has none; routing console traffic through the
+     * relay's home transport remains a candidate for later.
+     */
     val consoleUrl: String = "",
     /** Zero means unlimited - see DataBudget for why inventing a cap would be
      *  wrong. */
