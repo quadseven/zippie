@@ -352,7 +352,7 @@ def _rise_is_rate_limited(path: PathRuntime, policy: PolicyConfig) -> bool:
 
 # How hard a metered leg is held back once a free leg has PROVEN it carries.
 #
-# A multiplier, never a tier. Tier is a HARD gate (see agent._joinable_tier) and
+# A multiplier, never a tier. Tier is a HARD gate (see LegRoster._joinable_tier) and
 # using it here would mean that the moment the wire's proof went stale - one
 # missed probe, a renumber, a cable nudged - the metered legs would already be
 # gated OUT and the household would have no bond at all until the next pass
