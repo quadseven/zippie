@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fnmatch
 import json
 import logging
 import os
@@ -26,7 +25,9 @@ from zippie import (
     status_doc,
     telemetry,
     wifi,
-    wifi_uci,
+    # Re-exported: tests patch station_info as agent.wifi_uci, and the roster's
+    # real host adapter reads that same module at call time.
+    wifi_uci,  # noqa: F401
 )
 from zippie.config import load_config
 from zippie.counters import (
@@ -35,14 +36,12 @@ from zippie.counters import (
     SeriesStore,
 )
 from zippie.console import encode_json_body as encode_json_body
-from zippie.dynamic import DynamicLeg, DynamicLegs
+from zippie.dynamic import DynamicLegs
 from zippie.leg_verdict import PACKET_LINK_STALE_S
 from zippie.models import (
     AgentConfig,
     CostClass,
     Datapath,
-    PathConfig,
-    PathMatch,
     PathRuntime,
     PathState,
     PolicyConfig,
@@ -50,6 +49,7 @@ from zippie.models import (
 from zippie.pairing import PairingRequests
 from zippie.status_doc import projected_idle_mb_per_day as projected_idle_mb_per_day
 from zippie.store import HomeAddressStore, LegStore, UsageStore
+from zippie.leg_roster import DynamicChange, LegRoster
 from zippie.usage_ledger import TransportLinkCounters, UsageLedger
 
 log = logging.getLogger("zippie.agent")
@@ -470,28 +470,13 @@ class BondAgent:
         # The usage ledger owns usage.json, the delta marks and the throughput
         # baselines (zippie/usage_ledger.py, #375).
         self.usage_ledger = UsageLedger(UsageStore(self.config.state_dir))
-        self._leg_store = LegStore(self.config.state_dir)
-        # Legs that announce themselves and expire. NOT in zippie.toml, on
-        # purpose - see zippie/dynamic.py for why a phone in a config file was
-        # the wrong model.
-        self.dynamic = DynamicLegs()
+        # The leg roster owns legs.json, the announced legs and the zippie.toml
+        # baseline, and is the one writer that adds and removes legs from
+        # self.paths (zippie/leg_roster.py, #375).
+        self._leg_roster = LegRoster(self.paths, leg_store=LegStore(self.config.state_dir))
         # Phones on ethernet asking for the console token before they can
         # announce. In memory only - see zippie/pairing.py.
         self.pairing = PairingRequests()
-        self._dynamic_paths: dict[str, PathRuntime] = {}
-        # The values that came from zippie.toml, captured before any override
-        # touches them. Without this, overrides are ONE WAY: clearing one leaves
-        # the overridden value in place until a restart re-reads the file, so
-        # "I set that cap by mistake and removed it" does not actually remove
-        # it. Verified live - legs.json was emptied and the cap stayed at 15.
-        self._config_baseline: dict[str, dict[str, Any]] = {
-            path.name: {
-                field: getattr(path.config, field)
-                for field in LegStore.OVERRIDABLE
-                if hasattr(path.config, field)
-            }
-            for path in self.paths
-        }
         self._transport_links: set[int] = set()
         # Last-logged packet-mode facts, so the control loop reports TRANSITIONS
         # rather than restating the steady state once a tick (#87). Declared
@@ -632,6 +617,50 @@ class BondAgent:
         self._series = SeriesStore()
         self._assign_ports()
 
+    @property
+    def leg_roster(self) -> LegRoster:
+        """The roster. An agent assembled with object.__new__, which several
+        tests do to stand up one predicate, gets an empty one on first touch
+        rather than an AttributeError from a field it never set."""
+        roster = self.__dict__.get("_leg_roster")
+        if roster is None:
+            roster = self.__dict__["_leg_roster"] = LegRoster()
+        return roster
+
+    # The roster's state under the names the console seam, the status document
+    # and the tests already use. Assigning one replaces the roster's.
+    @property
+    def _leg_store(self) -> LegStore:
+        return self.leg_roster.leg_store
+
+    @_leg_store.setter
+    def _leg_store(self, store: LegStore) -> None:
+        self.leg_roster.leg_store = store
+
+    @property
+    def dynamic(self) -> DynamicLegs:
+        return self.leg_roster.dynamic
+
+    @dynamic.setter
+    def dynamic(self, legs: DynamicLegs) -> None:
+        self.leg_roster.dynamic = legs
+
+    @property
+    def _dynamic_paths(self) -> dict[str, PathRuntime]:
+        return self.leg_roster.dynamic_paths
+
+    @_dynamic_paths.setter
+    def _dynamic_paths(self, paths: dict[str, PathRuntime]) -> None:
+        self.leg_roster.dynamic_paths = paths
+
+    @property
+    def _config_baseline(self) -> dict[str, dict[str, Any]]:
+        return self.leg_roster.config_baseline
+
+    @_config_baseline.setter
+    def _config_baseline(self, baseline: dict[str, dict[str, Any]]) -> None:
+        self.leg_roster.config_baseline = baseline
+
     def _assign_ports(self) -> None:
         ports = list(self.config.home.ports)
         for i, p in enumerate(self.paths):
@@ -650,321 +679,26 @@ class BondAgent:
             run.mkdir(parents=True, exist_ok=True)
             os.chmod(state, 0o700)
 
-    # AI-REVIEW(grug-elder, 2026-07-30, infra#2098): match_interfaces split
-    # into per-match-type helpers; cyclomatic 24 -> small single-purpose funcs.
-    @staticmethod
-    def _best_candidate(candidates: list) -> Any:
-        """Prefer a link that already has an address; tie-break by name."""
-        ranked = sorted(candidates, key=lambda c: (not c.has_v4, c.ifname))
-        return ranked[0] if ranked else None
-
-    @staticmethod
-    def _match_by_interface(pattern: str, links: list, by_iface: dict, used: set):
-        """Exact name first, then fnmatch - "apcli*" binds whichever station
-        interface the hotspot landed on. SSIDs are user-editable at any moment
-        and must never be load-bearing (the hotspot was renamed mid-trip on
-        2026-07-30 and the bond silently lost a path); the platform's
-        interface names are the stable identity."""
-        exact = by_iface.get(pattern)
-        if exact is not None:
-            return exact
-        return BondAgent._best_candidate(
-            [
-                link
-                for link in links
-                if link.ifname not in used and fnmatch.fnmatch(link.ifname, pattern)
-            ]
-        )
-
-    @staticmethod
-    def _match_by_any(links: list, used: set, gateways: dict | None = None):
-        """Adopt ANY uplink - a hotel, a hotspot, Starlink, whatever is there.
-
-        This is what makes a leg a slot rather than a named device, so the box
-        bonds whatever it finds without a config edit per venue.
-
-        REQUIRING A GATEWAY IS THE SAFETY RAIL, NOT A DETAIL. "Has an address
-        and is UP" also describes br-lan, which on the travel router carries 10.99.0.1 and
-        is otherwise indistinguishable from a candidate. Adopting it would
-        bond the router through its own LAN - a loop whose traffic exits via
-        the very uplinks being balanced, which is the same class of mistake
-        list_links already avoids for tailscale0.
-
-        Ordered by route metric so the box prefers the uplink the kernel
-        already prefers, instead of whichever interface happened to enumerate
-        first.
-        """
-        gateways = {} if gateways is None else gateways
-        cands = [
-            link
-            for link in links
-            if link.ifname not in used
-            and link.has_v4
-            and link.operstate.upper() in ("UP", "UNKNOWN")
-            and link.ifname in gateways
-        ]
-        return cands[0] if cands else None
-
-    def _resolve_match(
-        self, m, links: list, by_iface: dict, by_ssid: dict, used: set, gateways: dict | None = None
-    ):
-        if m.type == "interface" and m.interface:
-            return self._match_by_interface(m.interface, links, by_iface, used)
-        if m.type == "ssid" and m.ssid:
-            return self._best_candidate(by_ssid.get(m.ssid) or [])
-        if m.type == "any":
-            return self._match_by_any(links, used, gateways)
-        return None
+    # The pure matchers live in zippie/leg_roster.py (#375). These names stay
+    # because tests and older notes call them on the agent.
+    _best_candidate = staticmethod(LegRoster._best_candidate)
+    _match_by_interface = staticmethod(LegRoster._match_by_interface)
+    _match_by_any = staticmethod(LegRoster._match_by_any)
 
     def _flag_shadowed_uplinks(self, links: list, used: set) -> None:
-        """Name the usable uplink a leg's pattern matched and nobody took.
-
-        `interface = "apcli*"` matches both station radios here.
-        _match_by_interface returns cands[0] and discards the rest in silence,
-        so a second working uplink simply is not in the bond and nothing says
-        why (#212). This does not change which one is chosen - that is #154 and
-        it needs the config split - it only stops the choice being invisible.
-
-        AN EXACT NAME REPORTS NOTHING, and needs no special case to do so:
-        fnmatch on a literal matches only that literal, and the filter below
-        already excludes this leg's own interface. A guard testing for glob
-        characters was written here first and then deleted - removing it changed
-        no test, which is the definition of code that was not doing anything.
-        """
-        for path in self.paths:
-            match = path.config.match
-            previous = path.shadowed_interfaces
-            shadowed: list[str] = []
-            if match.type == "interface" and match.interface and path.interface:
-                shadowed = sorted(
-                    link.ifname
-                    for link in links
-                    if link.ifname != path.interface
-                    and link.ifname not in used
-                    # A link with no address is not a hidden uplink, it is a
-                    # link that cannot carry anything.
-                    and link.has_v4
-                    and fnmatch.fnmatch(link.ifname, match.interface)
-                )
-            path.shadowed_interfaces = shadowed
-            # EDGE-TRIGGERED. This runs every control pass and the condition
-            # persists for as long as the config is ambiguous, so an
-            # unconditional line would bury the event under copies of itself -
-            # the same rule _log_leg_exclusions and the standdown hold follow.
-            if shadowed and shadowed != previous:
-                log.warning(
-                    "leg %s: pattern %r also matches %s, which %s usable and "
-                    "in NO leg - a working uplink is not in the bond. Give it "
-                    "its own path rather than sharing a glob (#154)",
-                    path.name,
-                    match.interface,
-                    ", ".join(shadowed),
-                    "is" if len(shadowed) == 1 else "are",
-                )
-            elif previous and not shadowed:
-                log.info("leg %s: no longer shadowing any uplink", path.name)
+        LegRoster._flag_shadowed_uplinks(self.paths, links, used)
 
     def match_interfaces(self) -> None:
-        links = net.list_links()
-        by_iface = {link.ifname: link for link in links}
-        by_ssid: dict[str, list] = {}
-        for link in links:
-            if link.ssid:
-                by_ssid.setdefault(link.ssid, []).append(link)
-
-        # Read once per pass, then ordered by the kernel's own preference so an
-        # "any" slot takes the best uplink rather than the first enumerated.
-        gateways = net.wan_gateways()
-        links = sorted(links, key=lambda link: 0 if link.ifname in gateways else 1)
-
-        # EXCLUSIVITY IS KEYED ON THE RESOURCE ACTUALLY CONTENDED FOR.
-        #
-        # For a physical leg that is the interface: two paths bonding one uplink
-        # would double-count its capacity, and the bond would be one link
-        # wearing two hats with every weight computed off it a lie.
-        #
-        # A COMPANION LEG DOES NOT CONTEND FOR THE INTERFACE. Its identity is
-        # the remote phone; br-lan is merely the road used to reach it. Two
-        # phones on the same bridge are two independent cellular uplinks, so
-        # they share the bridge freely and exclude each other on ENDPOINT
-        # instead - pointing two legs at one phone would double-count it exactly
-        # the way two paths on one uplink do.
-        #
-        # Found live 2026-08-05: a second phone joined the LAN, ran the relay,
-        # and was silently dropped because the first had already claimed br-lan.
-        used: set[str] = set()
-        used_relays: set[str] = set()
-        for path in self.paths:
-            relay = (path.config.relay_endpoint or "").strip()
-            chosen = self._resolve_match(
-                path.config.match, links, by_iface, by_ssid, used, gateways
-            )
-            if relay:
-                taken = relay in used_relays
-            else:
-                taken = chosen is not None and chosen.ifname in used
-            if chosen and chosen.has_v4 and not taken:
-                path.interface = chosen.ifname
-                # Recorded with the interface, from the SAME LinkInfo that was
-                # just matched, so the address can never describe a different
-                # interface than the one the leg ended up on (#258).
-                path.local_ip = chosen.ipv4
-                path.ssid = chosen.ssid
-                # Cleared on success, or a leg that recovered would keep
-                # explaining a failure it no longer has.
-                path.bind_error = None
-                if relay:
-                    used_relays.add(relay)
-                else:
-                    used.add(chosen.ifname)
-            else:
-                path.interface = None
-                # Cleared with the interface. A stale address would keep a leg
-                # dialling a site-specific home address after it left that site.
-                path.local_ip = None
-                # RECORDED UNCONDITIONALLY, not only while the leg is UP. The
-                # probe sets DOWN for exactly this case, so gating on state
-                # meant the accurate reason survived one tick and every tick
-                # afterwards reported the generic one - which is why the live
-                # router showed the wrong message steadily rather than
-                # flickering (#45).
-                path.bind_error = (
-                    "another leg already relays through this phone"
-                    if relay and taken
-                    else "no matching uplink interface"
-                )
-                if path.state != PathState.DOWN:
-                    path.last_error = path.bind_error
-
-        # AFTER the loop, because "unclaimed" is only knowable once every leg
-        # has had its turn. Computed mid-loop, a link that a LATER leg legally
-        # takes would be reported as hidden - which is exclusivity working
-        # correctly, and would train the reader to ignore the warning.
-        self._flag_shadowed_uplinks(links, used)
+        """Bind each leg to an uplink. See LegRoster.match."""
+        self.leg_roster.match(self.paths)
 
     def apply_auto_labels(self) -> None:
-        """Repeater legs label themselves from the live SSID (#153).
-
-        `hotspot` in zippie.toml is labelled "Phone hotspot" - a static
-        string that was true once, when the leg really was a phone, and has
-        stayed on the console, both phone apps and the diagnostics screen for
-        as long as the travel router has actually been associated to an access point
-        called the upstream AP. The SSID is readable straight off the interface; the
-        agent knows more than the config does and should say so.
-
-        RUN AFTER match_interfaces, IN THE SAME TICK - it needs this pass's
-        `path.interface`, and re-deriving every tick (rather than once, on
-        change) is what makes the label follow the live association without
-        an agent restart: nothing else has to notice that the AP changed and
-        call back in.
-
-        WRITES path.auto_label, NEVER path.config.label. See auto_label's own
-        docstring in models.py for why: config.label already has an owner
-        (apply_leg_overrides, which restores the zippie.toml value every tick
-        an override is absent) and a second writer racing it there reproduces
-        #80's shape exactly - one side sets the SSID label, the other puts
-        the static one back, forever, once a tick. A second field has no
-        owner to fight.
-
-        THE OPERATOR ALWAYS WINS, checked directly against legs.json rather
-        than against the leg's current config.label. By the time this runs,
-        apply_leg_overrides has already applied any override to config.label
-        for this tick - so comparing values instead of checking the file
-        would treat "the override happens to read the same as an old
-        auto-label" as "no override", which is one coincidence away from
-        silently overriding the operator's own choice.
-
-        SCOPED TO INTERFACE-MATCHED LEGS whose resolved interface is
-        currently a station radio (iwinfo Mode: Client) - never `ethernet`,
-        never an SSID- or any-matched leg, and never a leg that resolved to
-        an AP radio (ra0/rax0, broadcasting its own SSIDs - see
-        wifi_uci.station_info's docstring for why those can never be the
-        answer here). `uci show wireless` and `iw` are both unusable for
-        this - see wifi_uci.station_info.
-
-        auto_label is set to None - not left holding its last value - for
-        anything not eligible, including a leg that WAS associated a moment
-        ago and has since dropped. That is what stops an unassociated
-        station showing a stale SSID from a previous association, or the
-        literal word "unknown": both are impossible values for this field to
-        hold, because the only way it is ever set to a string is a successful
-        parse of a live, quoted, cross-checked ESSID line.
-        """
-        overrides = self._leg_store.load()
-        for path in self.paths:
-            path.auto_label = self._compute_auto_label(path, overrides)
-
-    @staticmethod
-    def _compute_auto_label(path: PathRuntime, overrides: dict) -> str | None:
-        if path.config.match.type != "interface" or not path.interface:
-            return None
-        if "label" in (overrides.get(path.name) or {}):
-            return None
-        info = wifi_uci.station_info(path.interface)
-        if info is None or not info.is_station or not info.ssid:
-            return None
-        return f"Wi-Fi Repeater - {info.ssid}"
+        """Repeater legs label themselves from the live SSID (#153)."""
+        self.leg_roster.apply_auto_labels(self.paths)
 
     def apply_auto_cost_class(self) -> None:
-        """Repeater legs cost themselves from the live SSID (#25).
-
-        The same shape as apply_auto_labels, and RUN in the same tick, right
-        after it: `hotspot` in zippie.toml is `cost_class = "metered"` - true
-        when the radio is associated to a phone hotspot, and wrong for as long
-        as it is actually sitting on a free house or venue AP. A static value
-        in the config file is wrong half the time whichever way it is set,
-        because the leg's real cost is a property of what it is joined to
-        right now, not of the file the agent booted with.
-
-        WRITES path.auto_cost_class, NEVER path.config.cost_class - for
-        exactly the reason apply_auto_labels never writes path.config.label.
-        config.cost_class already has an owner (apply_leg_overrides, which
-        restores the zippie.toml value every tick an operator override is
-        absent), and a second writer racing it there reproduces #80's shape:
-        one side derives `free` from the SSID, the other puts `metered` back,
-        forever, once a tick. Every cost-ranking and accounting call site
-        reads PathRuntime.effective_cost_class, never config.cost_class
-        directly, so this field actually takes effect rather than being
-        display-only trivia (unlike auto_label, cost_class is not cosmetic -
-        it feeds weighting and usage accounting, so the derivation has to
-        reach those, not just the console).
-
-        THE OPERATOR ALWAYS WINS, checked directly against legs.json rather
-        than against the leg's current config.cost_class - see
-        apply_auto_labels's docstring for why comparing values instead would
-        be one coincidence away from silently overriding a deliberate
-        override. This is the trap #25 names explicitly: an auto-derived
-        value must never be written into legs.json, or it wins forever and
-        the derivation can never correct it again.
-
-        SCOPED to interface-matched legs, currently a station radio, AND
-        currently associated to one of THIS leg's own `config.free_ssids` -
-        an explicit, small, operator-typed allowlist rather than a heuristic,
-        because nothing about an SSID string says whether it is metered.
-        auto_cost_class is None for everything else, including a leg that WAS
-        on a known-free network a moment ago and has since roamed off it -
-        the same "recomputed every tick, never left stale" rule auto_label
-        already follows, and for the same reason: a value that lingers past
-        the association that justified it is worse than no value.
-        """
-        overrides = self._leg_store.load()
-        for path in self.paths:
-            path.auto_cost_class = self._compute_auto_cost_class(path, overrides)
-
-    @staticmethod
-    def _compute_auto_cost_class(path: PathRuntime, overrides: dict) -> CostClass | None:
-        if path.config.match.type != "interface" or not path.interface:
-            return None
-        if "cost_class" in (overrides.get(path.name) or {}):
-            return None
-        if not path.config.free_ssids:
-            return None
-        info = wifi_uci.station_info(path.interface)
-        if info is None or not info.is_station or not info.ssid:
-            return None
-        if info.ssid not in path.config.free_ssids:
-            return None
-        return CostClass.FREE
+        """Repeater legs cost themselves from the live SSID (#25)."""
+        self.leg_roster.apply_auto_cost_class(self.paths)
 
     def _wg_iface(self, path: PathRuntime) -> str:
         return f"{self.config.interface_prefix}{self.paths.index(path)}"
@@ -2290,176 +2024,18 @@ class BondAgent:
         gets unplugged."""
         return self.usage_ledger.save(self.paths, force=force)
 
-    def _joinable_tier(self, exclude: str | None = None) -> int:
-        """The tier an announced leg should land on to JOIN rather than evict.
+    def reconcile_dynamic_legs(self) -> DynamicChange:
+        """Bring self.paths in line with what is announced, then drop the
+        transport link of every leg that expired or moved.
 
-        Mirrors packet_mode_legs' own selection so the answer is the tier that
-        will actually be admitted, not a plausible-looking neighbouring one:
-        legs that have an interface, are not DOWN, and the minimum tier among
-        them. A dead tier-1 leg must not drag a phone up beside a corpse while
-        tier 2 is the thing carrying.
-
-        Falls back to 1 when there is nothing to join - the first leg of all
-        has no active tier to copy, and 1 is then correct rather than
-        arbitrary.
+        The roster decides which legs those are and says so in its result; the
+        links are the transport's, so they are dropped here, before the next
+        step reads the leg list (LegRoster.reconcile_dynamic).
         """
-        # EXCLUDE THE LEG BEING RESOLVED. On first join the leg is not in
-        # self.paths yet, so this was never needed; on RENEWAL it is, and
-        # including it makes the answer self-referential - a phone sitting at
-        # tier 2 would compute min(...) = 2 from its own tier and conclude it
-        # was already right, no matter where the physical legs had moved to.
-        candidates = [p for p in self.paths if p.name != exclude]
-        live = [p for p in candidates if p.interface and p.state is not PathState.DOWN]
-        if not live:
-            live = [p for p in candidates if p.interface]
-        if not live:
-            return 1
-        return min(p.config.tier for p in live)
-
-    def reconcile_dynamic_legs(self) -> None:
-        """Bring self.paths in line with what is currently announced.
-
-        Runs before matching so an announced leg is matched, probed and
-        weighted on the SAME tick it arrives, rather than sitting invisible
-        until the next one.
-
-        A leg whose lease has expired is REMOVED, not marked down. Leaving it
-        as a permanent down row is precisely the phantom this replaces - the
-        config file already did that, and it was the bug.
-        """
-        live = {leg.name: leg for leg in self.dynamic.live()}
-        # Loaded ONCE per pass, not once per leg: this reads a file, and the
-        # loop below runs every control tick.
-        overrides = self._leg_store.load()
-
-        for name in list(self._dynamic_paths):
-            if name not in live:
-                path = self._dynamic_paths.pop(name)
-                if path in self.paths:
-                    self.paths.remove(path)
-                self._drop_transport_path(name)
-                log.info("dynamic leg %s expired and was removed", name)
-
-        for name, leg in live.items():
-            existing = self._dynamic_paths.get(name)
-            if existing is None:
-                # A LEG THAT DID NOT ASK FOR A TIER JOINS THE ONE ALREADY
-                # CARRYING. It does not get to define it.
-                #
-                # packet_mode_legs admits only min(tier), so a phone landing on
-                # tier 1 does not join the bond, it REPLACES it. On 2026-08-08
-                # an operator had demoted ethernet to 2 and the hotspot to 3,
-                # a phone announced without mentioning tier, and the bond
-                # carried on that phone alone for an hour while both router
-                # uplinks sat idle. Nothing alerted: one carrying leg with no
-                # loss looks healthy from the datapath.
-                tier = leg.tier if leg.tier is not None else self._joinable_tier(exclude=name)
-                cfg = PathConfig(
-                    name=name,
-                    match=PathMatch(type="interface", interface="br-lan"),
-                    # BORN WITH THE OPERATOR'S NAME, not born wrong and
-                    # corrected. apply_leg_overrides would fix this a few lines
-                    # later either way, but between the two a telemetry sample
-                    # or a console read sees a label that is about to change -
-                    # and "the value depends where in the loop you look" is the
-                    # defect this whole change is about (#80).
-                    label=(overrides.get(name) or {}).get("label") or leg.label,
-                    weight=leg.weight,
-                    tier=tier,
-                    cost_class=CostClass.METERED,
-                    relay_endpoint=leg.relay_endpoint,
-                )
-                path = PathRuntime(name=name, config=cfg, isp_name=leg.isp_name)
-                self._dynamic_paths[name] = path
-                self.paths.append(path)
-                log.info("dynamic leg %s announced at %s", name, leg.relay_endpoint)
-                continue
-            self._renew_dynamic_leg(existing, leg, name, overrides)
-
-    def _renew_dynamic_leg(
-        self, existing: PathRuntime, leg: DynamicLeg, name: str, overrides: dict
-    ) -> None:
-        """Bring an ALREADY-KNOWN announced leg in line with this announcement.
-
-        Split out of reconcile_dynamic_legs because three unrelated "keep this
-        in sync" rules had accumulated in its loop - the endpoint, the tier and
-        the label - each with its own precedence and its own reason, and reading
-        any one of them meant holding the other two in your head.
-        """
-        # An announcement is also a RENEWAL of the address. A phone that
-        # moved on DHCP must not leave the old endpoint being dialled.
-        if existing.config.relay_endpoint != leg.relay_endpoint:
-            log.info(
-                "dynamic leg %s moved %s -> %s",
-                name,
-                existing.config.relay_endpoint,
-                leg.relay_endpoint,
-            )
-            object.__setattr__(existing.config, "relay_endpoint", leg.relay_endpoint)
+        change = self.leg_roster.reconcile_dynamic(self.paths)
+        for name in change.released:
             self._drop_transport_path(name)
-        if existing.isp_name != leg.isp_name:
-            log.info("dynamic leg %s ISP name changed to %r", name, leg.isp_name)
-            existing.isp_name = leg.isp_name
-        # THE OPERATOR'S NAME WINS OVER THE DEVICE'S (#80).
-        #
-        # Without this the two writers fight forever. reconcile_dynamic_legs
-        # reinstates the announced label, apply_leg_overrides re-applies the
-        # legs.json one immediately after, and the pair runs every tick - so
-        # the field flips twice per pass and the override logs a line each
-        # time. Measured on the travel router: that message was 25 of the last 25 log
-        # entries, about one every 1.3 s, which evicted everything else from
-        # the router's small in-RAM ring buffer.
-        #
-        # A phone announces what it calls itself and cannot know it is
-        # "Operator - iPhone 17 Pro Max"; legs.json is a human saying so. That
-        # is the precedence apply_leg_overrides already documents - "an
-        # override is the more recent human decision" - and this path simply
-        # never learned about it.
-        #
-        # Only the OVERRIDDEN field is skipped. A leg nobody has named still
-        # tracks its announced label, including when that label changes, and
-        # clearing the override hands the announced name straight back on
-        # the next pass.
-        # RE-RESOLVED ON EVERY RENEWAL, not just at first join (#79).
-        #
-        # The tier used to be decided once, in the branch above, and every
-        # later announcement updated the endpoint and the label and nothing
-        # else. So the tier a leg landed on at announce time was the tier it
-        # kept. Measured on the travel router: a phone joined at tier 2 beside two
-        # physical legs, the operator moved those legs back to tier 1, and
-        # the phone stayed at 2 - leased, healthy, and carrying nothing,
-        # because packet_mode_legs admits only min(tier).
-        #
-        # That is the mild direction of #67 and still a leg silently not
-        # carrying. Only a leg that did NOT ask for a tier follows the bond;
-        # an explicit tier is an instruction and is never overruled.
-        if leg.tier is None:
-            wanted = self._joinable_tier(exclude=name)
-            if existing.config.tier != wanted:
-                log.info(
-                    "dynamic leg %s: tier %s -> %s, following the carrying tier",
-                    name,
-                    existing.config.tier,
-                    wanted,
-                )
-                object.__setattr__(existing.config, "tier", wanted)
-        named_by_operator = "label" in (overrides.get(name) or {})
-        if not named_by_operator and existing.config.label != leg.label:
-            # LOGGED, because this is also the path an override RETURNS
-            # through. Clearing a label in legs.json leaves no baseline for
-            # a dynamic leg to restore from - apply_leg_overrides only
-            # restores values that came from zippie.toml - so the announced
-            # name comes back here, and without this line that handover was
-            # completely silent. An override that quietly stops applying is
-            # how a leg changes identity with nobody noticing.
-            #
-            # Safe to log unconditionally now: it fires only on a real
-            # change, and the every-tick flip that made this message the
-            # entire contents of `logread` is what the guard above ended.
-            log.info(
-                "dynamic leg %s: label %r -> %r (announced)", name, existing.config.label, leg.label
-            )
-            object.__setattr__(existing.config, "label", leg.label)
+        return change
 
     def _allocate_transport_pid(self, name: str) -> int:
         """The transport id for this leg, stable for as long as the leg exists.
@@ -2534,64 +2110,8 @@ class BondAgent:
         self._link_remotes.pop(pid, None)
 
     def apply_leg_overrides(self) -> None:
-        """Let legs.json win over zippie.toml.
-
-        An override is the more recent human decision - "the provider says the
-        cap is 15 GB, not the 5 you configured" - so it takes precedence. Only
-        whitelisted fields are applied; anything else in the file is
-        descriptive (carrier, plan name) and never touches routing.
-
-        Applied to config objects rather than runtime state so a later
-        recompute cannot quietly undo them.
-        """
-        overrides = self._leg_store.load()
-        for p in self.paths:
-            entry = overrides.get(p.name) or {}
-            baseline = self._config_baseline.get(p.name) or {}
-            for field in LegStore.OVERRIDABLE:
-                if field not in entry:
-                    # RESTORE, do not skip. An override that has been removed
-                    # must give the configured value back; leaving the last
-                    # override in place makes removal a no-op until restart.
-                    original = baseline.get(field)
-                    if original is not None and getattr(p.config, field, None) != original:
-                        log.info("leg %s: %s override cleared, back to %r", p.name, field, original)
-                        object.__setattr__(p.config, field, original)
-                    continue
-                value = entry[field]
-                try:
-                    current = getattr(p.config, field)
-                except AttributeError:
-                    continue
-                try:
-                    # Coerced to the type the config already uses. A hand-typed
-                    # "15" for a float field would otherwise compare and
-                    # arithmetic differently everywhere downstream.
-                    if isinstance(current, bool):
-                        coerced = bool(value)
-                    elif isinstance(current, int):
-                        coerced = int(value)
-                    elif isinstance(current, float):
-                        coerced = float(value)
-                    else:
-                        coerced = value
-                except (TypeError, ValueError, OverflowError):
-                    # OverflowError is int(inf): json reads `1e999` as a float
-                    # and a hand-edited file can hold one. Uncaught, it ended
-                    # every control pass here, from a file nothing rewrites.
-                    log.warning(
-                        "leg %s: override %s=%r is not usable; ignoring", p.name, field, value
-                    )
-                    continue
-                if coerced != current:
-                    log.info(
-                        "leg %s: %s overridden %r -> %r (legs.json)",
-                        p.name,
-                        field,
-                        current,
-                        coerced,
-                    )
-                    object.__setattr__(p.config, field, coerced)
+        """Let legs.json win over zippie.toml. See LegRoster.apply_overrides."""
+        self.leg_roster.apply_overrides(self.paths)
 
     def _carrying_best_tail_ms(self) -> float | None:
         """The best (lowest) latency reading among legs that could plausibly
