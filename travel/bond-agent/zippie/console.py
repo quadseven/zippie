@@ -270,291 +270,296 @@ o.textContent=JSON.stringify(j,null,2)} t(); setInterval(t,1000)
 </script></body></html>"""
 
 
-def make_handler(seam: ConsoleSeam) -> type[BaseHTTPRequestHandler]:
-    """A request handler class bound to `seam`, shared by every listener."""
+class ConsoleHandler(BaseHTTPRequestHandler):
+    """The console's routes. make_handler binds a seam to a subclass of it."""
+
+    seam: ConsoleSeam
     # Which host each leg last CLAIMED, when that differed from where its
     # announce came from (#252). Only for de-duplicating the warning: a
-    # phone renews every 15s and one line per renewal would bury it.
-    claimed_hosts: dict[str, str] = {}
+    # phone renews every 15s and one line per renewal would bury it. Set per
+    # make_handler call, never shared between two consoles.
+    claimed_hosts: dict[str, str]
 
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, fmt: str, *args: Any) -> None:
-            log.debug("http: " + fmt, *args)
+    def log_message(self, fmt: str, *args: Any) -> None:
+        log.debug("http: " + fmt, *args)
 
-        def _reject(self, code: int, message: str) -> None:
-            # LOGGED AT WARNING, NOT DEBUG. The agent runs at INFO unless
-            # somebody passes --verbose, so a refusal recorded at debug is
-            # a refusal recorded nowhere. That cost a night: a phone on the
-            # router's wifi held a stale console token, every announce it
-            # made was answered 401 in silence, and from the router the
-            # device was indistinguishable from one that never tried.
-            #
-            # The caller is named because "an announce was refused" does
-            # not tell you WHICH device to go fix.
-            #
-            # NEVER the token, offered or real. A log that debugs an auth
-            # failure by printing the credential is the worse bug, and this
-            # file sits on a router whose filesystem is readable by
-            # anything that gets a shell.
-            log.warning(
-                "console refused %s %s from %s: %d %s",
-                self.command,
-                self.path,
-                self.client_address[0],
-                code,
-                message,
-            )
-            body = json.dumps({"error": message}).encode("utf-8")
-            self.send_response(code)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+    def _reject(self, code: int, message: str) -> None:
+        # LOGGED AT WARNING, NOT DEBUG. The agent runs at INFO unless
+        # somebody passes --verbose, so a refusal recorded at debug is
+        # a refusal recorded nowhere. That cost a night: a phone on the
+        # router's wifi held a stale console token, every announce it
+        # made was answered 401 in silence, and from the router the
+        # device was indistinguishable from one that never tried.
+        #
+        # The caller is named because "an announce was refused" does
+        # not tell you WHICH device to go fix.
+        #
+        # NEVER the token, offered or real. A log that debugs an auth
+        # failure by printing the credential is the worse bug, and this
+        # file sits on a router whose filesystem is readable by
+        # anything that gets a shell.
+        log.warning(
+            "console refused %s %s from %s: %d %s",
+            self.command,
+            self.path,
+            self.client_address[0],
+            code,
+            message,
+        )
+        body = json.dumps({"error": message}).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
-        def _authed(self) -> bool:
-            return _token_matches(self.headers.get("Authorization"), seam.console_token())
+    def _authed(self) -> bool:
+        return _token_matches(self.headers.get("Authorization"), self.seam.console_token())
 
-        def _json_body(self) -> dict | None:
-            try:
-                length = int(self.headers.get("Content-Length") or 0)
-            except ValueError:
-                return None
-            if length <= 0 or length > MAX_BODY_BYTES:
-                return None
-            try:
-                body = json.loads(self.rfile.read(length))
-            except (ValueError, OSError):
-                return None
-            return body if isinstance(body, dict) else None
+    def _json_body(self) -> dict | None:
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return None
+        if length <= 0 or length > MAX_BODY_BYTES:
+            return None
+        try:
+            body = json.loads(self.rfile.read(length))
+        except (ValueError, OSError):
+            return None
+        return body if isinstance(body, dict) else None
 
-        def do_POST(self) -> None:  # noqa: N802
-            parsed = urlparse(self.path)
-            if parsed.path == "/api/legs/pair":
-                self._pair_ask()
-                return
-            if parsed.path not in (
-                "/api/legs/announce",
-                "/api/legs/withdraw",
-                "/api/legs/pair/approve",
-            ):
-                self._reject(404, "not found")
-                return
-            # AUTHENTICATED, because an announcement adds a leg the router
-            # will DIAL. Unauthenticated, anything on this wifi could point
-            # the bond at an address it chose.
-            if not self._authed():
-                self._reject(401, "bad or missing bearer token")
-                return
-            body = self._json_body()
-            if body is None:
-                self._reject(400, "body must be a JSON object, 1..16384 bytes")
-                return
+    def do_POST(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/legs/pair":
+            self._pair_ask()
+            return
+        if parsed.path not in (
+            "/api/legs/announce",
+            "/api/legs/withdraw",
+            "/api/legs/pair/approve",
+        ):
+            self._reject(404, "not found")
+            return
+        # AUTHENTICATED, because an announcement adds a leg the router
+        # will DIAL. Unauthenticated, anything on this wifi could point
+        # the bond at an address it chose.
+        if not self._authed():
+            self._reject(401, "bad or missing bearer token")
+            return
+        body = self._json_body()
+        if body is None:
+            self._reject(400, "body must be a JSON object, 1..16384 bytes")
+            return
 
-            if parsed.path == "/api/legs/pair/approve":
-                self._pair_approve(body)
-                return
+        if parsed.path == "/api/legs/pair/approve":
+            self._pair_approve(body)
+            return
 
-            if parsed.path.endswith("withdraw"):
-                name = str(body.get("name") or "")
-                gone = seam.dynamic.withdraw(name)
-                log.info(
-                    "leg withdrawn name=%s existed=%s by=%s",
-                    name or "<unnamed>",
-                    gone,
-                    self.client_address[0],
-                )
-                payload = json.dumps({"leg": name, "withdrawn": gone}).encode()
-                self._ok(payload)
-                return
-
-            self._announce(body)
-
-        def _announce(self, body: dict) -> None:
+        if parsed.path.endswith("withdraw"):
             name = str(body.get("name") or "")
-            host = _announce_host_for(body, self.client_address[0], claimed_hosts, name)
-
-            try:
-                leg = seam.dynamic.announce(
-                    name=name,
-                    host=host,
-                    port=int(body.get("port") or 0),
-                    label=str(body.get("label") or ""),
-                    weight=int(body.get("weight", 60)),
-                    # ABSENT means "join whatever is carrying", resolved
-                    # in reconcile_dynamic_legs. Defaulting to 1 here made
-                    # a silent announce evict every demoted leg (#67).
-                    tier=(None if body.get("tier") is None else int(body["tier"])),
-                    isp_name=body.get("isp_name"),
-                    lease_s=float(body.get("lease_s", 45)),
-                )
-            except (ValueError, TypeError, OverflowError) as exc:
-                # OverflowError is int() of the inf that json makes of
-                # `1e999`: a bad request, answered as one, not a traceback
-                # in the handler thread.
-                self._reject(400, str(exc))
-                return
-            # The accepted side of the same story. Without it a leg appears
-            # in the bond with no record of who asked for it, and a phone
-            # that announces then goes quiet cannot be told apart from one
-            # that never announced at all.
+            gone = self.seam.dynamic.withdraw(name)
             log.info(
-                "leg announced name=%s endpoint=%s by=%s",
-                leg.name,
-                leg.relay_endpoint,
+                "leg withdrawn name=%s existed=%s by=%s",
+                name or "<unnamed>",
+                gone,
                 self.client_address[0],
             )
-            self._ok(
-                json.dumps(
-                    {
-                        "leg": leg.name,
-                        "endpoint": leg.relay_endpoint,
-                        "lease_s": round(seam.dynamic.remaining(leg.name) or 0, 1),
-                    }
-                ).encode()
+            payload = json.dumps({"leg": name, "withdrawn": gone}).encode()
+            self._ok(payload)
+            return
+
+        self._announce(body)
+
+    def _announce(self, body: dict) -> None:
+        name = str(body.get("name") or "")
+        host = _announce_host_for(body, self.client_address[0], self.claimed_hosts, name)
+
+        try:
+            leg = self.seam.dynamic.announce(
+                name=name,
+                host=host,
+                port=int(body.get("port") or 0),
+                label=str(body.get("label") or ""),
+                weight=int(body.get("weight", 60)),
+                # ABSENT means "join whatever is carrying", resolved
+                # in reconcile_dynamic_legs. Defaulting to 1 here made
+                # a silent announce evict every demoted leg (#67).
+                tier=(None if body.get("tier") is None else int(body["tier"])),
+                isp_name=body.get("isp_name"),
+                lease_s=float(body.get("lease_s", 45)),
             )
+        except (ValueError, TypeError, OverflowError) as exc:
+            # OverflowError is int() of the inf that json makes of
+            # `1e999`: a bad request, answered as one, not a traceback
+            # in the handler thread.
+            self._reject(400, str(exc))
+            return
+        # The accepted side of the same story. Without it a leg appears
+        # in the bond with no record of who asked for it, and a phone
+        # that announces then goes quiet cannot be told apart from one
+        # that never announced at all.
+        log.info(
+            "leg announced name=%s endpoint=%s by=%s",
+            leg.name,
+            leg.relay_endpoint,
+            self.client_address[0],
+        )
+        self._ok(
+            json.dumps(
+                {
+                    "leg": leg.name,
+                    "endpoint": leg.relay_endpoint,
+                    "lease_s": round(self.seam.dynamic.remaining(leg.name) or 0, 1),
+                }
+            ).encode()
+        )
 
-        def _pair_ask(self) -> None:
-            """The phone's half of the handshake, asked until approved.
+    def _pair_ask(self) -> None:
+        """The phone's half of the handshake, asked until approved.
 
-            UNAUTHENTICATED, because the phone has nothing to authenticate
-            with yet; zippie/pairing.py says what protects it instead. The
-            source address, not anything in the body, is what the request
-            is bound to: the token is only ever released back to it.
-            """
-            body = self._json_body()
-            if body is None:
-                self._reject(400, "body must be a JSON object, 1..16384 bytes")
-                return
-            host = self.client_address[0]
-            if seam.pairing.collect(host, str(body.get("code") or "")):
-                log.info("pairing complete by=%s", host)
-                reply = {"pairing": "approved", "token": seam.console_token()}
-                self._ok(json.dumps(reply).encode())
-                return
-            known = any(r["host"] == host for r in seam.pairing.pending())
-            try:
-                req = seam.pairing.request(
-                    name=str(body.get("name") or ""),
-                    label=str(body.get("label") or ""),
-                    host=host,
-                    link=str(body.get("link") or ""),
-                )
-            except ValueError as exc:
-                self._reject(400, str(exc))
-                return
-            # Once per request, not once per poll. Never the code.
-            if not known:
-                log.info("pairing requested name=%s link=ethernet by=%s", req.name, host)
-            reply = {
-                "pairing": "pending",
-                "code": req.code,
-                "expires_s": round(seam.pairing.ttl_s, 1),
-            }
+        UNAUTHENTICATED, because the phone has nothing to authenticate
+        with yet; zippie/pairing.py says what protects it instead. The
+        source address, not anything in the body, is what the request
+        is bound to: the token is only ever released back to it.
+        """
+        body = self._json_body()
+        if body is None:
+            self._reject(400, "body must be a JSON object, 1..16384 bytes")
+            return
+        host = self.client_address[0]
+        if self.seam.pairing.collect(host, str(body.get("code") or "")):
+            log.info("pairing complete by=%s", host)
+            reply = {"pairing": "approved", "token": self.seam.console_token()}
             self._ok(json.dumps(reply).encode())
-
-        def _pair_approve(self, body: dict) -> None:
-            """The operator's half: the code read off the phone's screen."""
-            req = seam.pairing.approve(str(body.get("code") or ""))
-            if req is None:
-                self._reject(403, "no pending pairing with that code")
-                return
-            log.info(
-                "pairing approved name=%s host=%s by=%s",
-                req.name,
-                req.host,
-                self.client_address[0],
+            return
+        known = any(r["host"] == host for r in self.seam.pairing.pending())
+        try:
+            req = self.seam.pairing.request(
+                name=str(body.get("name") or ""),
+                label=str(body.get("label") or ""),
+                host=host,
+                link=str(body.get("link") or ""),
             )
-            self._ok(json.dumps({"leg": req.name, "approved": True}).encode())
+        except ValueError as exc:
+            self._reject(400, str(exc))
+            return
+        # Once per request, not once per poll. Never the code.
+        if not known:
+            log.info("pairing requested name=%s link=ethernet by=%s", req.name, host)
+        reply = {
+            "pairing": "pending",
+            "code": req.code,
+            "expires_s": round(self.seam.pairing.ttl_s, 1),
+        }
+        self._ok(json.dumps(reply).encode())
 
-        def _ok(self, body: bytes, content_type: str = "application/json") -> None:
-            self.send_response(200)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+    def _pair_approve(self, body: dict) -> None:
+        """The operator's half: the code read off the phone's screen."""
+        req = self.seam.pairing.approve(str(body.get("code") or ""))
+        if req is None:
+            self._reject(403, "no pending pairing with that code")
+            return
+        log.info(
+            "pairing approved name=%s host=%s by=%s",
+            req.name,
+            req.host,
+            self.client_address[0],
+        )
+        self._ok(json.dumps({"leg": req.name, "approved": True}).encode())
 
-        def do_PUT(self) -> None:  # noqa: N802
-            parsed = urlparse(self.path)
-            prefix = "/api/legs/"
-            if not parsed.path.startswith(prefix):
-                self._reject(404, "not found")
-                return
+    def _ok(self, body: bytes, content_type: str = "application/json") -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
-            if not self._authed():
-                self._reject(401, "bad or missing bearer token")
-                return
+    def do_PUT(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        prefix = "/api/legs/"
+        if not parsed.path.startswith(prefix):
+            self._reject(404, "not found")
+            return
 
+        if not self._authed():
+            self._reject(401, "bad or missing bearer token")
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self._reject(400, "bad Content-Length")
+            return
+        if length <= 0 or length > MAX_BODY_BYTES:
+            self._reject(400, "body must be 1..16384 bytes")
+            return
+        try:
+            fields = json.loads(self.rfile.read(length))
+        except (ValueError, OSError):
+            self._reject(400, "body is not JSON")
+            return
+        if not isinstance(fields, dict):
+            self._reject(400, "body must be a JSON object")
+            return
+
+        name = unquote(parsed.path[len(prefix) :])
+        try:
+            entry = self.seam.set_leg_fields(name, fields)
+        except KeyError:
+            # Named so a typo is obvious rather than silently creating
+            # overrides for a leg that does not exist.
+            self._reject(404, f"no such leg: {name}")
+            return
+        except ValueError as exc:
+            self._reject(400, str(exc))
+            return
+
+        self._ok(json.dumps({"leg": name, "applied": entry}).encode("utf-8"))
+
+    def do_GET(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        if parsed.path in {"/", "/index.html"}:
+            self._ok(_dashboard_html().encode("utf-8"), "text/html; charset=utf-8")
+            return
+        if parsed.path == "/api/status":
+            self._ok(json.dumps(self.seam.status_dict()).encode("utf-8"))
+            return
+        if parsed.path == "/api/series":
+            self._series(parsed.query)
+            return
+        if parsed.path.lower().endswith(".apk"):
+            self.send_error(403, "serving APKs from agent dashboard is forbidden")
+            return
+        self.send_error(404)
+
+    def _series(self, query: str) -> None:
+        # Server-side history so the graph is populated on load and
+        # survives a reload. `since` (epoch ms) lets the console poll
+        # incrementally instead of refetching the hour.
+        since = None
+        raw = (parse_qs(query or "").get("since") or [None])[0]
+        if raw is not None:
             try:
-                length = int(self.headers.get("Content-Length") or 0)
+                since = int(raw)
             except ValueError:
-                self._reject(400, "bad Content-Length")
-                return
-            if length <= 0 or length > MAX_BODY_BYTES:
-                self._reject(400, "body must be 1..16384 bytes")
-                return
-            try:
-                fields = json.loads(self.rfile.read(length))
-            except (ValueError, OSError):
-                self._reject(400, "body is not JSON")
-                return
-            if not isinstance(fields, dict):
-                self._reject(400, "body must be a JSON object")
-                return
+                # Junk query param must not 500 the console.
+                since = None
+        payload = self.seam.series_payload(since)
+        body, encoding = encode_json_body(payload, self.headers.get("Accept-Encoding"))
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        if encoding:
+            self.send_header("Content-Encoding", encoding)
+            # Content-Encoding varies by request header, so a cache
+            # that stores one and serves it to the other hands a
+            # gzip stream to a client that asked for plain JSON.
+            self.send_header("Vary", "Accept-Encoding")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
-            name = unquote(parsed.path[len(prefix) :])
-            try:
-                entry = seam.set_leg_fields(name, fields)
-            except KeyError:
-                # Named so a typo is obvious rather than silently creating
-                # overrides for a leg that does not exist.
-                self._reject(404, f"no such leg: {name}")
-                return
-            except ValueError as exc:
-                self._reject(400, str(exc))
-                return
 
-            self._ok(json.dumps({"leg": name, "applied": entry}).encode("utf-8"))
-
-        def do_GET(self) -> None:  # noqa: N802
-            parsed = urlparse(self.path)
-            if parsed.path in {"/", "/index.html"}:
-                self._ok(_dashboard_html().encode("utf-8"), "text/html; charset=utf-8")
-                return
-            if parsed.path == "/api/status":
-                self._ok(json.dumps(seam.status_dict()).encode("utf-8"))
-                return
-            if parsed.path == "/api/series":
-                self._series(parsed.query)
-                return
-            if parsed.path.lower().endswith(".apk"):
-                self.send_error(403, "serving APKs from agent dashboard is forbidden")
-                return
-            self.send_error(404)
-
-        def _series(self, query: str) -> None:
-            # Server-side history so the graph is populated on load and
-            # survives a reload. `since` (epoch ms) lets the console poll
-            # incrementally instead of refetching the hour.
-            since = None
-            raw = (parse_qs(query or "").get("since") or [None])[0]
-            if raw is not None:
-                try:
-                    since = int(raw)
-                except ValueError:
-                    # Junk query param must not 500 the console.
-                    since = None
-            payload = seam.series_payload(since)
-            body, encoding = encode_json_body(payload, self.headers.get("Accept-Encoding"))
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            if encoding:
-                self.send_header("Content-Encoding", encoding)
-                # Content-Encoding varies by request header, so a cache
-                # that stores one and serves it to the other hands a
-                # gzip stream to a client that asked for plain JSON.
-                self.send_header("Vary", "Accept-Encoding")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-    return Handler
+def make_handler(seam: ConsoleSeam) -> type[BaseHTTPRequestHandler]:
+    """A request handler class bound to `seam`, shared by every listener."""
+    return type("Handler", (ConsoleHandler,), {"seam": seam, "claimed_hosts": {}})
