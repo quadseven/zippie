@@ -119,12 +119,14 @@ class LegRoster:
         self,
         paths: Iterable[PathRuntime] = (),
         *,
-        leg_store: Optional[LegStore] = None,
+        leg_store: Optional[LegStore],
         host: Optional[RosterHost] = None,
         dynamic: Optional[DynamicLegs] = None,
     ) -> None:
         # Durable per-leg state: legs.json is what the operator TOLD us, and
-        # it overrides the config file.
+        # it overrides the config file. Required, so no caller gets a roster
+        # without one by accident; None is only for an agent that has no state
+        # directory yet, and every rule that reads overrides refuses it loudly.
         self.leg_store = leg_store
         self.host: RosterHost = host if host is not None else NetRosterHost()
         # Legs that announce themselves and expire. NOT in zippie.toml, on
@@ -150,10 +152,11 @@ class LegRoster:
         """True for a leg that announced itself rather than came from the file."""
         return name in self.dynamic_paths
 
-    def derive(self, paths: list[PathRuntime]) -> None:
-        """Both repeater derivations, label then cost, as the tick runs them."""
-        self.apply_auto_labels(paths)
-        self.apply_auto_cost_class(paths)
+    def _overrides(self) -> dict:
+        """legs.json, read now. Refuses a roster built without a store."""
+        if self.leg_store is None:
+            raise RuntimeError("leg roster has no leg store; legs.json cannot be read")
+        return self.leg_store.load()
 
     # AI-REVIEW(grug-elder, 2026-07-30): match_interfaces split
     # into per-match-type helpers; cyclomatic 24 -> small single-purpose funcs.
@@ -396,7 +399,7 @@ class LegRoster:
         hold, because the only way it is ever set to a string is a successful
         parse of a live, quoted, cross-checked ESSID line.
         """
-        overrides = self.leg_store.load()
+        overrides = self._overrides()
         for path in paths:
             path.auto_label = self._compute_auto_label(path, overrides, self.host.station_info)
 
@@ -455,7 +458,7 @@ class LegRoster:
         already follows, and for the same reason: a value that lingers past
         the association that justified it is worse than no value.
         """
-        overrides = self.leg_store.load()
+        overrides = self._overrides()
         for path in paths:
             path.auto_cost_class = self._compute_auto_cost_class(
                 path, overrides, self.host.station_info
@@ -519,7 +522,7 @@ class LegRoster:
         live = {leg.name: leg for leg in self.dynamic.live()}
         # Loaded ONCE per pass, not once per leg: this reads a file, and the
         # loop below runs every control tick.
-        overrides = self.leg_store.load()
+        overrides = self._overrides()
         joined: list[str] = []
         expired: list[str] = []
         moved: list[str] = []
@@ -679,51 +682,59 @@ class LegRoster:
         Applied to config objects rather than runtime state so a later
         recompute cannot quietly undo them.
         """
-        overrides = self.leg_store.load()
+        overrides = self._overrides()
         for p in paths:
             entry = overrides.get(p.name) or {}
             baseline = self.config_baseline.get(p.name) or {}
             for field in LegStore.OVERRIDABLE:
-                if field not in entry:
-                    # RESTORE, do not skip. An override that has been removed
-                    # must give the configured value back; leaving the last
-                    # override in place makes removal a no-op until restart.
-                    original = baseline.get(field)
-                    if original is not None and getattr(p.config, field, None) != original:
-                        log.info("leg %s: %s override cleared, back to %r", p.name, field, original)
-                        object.__setattr__(p.config, field, original)
-                    continue
-                value = entry[field]
-                try:
-                    current = getattr(p.config, field)
-                except AttributeError:
-                    continue
-                try:
-                    # Coerced to the type the config already uses. A hand-typed
-                    # "15" for a float field would otherwise compare and
-                    # arithmetic differently everywhere downstream.
-                    if isinstance(current, bool):
-                        coerced = bool(value)
-                    elif isinstance(current, int):
-                        coerced = int(value)
-                    elif isinstance(current, float):
-                        coerced = float(value)
-                    else:
-                        coerced = value
-                except (TypeError, ValueError, OverflowError):
-                    # OverflowError is int(inf): json reads `1e999` as a float
-                    # and a hand-edited file can hold one. Uncaught, it ended
-                    # every control pass here, from a file nothing rewrites.
-                    log.warning(
-                        "leg %s: override %s=%r is not usable; ignoring", p.name, field, value
-                    )
-                    continue
-                if coerced != current:
-                    log.info(
-                        "leg %s: %s overridden %r -> %r (legs.json)",
-                        p.name,
-                        field,
-                        current,
-                        coerced,
-                    )
-                    object.__setattr__(p.config, field, coerced)
+                if field in entry:
+                    self._override_field(p, field, entry[field])
+                else:
+                    self._restore_field(p, field, baseline)
+
+    @staticmethod
+    def _restore_field(p: PathRuntime, field: str, baseline: Mapping[str, Any]) -> None:
+        """RESTORE, do not skip. An override that has been removed must give the
+        configured value back; leaving the last override in place makes removal
+        a no-op until restart."""
+        original = baseline.get(field)
+        if original is not None and getattr(p.config, field, None) != original:
+            log.info("leg %s: %s override cleared, back to %r", p.name, field, original)
+            object.__setattr__(p.config, field, original)
+
+    @staticmethod
+    def _override_field(p: PathRuntime, field: str, value: Any) -> None:
+        try:
+            current = getattr(p.config, field)
+        except AttributeError:
+            return
+        try:
+            coerced = LegRoster._coerce_like(current, value)
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError is int(inf): json reads `1e999` as a float and a
+            # hand-edited file can hold one. Uncaught, it ended every control
+            # pass here, from a file nothing rewrites.
+            log.warning("leg %s: override %s=%r is not usable; ignoring", p.name, field, value)
+            return
+        if coerced != current:
+            log.info(
+                "leg %s: %s overridden %r -> %r (legs.json)",
+                p.name,
+                field,
+                current,
+                coerced,
+            )
+            object.__setattr__(p.config, field, coerced)
+
+    @staticmethod
+    def _coerce_like(current: Any, value: Any) -> Any:
+        """Coerced to the type the config already uses. A hand-typed "15" for a
+        float field would otherwise compare and arithmetic differently
+        everywhere downstream. bool before int: a bool is an int."""
+        if isinstance(current, bool):
+            return bool(value)
+        if isinstance(current, int):
+            return int(value)
+        if isinstance(current, float):
+            return float(value)
+        return value

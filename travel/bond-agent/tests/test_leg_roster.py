@@ -400,7 +400,8 @@ def test_the_roster_binds_through_the_memory_host(tmp_path):
     )
     paths, roster = _roster(tmp_path, host=host)
     roster.match(paths)
-    roster.derive(paths)
+    roster.apply_auto_labels(paths)
+    roster.apply_auto_cost_class(paths)
     by = {p.name: p for p in paths}
     assert by["ethernet"].interface == "eth0"
     assert by["hotspot"].auto_label == "Wi-Fi Repeater - HouseAP"
@@ -438,6 +439,13 @@ def test_reconcile_reports_what_left_so_the_transport_can_drop_it(tmp_path):
     change = roster.reconcile_dynamic(paths)
     assert change.released == ("phone",) and change.expired == ("phone",)
     assert [p.name for p in paths] == ["ethernet"]
+
+
+def test_a_roster_without_a_store_refuses_to_read_overrides():
+    from zippie.leg_roster import LegRoster
+
+    with pytest.raises(RuntimeError, match="no leg store"):
+        LegRoster(leg_store=None).apply_overrides([])
 
 
 def test_the_roster_knows_which_legs_announced(tmp_path):

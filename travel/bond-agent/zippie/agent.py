@@ -624,7 +624,7 @@ class BondAgent:
         rather than an AttributeError from a field it never set."""
         roster = self.__dict__.get("_leg_roster")
         if roster is None:
-            roster = self.__dict__["_leg_roster"] = LegRoster()
+            roster = self.__dict__["_leg_roster"] = LegRoster(leg_store=None)
         return roster
 
     # The roster's state under the names the console seam, the status document
@@ -3725,7 +3725,7 @@ class BondAgent:
         self.apply_auto_cost_class()
         self.ensure_tunnels()
         self.probe_paths()
-        router_paths = tuple(path for path in self.paths if path.name not in self._dynamic_paths)
+        router_paths = tuple(p for p in self.paths if not self.leg_roster.is_dynamic(p.name))
         names = self._isp_name_resolver.update(
             (
                 path.name,
@@ -3736,7 +3736,7 @@ class BondAgent:
             for path in router_paths
         )
         for path in self.paths:
-            if path.name not in self._dynamic_paths:
+            if not self.leg_roster.is_dynamic(path.name):
                 path.isp_name = names.get(path.name)
         self.sample_counters()
         self.apply_policy()
