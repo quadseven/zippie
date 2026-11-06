@@ -60,8 +60,15 @@ jobs:
     runs-on: arc-zippie
     timeout-minutes: 2
     steps:
+      # The fleet agent Apps (operator decision 2026-11-05) pass on their own
+      # PRs by exact login: the head is a branch of this repo (never a fork),
+      # and the account that pushed (github.actor) and the one that started
+      # this run (github.triggering_actor, so a re-run counts) are each one
+      # of those Apps or the repo owner. The same clause is in
+      # app.companion-ios.ci.yml, check.android.yml and check.android-signing.yml;
+      # change all three together.
       - name: "Block untrusted (non-collaborator) PRs on self-hosted runner"
-        if: ${{ github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) && github.event.pull_request.user.login != 'loom-lanes[bot]' }}
+        if: ${{ github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) && github.event.pull_request.user.login != 'loom-lanes[bot]' && !(github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["agent-anthropic-claude-code[bot]","agent-meta-muse[bot]","agent-openai-dot[bot]"]'), github.event.pull_request.user.login) && (contains(fromJSON('["agent-anthropic-claude-code[bot]","agent-meta-muse[bot]","agent-openai-dot[bot]"]'), github.actor) || github.actor == github.repository_owner) && (contains(fromJSON('["agent-anthropic-claude-code[bot]","agent-meta-muse[bot]","agent-openai-dot[bot]"]'), github.triggering_actor) || github.triggering_actor == github.repository_owner)) }}
         run: |
           echo "::error::PR validation restricted to repo collaborators."
           exit 1

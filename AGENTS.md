@@ -225,7 +225,7 @@ Local traps:
 
 Required on `main`: a PR, `zippie datapath go test` and `Grug - Chief`. Most other jobs are not required, and the binding set is the merge gate below. Other PR checks: the leak scan, `operator hosts ratchet`, `zippie agent pytest` and the hub and deploy suites (path-filtered), `ruff (check + format)` on Python changes, the design token check, and the Android and iOS builds on their paths. This repo calls no workflow hygiene, size ratchet, CI config freshness or close completeness guard.
 
-**Trust gate here.** The `guard` job admits `OWNER`, `MEMBER`, `COLLABORATOR` and `loom-lanes[bot]`. Any other PR author fails it, and `zippie datapath go test` fails with it, even on a PR that touches no Go, because that job requires the gate.
+**Trust gate here.** The `guard` job admits `OWNER`, `MEMBER`, `COLLABORATOR` and `loom-lanes[bot]`. The iOS, Android and Android signing gates also admit `agent-anthropic-claude-code[bot]`, `agent-meta-muse[bot]` and `agent-openai-dot[bot]` on their own same-repo PRs, when the pusher and the account that started the run are each one of those Apps or the repo owner. Any other PR author fails it, and `zippie datapath go test` fails with it, even on a PR that touches no Go, because that job requires the gate.
 
 What a merge does:
 
