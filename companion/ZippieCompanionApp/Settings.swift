@@ -57,6 +57,16 @@ enum Settings {
         get { store.object(forKey: RelayConfiguration.Key.listenPort) as? Int ?? Int(RelayConfiguration.fallback.listenPort) }
         set { store.set(newValue, forKey: RelayConfiguration.Key.listenPort) }
     }
+    /// The console over the tailnet: the ONLY off-LAN path to the router.
+    ///
+    /// DECIDED (#154): off the router's LAN this app requires the tailnet. The
+    /// name resolves publicly to a CGNAT tailnet address that only Tailscale
+    /// routes, so a phone without it gets a timeout rather than an error.
+    /// `BondModel` checks this phone's own tailnet address when every address
+    /// fails and says "not on the tailnet" instead of "not answering". A public
+    /// console endpoint was rejected because it adds an authenticated public
+    /// surface to a device that has none; routing console traffic through the
+    /// relay's home transport remains a candidate for later.
     static var consoleURL: String {
         get { store.string(forKey: "consoleURL") ?? "https://zippie.ts.example-home.invalid/api/status" }
         set { store.set(newValue, forKey: "consoleURL") }

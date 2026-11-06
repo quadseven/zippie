@@ -1,6 +1,7 @@
 package app.zippie.companion
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -186,10 +187,27 @@ class BondViewModel(app: Application) : AndroidViewModel(app) {
                     // disagree with the "This phone" section on the Relay tab
                     // about what the relay is doing.
                     val fallback = BondLegs.thisPhoneFallback(_state.value.relay, now)
+                    // WHY IT FAILED, not just that it did (#154). Off the
+                    // router's LAN the only path is the tailnet, and a phone
+                    // without Tailscale times out exactly like a router that is
+                    // down. This phone's own addresses separate the two.
+                    val reason = withContext(Dispatchers.IO) {
+                        BondStatusClient.unreachableReason(config.consoleCandidates)
+                    }
+                    val decision = ModeDecision(proximity, unreachableReason = reason)
+                    // Logged on change only: this poll repeats every few seconds
+                    // while off the tailnet.
+                    if (_state.value.decision.reason != decision.reason) {
+                        Log.w(TAG, "console unreachable: ${reason.logName}")
+                    }
                     _state.value = _state.value.copy(
-                        decision = ModeDecision(proximity),
+                        decision = decision,
                         legs = fallback,
-                        headline = "The router is not answering",
+                        headline = if (decision.reason == UnreachableReason.NO_TAILNET_ROUTE) {
+                            "Not on the tailnet"
+                        } else {
+                            "The router is not answering"
+                        },
                         subhead = "Nothing on this screen can be trusted to be current.",
                         bondReachable = false,
                         legsHeading = BondLegs.legsHeading(fallback, bondReachable = false),
@@ -270,5 +288,6 @@ class BondViewModel(app: Application) : AndroidViewModel(app) {
 
     companion object {
         private const val CONSOLE_INTERVAL_MS = 5_000L
+        private const val TAG = "ZippieBond"
     }
 }

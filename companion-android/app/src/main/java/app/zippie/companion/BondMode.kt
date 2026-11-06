@@ -33,6 +33,41 @@ enum class BondMode { CONTRIBUTE, CLIENT }
 enum class RouterProximity { LOCAL, REMOTE, UNREACHABLE }
 
 /**
+ * Why the router did not answer (#154). Mirrors `UnreachableReason` in the iOS
+ * Kit.
+ *
+ * OFF THE ROUTER'S LAN THE ONLY PATH IS THE TAILNET. The tailnet name resolves
+ * publicly to a CGNAT tailnet address that only Tailscale can route, so a phone
+ * without Tailscale gets no DNS error and no refusal, just a timeout. That
+ * timeout looked exactly like a router that is down, and the two have different
+ * fixes.
+ */
+enum class UnreachableReason(val logName: String) {
+    /** A tailnet console is configured and this phone holds no tailnet address. */
+    NO_TAILNET_ROUTE("no_tailnet_route"),
+
+    /** The phone had a route, or no tailnet console was configured, and still
+     *  nothing answered. */
+    NOT_ANSWERING("console_timeout"),
+    ;
+
+    companion object {
+        /**
+         * Decide from this device's own addresses. Range-checked with
+         * [DiagnosticsMeasurer.isTailnetV4], so a carrier CGNAT address just
+         * outside the tailnet range is never read as a route. With no tailnet
+         * console configured the tailnet is irrelevant, and blaming it would
+         * send the reader to the wrong fix.
+         */
+        fun decide(hasRemoteCandidate: Boolean, ownAddresses: List<String>): UnreachableReason = when {
+            !hasRemoteCandidate -> NOT_ANSWERING
+            ownAddresses.any { DiagnosticsMeasurer.isTailnetV4(it) } -> NOT_ANSWERING
+            else -> NO_TAILNET_ROUTE
+        }
+    }
+}
+
+/**
  * The mode decision, with the reason attached.
  *
  * The reason travels WITH the verdict rather than being reconstructed by the
@@ -45,7 +80,16 @@ data class ModeDecision(
      *  nothing", because showing a confident mode before the first probe is a
      *  claim made without evidence. */
     val undetermined: Boolean = false,
+    /** Defaults to the meaning UNREACHABLE had before #154, so a caller that has
+     *  not checked the tailnet never claims the phone is off it. Read it through
+     *  [reason], which is null whenever the router was reached. */
+    val unreachableReason: UnreachableReason = UnreachableReason.NOT_ANSWERING,
 ) {
+    /** Why the router did not answer, or null when it did or before the first
+     *  look. */
+    val reason: UnreachableReason?
+        get() = if (proximity == RouterProximity.UNREACHABLE && !undetermined) unreachableReason else null
+
     /**
      * CLIENT IS THE DEFAULT, and that asymmetry is deliberate. Contributing
      * requires positive proof that the router is on this network; being wrong
@@ -62,6 +106,8 @@ data class ModeDecision(
                 "On the router's network - lending this phone's cellular to the bond."
             proximity == RouterProximity.REMOTE ->
                 "Away from the router - this phone is not contributing to the bond."
+            reason == UnreachableReason.NO_TAILNET_ROUTE ->
+                "This phone is not on the tailnet, so the router cannot be reached from here."
             else -> "The router is not answering from here."
         }
 

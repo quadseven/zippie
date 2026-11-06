@@ -147,6 +147,33 @@ object BondStatusClient {
         reported to RouterProximity.UNREACHABLE
     }
 
+    /**
+     * Why every candidate failed (#154): no tailnet route, or a route and no
+     * answer. Off the router's LAN the tailnet console is the only path, and a
+     * phone without Tailscale times out exactly like a router that is down.
+     * Read from this device's own addresses, the same evidence the diagnostics
+     * screen uses, because no API answers "is Tailscale running".
+     */
+    fun unreachableReason(
+        candidates: List<ConsoleCandidate>,
+        ownAddresses: List<String> = ownAddresses(),
+    ): UnreachableReason = UnreachableReason.decide(
+        hasRemoteCandidate = candidates.any { !it.isLocal },
+        ownAddresses = ownAddresses,
+    )
+
+    /** Every IPv4/IPv6 address on an up, non-loopback interface. Empty on any
+     *  failure, which reads as "no tailnet route": the safer claim, because it
+     *  points at a fix the operator can check. */
+    private fun ownAddresses(): List<String> = try {
+        java.net.NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
+            .filter { it.isUp && !it.isLoopback }
+            .flatMap { it.inetAddresses.toList() }
+            .mapNotNull { it.hostAddress }
+    } catch (_: Exception) {
+        emptyList()
+    }
+
     private suspend fun first(
         candidates: List<ConsoleCandidate>,
         timeoutMs: Int,

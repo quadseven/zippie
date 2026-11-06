@@ -35,8 +35,47 @@ public enum RouterProximity: Sendable, Equatable {
     /// Answered only over the tailnet. Alive, but we are somewhere else.
     case remote
     /// Did not answer at all. Either off-network with no tailnet route, or the
-    /// router is down - and the phone cannot tell those apart from here.
+    /// router is down. `UnreachableReason` says which, because the phone CAN
+    /// tell those apart by looking at its own addresses (#154).
     case unreachable
+}
+
+/// Why the router did not answer.
+///
+/// OFF THE ROUTER'S LAN THE ONLY PATH IS THE TAILNET. The tailnet name resolves
+/// publicly to a CGNAT tailnet address that only Tailscale can route, so a
+/// phone without Tailscale gets no DNS error and no refusal, just a timeout
+/// after the full budget. That timeout looked exactly like a router that is
+/// down, and the two have different fixes (#154).
+public enum UnreachableReason: String, Sendable, Equatable {
+    /// A tailnet console is configured and this phone holds no tailnet address.
+    case noTailnetRoute
+    /// The phone had a route, or no tailnet console was configured, and still
+    /// nothing answered.
+    case notAnswering
+
+    /// The name logs and RUM carry, so the cause is readable without the phone.
+    public var logName: String {
+        switch self {
+        case .noTailnetRoute: return "no_tailnet_route"
+        case .notAnswering: return "console_timeout"
+        }
+    }
+
+    /// Decide from what the phone can see of itself.
+    ///
+    /// `tailnetAddress` is this device's own tailnet address, if any. It is
+    /// range-checked here rather than trusted, so a carrier CGNAT address just
+    /// outside the tailnet range is never read as a route. With no tailnet console
+    /// configured the tailnet is irrelevant, and blaming it would send the
+    /// reader to the wrong fix.
+    public static func decide(hasRemoteCandidate: Bool, tailnetAddress: String?) -> UnreachableReason {
+        guard hasRemoteCandidate else { return .notAnswering }
+        guard let addr = tailnetAddress, TailnetAddress.isTailnetV4(addr) else {
+            return .noTailnetRoute
+        }
+        return .notAnswering
+    }
 }
 
 /// The mode decision, with the reason attached.
@@ -51,10 +90,19 @@ public struct ModeDecision: Sendable, Equatable {
     /// nothing", because showing a confident mode before the first probe is a
     /// claim made without evidence.
     public let undetermined: Bool
+    /// Why the router did not answer. Nil unless `proximity` is `.unreachable`
+    /// and the phone has looked, so a reached router never carries a cause.
+    public let unreachableReason: UnreachableReason?
 
-    public init(proximity: RouterProximity, undetermined: Bool = false) {
+    /// `unreachableReason` defaults to `.notAnswering`, the meaning this case
+    /// had before #154, so a caller that has not checked the tailnet never
+    /// claims the phone is off it.
+    public init(proximity: RouterProximity, undetermined: Bool = false,
+                unreachableReason: UnreachableReason = .notAnswering) {
         self.proximity = proximity
         self.undetermined = undetermined
+        self.unreachableReason = (proximity == .unreachable && !undetermined)
+            ? unreachableReason : nil
         // CLIENT IS THE DEFAULT, and that asymmetry is deliberate. Contributing
         // requires positive proof that the router is on this network; being
         // wrong there wastes metered data on a bond that cannot hear us. Being
@@ -96,6 +144,9 @@ public struct ModeDecision: Sendable, Equatable {
             return "Away from the router. Showing the bond as the router sees it; "
                  + "this phone is not part of it from here."
         case .unreachable:
+            if unreachableReason == .noTailnetRoute {
+                return "This phone is not on the tailnet, so the router cannot be reached from here."
+            }
             return "\(RelayVerdict.routerSubject(router)) is not answering, so "
                  + "there is nothing to show about the bond."
         }

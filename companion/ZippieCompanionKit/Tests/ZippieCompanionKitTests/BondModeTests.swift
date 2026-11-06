@@ -76,4 +76,71 @@ final class BondModeTests: XCTestCase {
             XCTAssertEqual(d.summary(router: "travel-router"), d.summary())
         }
     }
+
+    // MARK: - why the router is unreachable (#154)
+
+    /// Off the router's LAN the only path is the tailnet. A phone with no
+    /// tailnet address resolves the name and then times out, which used to
+    /// read as a router that is down. The sentence must name the real cause.
+    func testNoTailnetRouteSaysThePhoneIsNotOnTheTailnet() {
+        let d = ModeDecision(proximity: .unreachable, unreachableReason: .noTailnetRoute)
+        XCTAssertEqual(d.summary(),
+                       "This phone is not on the tailnet, so the router cannot be reached from here.")
+        XCTAssertFalse(d.summary(router: "travel-router").contains("not answering"))
+        XCTAssertEqual(d.mode, .client)
+    }
+
+    /// With a tailnet route and still no answer, the router really is not
+    /// answering, and the existing sentence stays.
+    func testNotAnsweringKeepsTheRouterSentence() {
+        let d = ModeDecision(proximity: .unreachable, unreachableReason: .notAnswering)
+        XCTAssertTrue(d.summary(router: "travel-router").hasPrefix("travel-router is not answering"))
+    }
+
+    /// The default is the old meaning, so a caller that has not looked at the
+    /// tailnet never claims the phone is off it.
+    func testUnreachableDefaultsToNotAnswering() {
+        XCTAssertEqual(ModeDecision(proximity: .unreachable).unreachableReason, .notAnswering)
+    }
+
+    /// A reason exists only when the router was not reached, and not before
+    /// the first look.
+    func testReasonIsNilWhenReachedOrUndetermined() {
+        XCTAssertNil(ModeDecision(proximity: .local, unreachableReason: .noTailnetRoute).unreachableReason)
+        XCTAssertNil(ModeDecision(proximity: .remote, unreachableReason: .noTailnetRoute).unreachableReason)
+        XCTAssertNil(ModeDecision(proximity: .unreachable, undetermined: true,
+                                  unreachableReason: .noTailnetRoute).unreachableReason)
+    }
+
+    /// The log names match what logs and RUM carry.
+    func testReasonLogNames() {
+        XCTAssertEqual(UnreachableReason.noTailnetRoute.logName, "no_tailnet_route")
+        XCTAssertEqual(UnreachableReason.notAnswering.logName, "console_timeout")
+    }
+
+    /// No tailnet address and a tailnet console configured: no route.
+    func testDecideNoTailnetAddressWithRemoteCandidateIsNoRoute() {
+        XCTAssertEqual(UnreachableReason.decide(hasRemoteCandidate: true, tailnetAddress: nil),
+                       .noTailnetRoute)
+    }
+
+    /// On the tailnet, a silent console is the router not answering.
+    func testDecideWithTailnetAddressIsNotAnswering() {
+        XCTAssertEqual(UnreachableReason.decide(hasRemoteCandidate: true, tailnetAddress: "100.64.100.2"), // leak-guard-allow: synthetic test address
+                       .notAnswering)
+    }
+
+    /// An address outside the tailnet range is not a tailnet address. A carrier
+    /// CGNAT address just past the range must not count as a route.
+    func testDecideNonTailnetAddressIsNoRoute() {
+        XCTAssertEqual(UnreachableReason.decide(hasRemoteCandidate: true, tailnetAddress: "100.128.0.1"),
+                       .noTailnetRoute)
+    }
+
+    /// With no tailnet console configured the tailnet is irrelevant, and
+    /// blaming it would send the reader to the wrong fix.
+    func testDecideWithoutRemoteCandidateIsNotAnswering() {
+        XCTAssertEqual(UnreachableReason.decide(hasRemoteCandidate: false, tailnetAddress: nil),
+                       .notAnswering)
+    }
 }

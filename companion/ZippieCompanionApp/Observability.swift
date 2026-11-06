@@ -440,6 +440,17 @@ enum Observability {
         ])
     }
 
+    /// Every console address failed, and why (#154). `no_tailnet_route` means
+    /// this phone holds no tailnet address while the tailnet console is the
+    /// only off-LAN path; `console_timeout` means a route existed and nothing
+    /// answered. Before this split both read in RUM as a slow server.
+    static func consoleUnreachable(_ reason: UnreachableReason) {
+        let attrs: [String: Encodable] = ["reason": reason.logName]
+        log.warn("console unreachable: \(reason.logName)", attributes: attrs)
+        RUMMonitor.shared().addAction(type: .custom, name: "console.\(reason.logName)",
+                                      attributes: attrs)
+    }
+
     static func verdictName(_ v: ProbeVerdict) -> String {
         switch v {
         case .proven: return "proven"

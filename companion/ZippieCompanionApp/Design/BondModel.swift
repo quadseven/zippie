@@ -126,7 +126,20 @@ final class BondModel: ObservableObject {
             await refreshSeries()
             return
         }
-        decision = ModeDecision(proximity: .unreachable)
+        // WHY IT FAILED, not just that it did (#154). Off the router's LAN the
+        // only path is the tailnet, and a phone without Tailscale times out
+        // exactly like a router that is down. This phone's own tailnet address
+        // separates the two, so the screen and the logs can say which.
+        let reason = UnreachableReason.decide(
+            hasRemoteCandidate: candidates.contains { !$0.isLocal },
+            tailnetAddress: TailnetPresence.address())
+        let previous = decision
+        decision = ModeDecision(proximity: .unreachable, unreachableReason: reason)
+        // Logged on change only: this runs every few seconds while off the
+        // tailnet, and one line per transition is what a reader needs.
+        if previous.unreachableReason != reason {
+            Observability.consoleUnreachable(reason)
+        }
         // Every address failed. The bond is not observable from here, and
         // saying so is better than leaving the last good snapshot on screen
         // pretending to be current.
