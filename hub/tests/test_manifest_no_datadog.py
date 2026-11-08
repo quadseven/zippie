@@ -62,7 +62,7 @@ def test_no_datadog_labels_on_the_pod(path, deployment):
     nothing else reads them, and a label that comes back would claim a
     service identity nothing serves."""
     labels = _pod_labels(path, deployment)
-    offenders = [k for k in labels if k.startswith("tags.datadoghq.com/")]
+    offenders = [k for k in labels if k.split("/", 1)[0] == "tags.datadoghq.com"]
     assert offenders == [], f"{deployment} still carries {offenders}"
 
 
