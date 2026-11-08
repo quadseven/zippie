@@ -194,7 +194,7 @@ def test_default_package_dir_is_the_loaded_tree():
 # ----------------------------------------------- normalized config fingerprint
 #
 # Discovered live 2026-09-13/14: Datadog monitor 314870899 in permanent Alert
-# on suzu because drift-check.sh hashed travel/gl-mt3000/zippie.toml's raw
+# on the travel router because drift-check.sh hashed travel/gl-mt3000/zippie.toml's raw
 # bytes, and `[home].endpoint` / `[home].server_public_key` are PERMANENT
 # placeholders in that checked-in file once the repo went public - a real
 # router's actual config can never equal them, by design. A byte comparison
