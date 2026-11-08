@@ -19,7 +19,7 @@ string":
      loop: a misconfigured router in a router list must never be dialled,
      while an ordinary one beside it keeps polling normally.
   2. The two failure shapes stay told apart everywhere a poll outcome
-     surfaces: the Registry, /api/nodes, /api/status and the Datadog gauges.
+     surfaces: the Registry, /api/nodes, /api/status and the health log.
      Each guard below is exercised against the SAME set of RFC 5737 / 2606 /
      3849 values scripts/deploy-openwrt.sh already refuses on the router side,
      so the two guards cannot silently drift into checking different lists.
@@ -261,7 +261,7 @@ def test_config_error_does_not_freeze_at_startup_forever():
 
 # ---------------------------------------------------------------------------
 # The Registry and /api/nodes surface both facts explicitly (#17), the same
-# rule #272 already applies to the Datadog gauges.
+# rule #272 already applies to the logged health values.
 # ---------------------------------------------------------------------------
 
 
@@ -318,29 +318,22 @@ def test_a_router_that_has_never_been_polled_at_all_still_reads_never():
 
 
 # ---------------------------------------------------------------------------
-# The fourth Datadog gauge (#17), same "explicit value, never an absence"
-# rule the other three already follow (#272).
+# The fourth logged health value (#17), same "explicit value, never an
+# absence" rule the other three already follow (#272).
 # ---------------------------------------------------------------------------
 
 
-def test_config_error_emits_its_own_explicit_gauge_and_zeroes_the_rest():
-    samples = {
-        m: v
-        for m, v, _tags in hub.router_samples(
-            "travel-router", None, False, config_error=True
-        )
-    }
-    assert samples[hub.METRIC_CONFIG_ERROR] == 1.0
-    assert samples[hub.METRIC_REACHABLE] == 0.0
-    assert samples[hub.METRIC_ANSWERING] == 0.0
-    assert samples[hub.METRIC_CARRYING_LEGS] == 0.0
+def test_config_error_logs_its_own_explicit_value_and_zeroes_the_rest():
+    reading = hub.router_health("travel-router", None, False, config_error=True)
+    assert reading["config_error"] == 1
+    assert reading["reachable"] == 0
+    assert reading["answering"] == 0
+    assert reading["carrying_legs"] == 0
 
 
 def test_a_healthy_cycle_still_emits_an_explicit_zero_for_config_error():
-    """AN ABSENT SAMPLE AND A ZERO SAMPLE ARE NOT THE SAME THING. If this ever
-    goes back to being omitted for the healthy case, the gauge stops being
-    something a monitor can alert on - see the module note on #272."""
-    samples = {
-        m: v for m, v, _tags in hub.router_samples("travel-router", {"paths": []}, True)
-    }
-    assert samples[hub.METRIC_CONFIG_ERROR] == 0.0
+    """AN ABSENT VALUE AND A ZERO VALUE ARE NOT THE SAME THING. If this ever
+    goes back to being omitted for the healthy case, the reading stops being
+    something a reader can alert on - see the module note on #272."""
+    reading = hub.router_health("travel-router", {"paths": []}, True)
+    assert reading["config_error"] == 0
