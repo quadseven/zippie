@@ -366,7 +366,7 @@ class PathHealthLog:
         except Exception:  # noqa: BLE001 - a bug here must not stop the poller
             try:
                 log.debug("router health log failed", exc_info=True)
-            except Exception:  # noqa: BLE001 - logging itself is what failed
+            except Exception:  # noqa: BLE001, S110 - logging itself is what failed; there is nothing left to report the failure with
                 pass
 
     def close(self) -> None:
@@ -881,7 +881,7 @@ def log_request(handler: BaseHTTPRequestHandler, method: str, handle) -> None:
                 (time.monotonic_ns() - t0) // 1_000_000,
                 type(err).__name__ if err is not None else "-",
             )
-        except Exception:  # noqa: BLE001 - never fail a request over its line
+        except Exception:  # noqa: BLE001, S110 - never fail a request over its line; the logger is what failed
             pass
 
 

@@ -110,7 +110,7 @@ class _QuietHTTPServer(ThreadingHTTPServer):
 
 
 def _get(url, timeout=5):
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
+    with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310 - url is this file's own loopback fixture
         return resp.status, resp.read()
 
 
@@ -203,7 +203,7 @@ def test_a_post_to_api_report_is_logged(hub_server, log_lines, monkeypatch):
     reg = hub.Registry([])
     base = hub_server(registry=reg)
 
-    req = urllib.request.Request(
+    req = urllib.request.Request(  # noqa: S310 - base is this file's own loopback fixture
         base + "/api/report",
         data=json.dumps({"name": "phone-1", "paths": []}).encode(),
         headers={
@@ -212,7 +212,7 @@ def test_a_post_to_api_report_is_logged(hub_server, log_lines, monkeypatch):
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=5) as resp:
+    with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310 - see above
         assert resp.status == 200
     assert [n["name"] for n in reg.snapshot()] == ["phone-1"]
 
