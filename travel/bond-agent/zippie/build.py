@@ -99,7 +99,7 @@ def module_count(package_dir: Path | None = None) -> int:
 #
 # A byte-for-byte config comparison against these three keys therefore
 # reports drift on every router, forever - discovered live 2026-09-13/14,
-# Datadog monitor 314870899 in permanent Alert on suzu even though the
+# Datadog monitor 314870899 in permanent Alert on the travel router even though the
 # running config was correct. That is exactly the false-positive this
 # module's own header warns the CODE fingerprint against ("a commit
 # comparison alarms on every docs-only merge"); the config comparison needs

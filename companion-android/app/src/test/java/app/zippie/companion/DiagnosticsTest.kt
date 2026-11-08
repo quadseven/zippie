@@ -77,7 +77,7 @@ class DiagnosticsTest {
     @Test
     fun `no mdm host configured reads as not checked not unreachable`() {
         val path = DiagnosticsMeasurer.deriveTailnetPath(
-            tailnetAddr = null, mdm = DiagnosticState.NotChecked, routerHost = "suzu",
+            tailnetAddr = null, mdm = DiagnosticState.NotChecked, routerHost = "travel-router",
         )
         assertEquals(
             "an unattempted probe was reported as a definite failure",
@@ -94,7 +94,7 @@ class DiagnosticsTest {
             "this phone's own tailnet address is proof on its own",
             TailnetPath.Direct("pixel-6a-own-tailscale"),
             DiagnosticsMeasurer.deriveTailnetPath(
-                tailnetAddr = "pixel-6a-own-tailscale", mdm = DiagnosticState.NotChecked, routerHost = "suzu",
+                tailnetAddr = "pixel-6a-own-tailscale", mdm = DiagnosticState.NotChecked, routerHost = "travel-router",
             ),
         )
         assertEquals(
@@ -102,7 +102,7 @@ class DiagnosticsTest {
             DiagnosticsMeasurer.deriveTailnetPath(
                 tailnetAddr = "pixel-6a-own-tailscale",
                 mdm = DiagnosticState.Failed(DiagnosticFailure.TimedOut(12)),
-                routerHost = "suzu",
+                routerHost = "travel-router",
             ),
         )
     }
@@ -110,9 +110,9 @@ class DiagnosticsTest {
     @Test
     fun `mdm probe succeeding proves via router`() {
         assertEquals(
-            TailnetPath.ViaRouter("suzu"),
+            TailnetPath.ViaRouter("travel-router"),
             DiagnosticsMeasurer.deriveTailnetPath(
-                tailnetAddr = null, mdm = DiagnosticState.Ok(), routerHost = "suzu",
+                tailnetAddr = null, mdm = DiagnosticState.Ok(), routerHost = "travel-router",
             ),
         )
     }
@@ -124,7 +124,7 @@ class DiagnosticsTest {
             DiagnosticsMeasurer.deriveTailnetPath(
                 tailnetAddr = null,
                 mdm = DiagnosticState.Failed(DiagnosticFailure.TimedOut(12)),
-                routerHost = "suzu",
+                routerHost = "travel-router",
             ),
         )
     }

@@ -56,7 +56,7 @@ final class DiagnosticsTests: XCTestCase {
     /// actually worked. Confirmed live: an iPhone on the travel router's wifi,
     /// with a real bonded tunnel carrying traffic, showed this exact screen.
     func testNoMdmHostConfiguredReadsAsNotCheckedNotUnreachable() {
-        let path = TailnetPath.derive(ownAddress: nil, mdm: .notChecked, routerHost: "suzu")
+        let path = TailnetPath.derive(ownAddress: nil, mdm: .notChecked, routerHost: "travel-router")
         XCTAssertEqual(path, .notChecked, "an unattempted probe was reported as a definite failure")
     }
 
@@ -65,26 +65,26 @@ final class DiagnosticsTests: XCTestCase {
     /// probe had not succeeded - which, per the above, is every build.
     func testOwnTailscaleAddressIsSufficientProofRegardlessOfTheMdmProbe() {
         XCTAssertEqual(
-            TailnetPath.derive(ownAddress: "pixel-6a-own-tailscale", mdm: .notChecked, routerHost: "suzu"),
+            TailnetPath.derive(ownAddress: "pixel-6a-own-tailscale", mdm: .notChecked, routerHost: "travel-router"),
             .direct(nodeName: "pixel-6a-own-tailscale"),
             "this phone's own tailnet address is proof on its own; it must not need a second, unrelated probe to also succeed"
         )
         XCTAssertEqual(
-            TailnetPath.derive(ownAddress: "pixel-6a-own-tailscale", mdm: .failed(.timedOut(seconds: 12)), routerHost: "suzu"),
+            TailnetPath.derive(ownAddress: "pixel-6a-own-tailscale", mdm: .failed(.timedOut(seconds: 12)), routerHost: "travel-router"),
             .direct(nodeName: "pixel-6a-own-tailscale")
         )
     }
 
     func testMdmProbeSucceedingProvesViaRouter() {
         XCTAssertEqual(
-            TailnetPath.derive(ownAddress: nil, mdm: .ok(detail: nil), routerHost: "suzu"),
-            .viaRouter(host: "suzu")
+            TailnetPath.derive(ownAddress: nil, mdm: .ok(detail: nil), routerHost: "travel-router"),
+            .viaRouter(host: "travel-router")
         )
     }
 
     func testMdmProbeGenuinelyFailingIsUnreachable() {
         XCTAssertEqual(
-            TailnetPath.derive(ownAddress: nil, mdm: .failed(.timedOut(seconds: 12)), routerHost: "suzu"),
+            TailnetPath.derive(ownAddress: nil, mdm: .failed(.timedOut(seconds: 12)), routerHost: "travel-router"),
             .unreachable(.noRoute)
         )
     }
