@@ -8,6 +8,7 @@ runner is exercised, not just the primitive underneath it.
 
 from __future__ import annotations
 
+import math
 import socket
 import struct
 import threading
@@ -46,6 +47,17 @@ class _FakeSelector:
 
     def close(self):
         pass
+
+
+def _whole_second_after(t):
+    """A fake clock start on the next whole second after the real one (#409).
+
+    Starting at the real monotonic value, say 31.048761375, makes a later
+    `+= 2` step read back as 1.9999999999999964, which is under
+    HOME_PROBE_INTERVAL_S, so whether home probed depended on what the real
+    clock happened to return. Whole seconds make every step exact.
+    """
+    return float(math.floor(t) + 1)
 
 
 def _fake_home():
@@ -270,7 +282,7 @@ def _keepalive_probes(sent, target):
 
 def test_home_stands_down_a_silent_leg_and_recovers_when_it_returns():
     home, sockets = _fake_home()
-    now = [home._clock()]
+    now = [_whole_second_after(home._clock())]
     home._clock = lambda: now[0]
     sources = {3: ("192.0.2.1", 40003), 7: ("192.0.2.1", 40007)}
 
@@ -336,7 +348,7 @@ def test_home_keeps_sending_downstream_until_the_far_end_answers_a_probe():
     bond would deadlock. Live 2026-10-18 to 10-25, home sent 0 downstream bytes.
     """
     home, sockets = _fake_home()
-    now = [home._clock()]
+    now = [_whole_second_after(home._clock())]
     home._clock = lambda: now[0]
     source = ("192.0.2.1", 40003)
 
@@ -361,7 +373,7 @@ def test_home_keeps_sending_downstream_until_the_far_end_answers_a_probe():
 def test_home_stands_down_an_unanswering_path_once_the_far_end_has_answered():
     """The #293 stand-down still applies after the far end proves it answers."""
     home, sockets = _fake_home()
-    now = [home._clock()]
+    now = [_whole_second_after(home._clock())]
     home._clock = lambda: now[0]
     sources = {3: ("192.0.2.1", 40003), 7: ("192.0.2.1", 40007)}
 
