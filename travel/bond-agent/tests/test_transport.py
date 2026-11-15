@@ -17,6 +17,11 @@ from zippie.datapath import FLAG_KEEPALIVE, FLAG_KEEPALIVE_REPLY, Frame
 from zippie.transport import FLAG_NACK, LinkEndpoint, Transport
 
 
+# Linux-only constant; the socket here is a fake, so its Linux value (25)
+# stands in on macOS, as tests/test_isp_name.py does.
+SO_BINDTODEVICE = getattr(socket, "SO_BINDTODEVICE", 25)
+
+
 class FakeSocket:
     """Records sends; can be told to fail, the way a dying link does."""
 
@@ -63,7 +68,7 @@ def _factory(created):
     def make(device=None, bind=None):
         s = FakeSocket(device, bind)
         if device:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, device.encode() + b"\0")
+            s.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, device.encode() + b"\0")
         created.append(s)
         return s
 
@@ -127,8 +132,8 @@ class TestLinkMembership:
         devices = [s.device for s in created if s.device]
         assert devices == ["eth1", "wwan0"]
         assert [s.options for s in created if s.device] == [
-            [(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"eth1\0")],
-            [(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"wwan0\0")],
+            [(socket.SOL_SOCKET, SO_BINDTODEVICE, b"eth1\0")],
+            [(socket.SOL_SOCKET, SO_BINDTODEVICE, b"wwan0\0")],
         ]
 
     def test_a_link_that_cannot_bind_is_skipped_not_fatal(self):
