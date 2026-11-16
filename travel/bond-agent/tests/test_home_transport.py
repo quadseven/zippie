@@ -259,6 +259,7 @@ def test_home_splits_downstream_packets_across_learned_legs():
         targets = [addr for _data, addr in sockets[1].sent]
         assert targets.count(("192.0.2.1", 40003)) >= 80
         assert targets.count(("192.0.2.1", 40007)) >= 15
+        assert len(targets) == 200
     finally:
         home.close()
 
@@ -546,16 +547,21 @@ def test_travel_hears_a_restarted_home_on_keepalives_alone():
     )
     threading.Thread(target=travel.run, daemon=True).start()
 
-    def probe_for(seconds):
-        end = time.monotonic() + seconds
+    def probe_until(condition, deadline_s=2.0):
+        """Send keepalives until condition() is true or deadline expires."""
+        end = time.monotonic() + deadline_s
         while time.monotonic() < end:
             travel.send_keepalives()
+            if condition():
+                return True
             time.sleep(0.05)
+        return condition()
 
     home = _start_home(home_listen, wg_server_port)
     try:
-        probe_for(0.3)
-        assert travel.link_rtt_ms(0) is not None, "baseline: the first home never answered"
+        assert probe_until(lambda: travel.link_rtt_ms(0) is not None, deadline_s=2.0), (
+            "baseline: the first home never answered"
+        )
     finally:
         _stop_home(home)
 
@@ -564,9 +570,10 @@ def test_travel_hears_a_restarted_home_on_keepalives_alone():
     home = _start_home(home_listen, wg_server_port)
     try:
         rejected_before = travel.stats.unauthenticated
-        probe_for(0.6)
-        age = travel.link_rx_age_s(0)
-        assert age is not None and age < 0.2, (
+        assert probe_until(
+            lambda: travel.link_rx_age_s(0) is not None and travel.link_rx_age_s(0) < 0.2,
+            deadline_s=2.0,
+        ), (
             "travel still reads the leg as silent: it refused every probe reply "
             "from the restarted home"
         )
