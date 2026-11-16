@@ -31,7 +31,9 @@ def mod(tmp_path, monkeypatch):
     assert spec is not None and spec.loader is not None
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
-    m.run = lambda args, check=True, input_text=None: SimpleNamespace(stdout="", stderr="", returncode=0)
+    m.run = lambda args, check=True, input_text=None: SimpleNamespace(
+        stdout="", stderr="", returncode=0
+    )
     m.which = lambda name: None
     return m
 
@@ -43,7 +45,9 @@ def _init(mod, endpoint, *extra):
     return args.func(args)
 
 
-@pytest.mark.parametrize("endpoint", ["", "dns-e.example-home.invalid", "<home-endpoint>", "192.0.2.10"])
+@pytest.mark.parametrize(
+    "endpoint", ["", "dns-e.example-home.invalid", "<home-endpoint>", "192.0.2.10"]
+)
 def test_the_pod_flag_refuses_a_placeholder_and_writes_nothing(mod, tmp_path, capsys, endpoint):
     assert _init(mod, endpoint, "--require-real-endpoint") == 2
     assert not (tmp_path / "state" / "server.json").exists()
