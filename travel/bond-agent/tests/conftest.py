@@ -42,6 +42,9 @@ def _refused_by_sandbox(exc):
 # connection shows up as a missing answer rather than as EPERM.
 NEEDS_LOOPBACK = (
     "test_transport_loopback.py::test_two_legs_sharing_one_home_port_each_get_their_own_answer",
+    # travel runs in a thread and home answers over loopback UDP, so the
+    # sandbox's refusal reads as "the first home never answered" (#414).
+    "test_home_transport.py::test_travel_hears_a_restarted_home_on_keepalives_alone",
 )
 
 
