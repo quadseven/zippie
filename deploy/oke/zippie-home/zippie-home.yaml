@@ -124,8 +124,18 @@ spec:
               # init is idempotent: it refuses to rekey without --force, which is
               # exactly what makes it safe on every pod start. Losing the key
               # would invalidate every provisioned client.
+              # ZIPPIE_HOME_ENDPOINT comes from an optional Secret, so under
+              # set -u it is read with a default. An initialised pod keeps the
+              # stored endpoint (init returns early, reconcile leaves it); only
+              # a first start without the Secret has nothing to serve, and it
+              # says so instead of writing an empty endpoint.
+              if [ -z "${ZIPPIE_HOME_ENDPOINT:-}" ] && [ ! -f "$ZIPPIE_HOME_STATE/server.json" ]; then
+                echo "[home] no endpoint and no server.json: create Secret" \
+                     "zippie-home-endpoint (key endpoint) before the first start"
+                exit 1
+              fi
               zippie-home init \
-                --public-endpoint "$ZIPPIE_HOME_ENDPOINT" \
+                --public-endpoint "${ZIPPIE_HOME_ENDPOINT:-}" \
                 --ports "$ZIPPIE_HOME_PORTS" \
                 ${ZIPPIE_HOME_WAN:+--wan-iface "$ZIPPIE_HOME_WAN"}
 
