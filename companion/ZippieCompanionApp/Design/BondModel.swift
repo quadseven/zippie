@@ -43,6 +43,9 @@ final class BondModel: ObservableObject {
     /// Verified peers discovered on the local network. Updated from
     /// PeerDiscoveryService events; only verified peers are published.
     @Published private(set) var nearbyPeers: [VerifiedPeer] = []
+    /// Maps the Bonjour service name to the verified peer, so a vanished
+    /// event (which only carries the service name) can remove the right peer.
+    private var nearbyPeerByServiceName: [String: VerifiedPeer] = [:]
 
     private let defaults: UserDefaults
     private var ticker: AnyCancellable?
@@ -106,13 +109,16 @@ final class BondModel: ObservableObject {
 
     private func handlePeerEvent(_ event: PeerEvent) async {
         switch event {
-        case .discovered(let peer):
+        case .discovered(let peer, let serviceName):
             if !nearbyPeers.contains(where: { $0.clientID == peer.clientID }) {
                 nearbyPeers.append(peer)
                 nearbyPeers.sort { $0.clientID < $1.clientID }
             }
+            nearbyPeerByServiceName[serviceName] = peer
         case .vanished(let name):
-            nearbyPeers.removeAll { $0.endpoint.contains(name) || $0.clientID.description == name }
+            if let peer = nearbyPeerByServiceName.removeValue(forKey: name) {
+                nearbyPeers.removeAll { $0.clientID == peer.clientID }
+            }
         }
     }
 

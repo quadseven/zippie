@@ -3653,7 +3653,7 @@ class BondAgent:
         dynamic_legs = []
         with self.dynamic._lock:
             dynamic_legs = sorted(self.dynamic._legs.values(), key=lambda leg: leg.name)
-        for idx, leg in enumerate(dynamic_legs, start=1):
+        for idx, _ in enumerate(dynamic_legs, start=1):
             roster.append({"client_id": idx, "key_hex": discovery_key_hex})
         return roster
 

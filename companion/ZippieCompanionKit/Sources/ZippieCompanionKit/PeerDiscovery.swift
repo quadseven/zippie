@@ -40,7 +40,10 @@ public struct VerifiedPeer: Sendable, Equatable, Hashable {
 
 /// A change to the set of verified peers, published to the app.
 public enum PeerEvent: Sendable, Equatable {
-    case discovered(VerifiedPeer)
+    /// A verified peer was discovered. The service name is the Bonjour name
+    /// used as the key in the discovery service's internal mapping, so the
+    /// app can track peers across appearances and disappearances.
+    case discovered(VerifiedPeer, serviceName: String)
     /// The service name of a peer that went away (browser removed it).
     case vanished(String)
 }
