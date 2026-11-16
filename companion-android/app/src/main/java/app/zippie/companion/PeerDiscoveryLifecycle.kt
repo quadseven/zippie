@@ -13,7 +13,7 @@ import androidx.lifecycle.LifecycleOwner
 class PeerDiscoveryLifecycle(
     private val discovery: PeerDiscovery,
     private val rosterJson: () -> String,
-    private val onVerified: (VerifiedPeer) -> Unit,
+    private val onVerified: (String, VerifiedPeer) -> Unit,
     private val onRefused: (String, String) -> Unit,
     private val onLost: (String) -> Unit,
 ) : DefaultLifecycleObserver {

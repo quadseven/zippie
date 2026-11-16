@@ -129,13 +129,6 @@ final class BondModel: ObservableObject {
         rebuild()
     }
 
-    func refresh() async {
-        now = Date()
-        report = RelayStatusStore.read(from: defaults)
-        await refreshBondIfDue()
-        rebuild()
-    }
-
     /// Ask the router what the bond looks like, and work out where we are.
     ///
     /// TWO ADDRESSES FOR ONE CONSOLE. iOS runs exactly ONE packet-tunnel

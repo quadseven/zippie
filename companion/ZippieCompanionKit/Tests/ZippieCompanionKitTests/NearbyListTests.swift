@@ -28,16 +28,9 @@ final class NearbyListTests: XCTestCase {
     }
 
     private final class FakeBrowser: PeerBrowsing, @unchecked Sendable {
-        var resultsChangedHandler: (([DiscoveredPeer], [String]) -> Void)? = nil
-        var started = false
-        var stopped = false
-
-        func start(queue: DispatchQueue) { started = true }
-        func stop() { stopped = true }
-
-        func deliver(added: [DiscoveredPeer], removed: [String]) {
-            resultsChangedHandler?(added, removed)
-        }
+        var resultsChangedHandler: (([DiscoveredPeer], [String]) -> Void)?
+        func start(queue: DispatchQueue) {}
+        func stop() {}
     }
 
     private func makeService(verifier: FakeVerifier = FakeVerifier(),
@@ -58,41 +51,21 @@ final class NearbyListTests: XCTestCase {
         v.verifiedByID[1] = peer(id: 1)
         v.verifiedByID[2] = peer(id: 2)
         v.refusedIDs = [3]
-        let b = FakeBrowser()
-        let s = makeService(verifier: v, browser: b)
-        s.start()
+        let s = makeService(verifier: v)
 
-        b.deliver(added: [discovered(id: 1), discovered(id: 2), discovered(id: 3)], removed: [])
-
-        // Wait for verification to complete
-        for _ in 0..<200 {
-            let peers = await s.peers
-            if peers.count == 2 { break }
-            try? await Task.sleep(nanoseconds: 10_000_000)
-        }
+        await s.deliver(added: [discovered(id: 1), discovered(id: 2), discovered(id: 3)], removed: [])
 
         let peers = await s.peers
-        XCTAssertEqual(peers.count, 2)
-        XCTAssertTrue(peers.contains { $0.clientID == 1 })
-        XCTAssertTrue(peers.contains { $0.clientID == 2 })
-        XCTAssertFalse(peers.contains { $0.clientID == 3 })
+        XCTAssertEqual(peers.map(\.clientID), [1, 2])
     }
 
     /// Refused peers never appear in the nearby list.
     func testRefusedPeersNeverAppearInNearbyList() async {
         let v = FakeVerifier()
         v.refusedIDs = [9]
-        let b = FakeBrowser()
-        let s = makeService(verifier: v, browser: b)
-        s.start()
+        let s = makeService(verifier: v)
 
-        b.deliver(added: [discovered(id: 9)], removed: [])
-
-        for _ in 0..<200 {
-            let peers = await s.peers
-            if peers.isEmpty { break }
-            try? await Task.sleep(nanoseconds: 10_000_000)
-        }
+        await s.deliver(added: [discovered(id: 9)], removed: [])
 
         let peers = await s.peers
         XCTAssertTrue(peers.isEmpty, "a refused peer must not be published")
@@ -102,26 +75,27 @@ final class NearbyListTests: XCTestCase {
     func testVanishedPeerRemovedWithinOneBrowseCycle() async {
         let v = FakeVerifier()
         v.verifiedByID[5] = peer(id: 5)
-        let b = FakeBrowser()
-        let s = makeService(verifier: v, browser: b)
-        s.start()
+        let s = makeService(verifier: v)
 
-        b.deliver(added: [discovered(id: 5)], removed: [])
-        for _ in 0..<200 {
-            let peers = await s.peers
-            if peers.count == 1 { break }
-            try? await Task.sleep(nanoseconds: 10_000_000)
-        }
-        XCTAssertEqual((await s.peers).count, 1)
+        await s.deliver(added: [discovered(id: 5)], removed: [])
+        let before = await s.peers
+        XCTAssertEqual(before.count, 1)
 
-        b.deliver(added: [], removed: ["peer-5"])
-        for _ in 0..<200 {
-            let peers = await s.peers
-            if peers.isEmpty { break }
-            try? await Task.sleep(nanoseconds: 10_000_000)
-        }
+        await s.deliver(added: [], removed: ["peer-5"])
 
-        let peers = await s.peers
-        XCTAssertTrue(peers.isEmpty, "a vanished peer is removed from the published set")
+        let after = await s.peers
+        XCTAssertTrue(after.isEmpty, "a vanished peer is removed from the published set")
+    }
+
+    /// Choosing a peer creates the same leg config a manual edit would.
+    func testChoosingAPeerYieldsTheManualEditLegConfig() {
+        let chosen = peer(id: 7)
+
+        var manual = LegEdit()
+        manual.set(.label, .text("Nearby peer 7"))
+        manual.set(.enabled, .flag(true))
+
+        XCTAssertEqual(NearbyLeg.edit(for: chosen), manual)
+        XCTAssertTrue(LegName.isValid(NearbyLeg.name(for: chosen)))
     }
 }
