@@ -3804,7 +3804,7 @@ class BondAgent:
         wd = getattr(self, "_resolver_watchdog", None)
         if wd is not None:
             try:
-                if wd.tick():
+                if wd.run_once(force=False):
                     self.telemetry.emit_count("resolver_watchdog_restart", 1, [])
             except Exception:  # noqa: BLE001
                 log.exception("resolver watchdog tick failed")

@@ -1650,7 +1650,7 @@ class ResolverWatchdog:
 
         def _loop():
             while not self._stop.is_set():
-                self.tick()
+                self.poll()
                 self._stop.wait(self.interval_s or 1.0)
 
         self._thread = threading.Thread(target=_loop, name="zippie-resolver-watchdog", daemon=True)
