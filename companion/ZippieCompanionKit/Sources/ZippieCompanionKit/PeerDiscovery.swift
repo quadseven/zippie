@@ -82,18 +82,18 @@ public protocol PeerAdvertising: AnyObject {
 /// results and `Set<NWBrowser.Result.Change>` for removed changes. Added
 /// results carry endpoint and metadata directly; removed changes carry the
 /// removed result via their `.removed` case.
-final class NWBrowserAdapter: PeerBrowsing {
+public final class NWBrowserAdapter: PeerBrowsing {
     private let browser: NWBrowser
-    var resultsChangedHandler: (([DiscoveredPeer], [String]) -> Void)? = nil
+    public var resultsChangedHandler: (([DiscoveredPeer], [String]) -> Void)? = nil
 
-    init() {
+    public init() {
         let params = NWParameters()
         params.includePeerToPeer = true
         self.browser = NWBrowser(for: .bonjour(type: "_zippie._tcp", domain: "local"),
                                   using: params)
     }
 
-    func start(queue: DispatchQueue) {
+    public func start(queue: DispatchQueue) {
         browser.browseResultsChangedHandler = { [weak self] rawAdded, rawRemoved in
             guard let self else { return }
             let added = rawAdded.compactMap { Self.discovered(from: $0) }
@@ -103,7 +103,7 @@ final class NWBrowserAdapter: PeerBrowsing {
         browser.start(queue: queue)
     }
 
-    func stop() {
+    public func stop() {
         browser.cancel()
     }
 

@@ -11,14 +11,13 @@ import Zippie
 /// `Zippie.xcframework` which is only linked to the app and tunnel targets.
 /// The kit keeps the `PeerVerifying` protocol so tests can use a fake verifier
 /// without the Go framework.
-@available(iOS 16.0, *)
-public final class GoPeerVerifier: PeerVerifying, @unchecked Sendable {
+final class GoPeerVerifier: PeerVerifying, @unchecked Sendable {
 
-    private let rosterClient: RosterClient
+    private let rosterClient: any RosterClient
     private var cachedRoster: String?
     private var rosterExpiry: Date = .distantPast
 
-    public init(rosterClient: RosterClient = .shared) {
+    init(rosterClient: any RosterClient = DefaultRosterClient()) {
         self.rosterClient = rosterClient
     }
 
@@ -26,21 +25,21 @@ public final class GoPeerVerifier: PeerVerifying, @unchecked Sendable {
     ///
     /// Returns the verified peer when the TXT proof authenticates, or nil when
     /// it is refused (missing field, unknown client, bad signature, stale, ...).
-    public func verify(txt: [String: String]) async -> VerifiedPeer? {
+    func verify(txt: [String: String]) async -> VerifiedPeer? {
         do {
             let rosterJSON = try await fetchRoster()
             let txtJSON = try JSONSerialization.data(withJSONObject: txt)
             let txtString = String(data: txtJSON, encoding: .utf8) ?? "{}"
 
             #if canImport(Zippie)
-            let result = Zippie.VerifyPeer(rosterJSON, txtString)
-            if let error = result.error {
+            // gomobile exports `mobile.VerifyPeer` as `MobileVerifyPeer`,
+            // reporting a refused peer through the error pointer.
+            var err: NSError?
+            let output = MobileVerifyPeer(rosterJSON, txtString, &err)
+            if err != nil {
                 return nil
             }
-            if let output = result.output {
-                return parseVerifiedPeer(output)
-            }
-            return nil
+            return parseVerifiedPeer(output)
             #else
             // Build without Zippie framework - cannot verify
             return nil
@@ -81,13 +80,7 @@ protocol RosterClient: Sendable {
     func fetch() async throws -> String
 }
 
-extension RosterClient {
-    static var shared: RosterClient {
-        DefaultRosterClient()
-    }
-}
-
-private struct DefaultRosterClient: RosterClient {
+struct DefaultRosterClient: RosterClient {
     func fetch() async throws -> String {
         let consoleURL = Settings.consoleURL
         guard let url = URL(string: consoleURL) else {

@@ -59,29 +59,25 @@ final class BondModel: ObservableObject {
     /// router holds and no more.
     private static let seriesCap = 720
 
+    /// The Bonjour name this companion browses under.
+    private static let discoveryServiceName = "zippie-companion"
+
     private let peerDiscovery: PeerDiscoveryService
     private var peerDiscoveryTask: Task<Void, Never>?
 
     init(defaults: UserDefaults? = RelayConfiguration.sharedDefaults) {
         self.defaults = defaults ?? .standard
 
+        // Browse only: the phone holds no discovery proof of its own, so it
+        // has no TXT record a peer could verify and advertises nothing.
         let config = PeerDiscoveryService.Config(
-            serviceName: Settings.routerDisplayName,
-            listenPort: UInt16(Settings.listenPort),
-            advertiseTxt: [:]
-        )
-        let verifier = GoPeerVerifier()
-        let browser = NWBrowserAdapter()
-        let advertiser = try? NWListenerAdvertiser(
-            serviceName: Settings.routerDisplayName,
-            port: UInt16(Settings.listenPort),
-            txt: [:]
+            serviceName: Self.discoveryServiceName,
+            listenPort: UInt16(clamping: Settings.listenPort)
         )
         self.peerDiscovery = PeerDiscoveryService(
             config: config,
-            verifier: verifier,
-            browser: browser,
-            advertiser: advertiser
+            verifier: GoPeerVerifier(),
+            browser: NWBrowserAdapter()
         )
 
         // One second: fast enough that a share bar animating reads as live,
