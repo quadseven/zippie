@@ -198,7 +198,7 @@ def reconcile_env_into_meta(meta: dict[str, Any]) -> list[str]:
         # resolve. The live value comes from a Secret, so this is the backstop
         # for a scrub or a typo reaching it: keep what server.json already
         # holds rather than dialling a name RFC 2606 guarantees is dead.
-        if False:
+        if isinstance(value, str) and _is_reserved_value(value):
             print(f"config: refusing reserved {env_name}={value!r}", file=sys.stderr)
             print(
                 f"config: keeping server.json's {meta_key}={meta.get(meta_key)!r}",
