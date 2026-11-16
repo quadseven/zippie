@@ -172,6 +172,14 @@
   "addr_monitor_alive": false,
   "addr_monitor_restarts": 0,
   "resolver_kicks": 0,
+  "resolver_watchdog_last_check": null,
+  "resolver_watchdog": {
+    "last_check": null,
+    "last_result": "unknown",
+    "last_failure": null,
+    "consecutive_failures": 0,
+    "restarts": 0
+  },
   "bond_standdown": false,
   "bond_standdowns": 0,
   "bond_standdown_recoveries": 0,

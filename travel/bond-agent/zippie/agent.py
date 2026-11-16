@@ -607,6 +607,15 @@ class BondAgent:
             self.config.policy.resolver_kick_service,
             min_interval_s=self.config.policy.resolver_kick_min_interval_s,
         )
+        # Local resolver watchdog (#132). Runs on the control loop cadence but
+        # only checks every 30s; a stopped nextdns or a silent port 53 for two
+        # consecutive checks restarts it through _resolver above.
+        self._resolver_watchdog = net.ResolverWatchdog(
+            self._resolver,
+            interval_s=30.0,
+            query_timeout_s=2.0,
+            cooldown_s=300.0,
+        )
         # A bond with one dying leg beats an idle healthy WAN, and takes the
         # LAN with it (#124). See BondStanddown and _install_default_route.
         self._standdown = BondStanddown(self.config.policy)
@@ -626,6 +635,19 @@ class BondAgent:
         if roster is None:
             roster = self.__dict__["_leg_roster"] = LegRoster(leg_store=None)
         return roster
+
+    @property
+    def resolver_watchdog(self):
+        """The local resolver watchdog. Lazily created so an agent built with
+        object.__new__ (common in predicate tests) does not AttributeError."""
+        wd = self.__dict__.get("_resolver_watchdog")
+        if wd is None:
+            wd = self.__dict__["_resolver_watchdog"] = net.ResolverWatchdog(None)
+        return wd
+
+    @resolver_watchdog.setter
+    def resolver_watchdog(self, value):
+        self.__dict__["_resolver_watchdog"] = value
 
     # The roster's state under the names the console seam, the status document
     # and the tests already use. Assigning one replaces the roster's.
@@ -3009,6 +3031,31 @@ class BondAgent:
                 addr_monitor_alive=self.addr_monitor.alive,
                 addr_monitor_restarts=self.addr_monitor.restarts,
                 resolver_kicks=self._resolver.kicks,
+                resolver_watchdog_last_check=(
+                    self.resolver_watchdog.last_check
+                    if getattr(self, "resolver_watchdog", None) is not None
+                    else None
+                ),
+                resolver_watchdog_restarts=(
+                    self.resolver_watchdog.restarts
+                    if getattr(self, "resolver_watchdog", None) is not None
+                    else 0
+                ),
+                resolver_watchdog_consecutive_failures=(
+                    self.resolver_watchdog.consecutive_failures
+                    if getattr(self, "resolver_watchdog", None) is not None
+                    else 0
+                ),
+                resolver_watchdog_last_result=(
+                    self.resolver_watchdog.last_result
+                    if getattr(self, "resolver_watchdog", None) is not None
+                    else None
+                ),
+                resolver_watchdog_last_failure=(
+                    self.resolver_watchdog.last_failure
+                    if getattr(self, "resolver_watchdog", None) is not None
+                    else None
+                ),
                 standdown=self._standdown.standing_down,
                 standdowns=self._standdown.standdowns,
                 standdown_recoveries=self._standdown.recoveries,
@@ -3754,6 +3801,13 @@ class BondAgent:
         # same as no signal at all. Cached behind a TTL, so this is a dict
         # lookup on all but one tick in five minutes.
         self._resolve_home_ip()
+        wd = getattr(self, "_resolver_watchdog", None)
+        if wd is not None:
+            try:
+                if wd.tick():
+                    self.telemetry.emit_count("resolver_watchdog_restart", 1, [])
+            except Exception:  # noqa: BLE001
+                log.exception("resolver watchdog tick failed")
         self.write_status_file()
         self.telemetry.emit_status(self.status_dict())
 
