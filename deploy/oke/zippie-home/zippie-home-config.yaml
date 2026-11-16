@@ -14,7 +14,8 @@ data:
   # (custom.cloudflare.dns.duplicate_names). Before that cleanup this name
   # resolved to a stale IP half the time, which would have sent half of every
   # travel client's WireGuard handshakes to a stranger.
-  endpoint: "dns-e.example-home.invalid"
+  #   endpoint: "<placeholder>"  (sourced from Secret, not in git)
+  endpoint: "<placeholder>"
   # One UDP port per bonded path, forwarded on the gateway to this node
   # (see README for why that is unavoidable with bare WireGuard).
   #

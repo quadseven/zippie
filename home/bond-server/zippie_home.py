@@ -14,6 +14,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -128,6 +129,37 @@ def _apply_env_config(meta_path: Path, meta: dict[str, Any]) -> None:
         print(f"config: {key} <- {meta[key]!r} (from the environment)")
 
 
+def _is_reserved_value(value: str) -> bool:
+    """Check if a value is in a reserved range that can never be a real endpoint.
+
+    RFC 2606 / RFC 6761 reserved TLDs. ANCHORED TO THE END OF A LABEL, and
+    that lookahead is load-bearing: \.example\b also matches the perfectly
+    real host.example-home.net, because a hyphen is a word boundary. A guard
+    that refuses real hostnames is a guard somebody switches off.
+
+    Also includes RFC 5737 documentation space addresses and RFC 3849 IPv6
+    documentation range, to match the router deploy's same list
+    (scripts/deploy-openwrt.sh).
+
+    Based on scripts/deploy-openwrt.sh's RESERVED regex.
+    """
+    RESERVED = re.compile(
+        r"""
+        # RFC 2606 / RFC 6761 reserved TLDs. ANCHORED TO THE END OF A LABEL, and
+        # that lookahead is load-bearing: \.example\b also matches the perfectly
+        # real host.example-home.net, because a hyphen is a word boundary. A guard
+        # that refuses real hostnames is a guard somebody switches off.
+        \.(?:invalid|example|test|localhost)(?![A-Za-z0-9-])             # RFC 2606
+      | \bexample\.(?:com|net|org)(?![A-Za-z0-9-])                     # RFC 2606
+      | \b192\.0\.2\. | \b198\.51\.100\. | \b203\.0\.113\.     # RFC 5737
+      | \b2001:0?db8                                           # RFC 3849
+      | ^<.*>$                                                 # the 2026-08-29 shape
+        """,
+        re.VERBOSE | re.IGNORECASE,
+    )
+    return bool(RESERVED.search(value))
+
+
 def reconcile_env_into_meta(meta: dict[str, Any]) -> list[str]:
     """Make the ConfigMap authoritative for its three keys. Returns what moved.
 
@@ -166,6 +198,18 @@ def reconcile_env_into_meta(meta: dict[str, Any]) -> list[str]:
                 continue
         else:
             value = raw
+
+        # Refuse reserved-for-documentation values. A placeholder like
+        # "dns-e.example-home.invalid" parses as a valid endpoint but can never
+        # be a real, resolvable endpoint. A ConfigMap was meant to be the config
+        # surface, but this repo deliberately ships reserves there rather than
+        # typing out real values. If a reserved value arrives, keep what server.json
+        # already has, so a scrub can never become the live endpoint.
+        if _is_reserved_value(value):
+            if meta.get(meta_key) != value:
+                print(f"config: refusing reserved {env_name}={value!r}", file=sys.stderr)
+                print(f"config: keeping the router's value {meta.get(meta_key)!r}", file=sys.stderr)
+            continue
 
         if meta.get(meta_key) != value:
             meta[meta_key] = value

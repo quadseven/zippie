@@ -191,9 +191,30 @@ spec:
               value: "1"
             # The address travel clients dial. A bare residential IP works but moves;
             # point this at DDNS once one exists. Changing it does NOT rekey.
+            # A DNS NAME, NOT AN ADDRESS. The Secret holds a public DNS name
+            # whose A record is the router's tailnet address, kept by the
+            # operator's DNS stack and synced into this Secret from the
+            # operator's parameter store. This pod cannot resolve
+            # MagicDNS names, but it resolves public DNS, so a name survives
+            # the router being re-addressed on the tailnet with no change
+            # here and no hand-edited Secret.
+            #
+            # Missing or reserved-for-documentation values are refused by
+            # home/bond-server/zippie_home.py's own guard rather than dialled.
+            #
+            # optional: true IS LOAD-BEARING, NOT A DEFAULT LEFT IN PLACE. A
+            # required secretKeyRef against a Secret that does not exist yet
+            # blocks the POD, not just the router: CreateContainerConfigError,
+            # and /api/nodes, /livez and every other route this same container
+            # serves go down with it. That is a worse outage than the one
+            # this fix closes. Optional means an unset Secret simply leaves
+            # the env var unset, home/bond-server/zippie_home.py's own guard
+            # reports the router as config_error rather than crash-looping the
+            # pod, and the bond - whose entire design point is staying up while
+            # everything it monitors is broken - keeps doing exactly that.
             - name: ZIPPIE_HOME_ENDPOINT
               valueFrom:
-                configMapKeyRef: {name: zippie-home-config, key: endpoint}
+                secretKeyRef: {name: zippie-home-router, key: host, optional: true}
             - name: ZIPPIE_HOME_PORTS
               valueFrom:
                 configMapKeyRef: {name: zippie-home-config, key: ports}
