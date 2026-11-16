@@ -425,16 +425,18 @@ def test_no_router_configured_is_still_a_503(hub_at):
 # ---------------------------------------------------------------------------
 
 
-def test_live_is_opt_in_and_reaches_the_router(router, hub_at):
+def test_live_is_opt_in_and_reaches_the_router(router, hub_at, monkeypatch):
     """?live=1 fetches; the same path without it does not.
 
     The two answers differ in `primary`, so this cannot pass by accident on a
     handler that serves the same document either way.
     """
+    monkeypatch.setenv("ZIPPIE_HUB_TOKEN", "secret")
     hostport, reg = hub_at([router.config])
     reg.note_router("travel-router", ROUTER_STATUS)
+    auth = {"Authorization": "Bearer secret"}
 
-    status, headers, body = _get(hostport, "/api/status?live=1")
+    status, headers, body = _get(hostport, "/api/status?live=1", headers=auth)
     assert status == 200
     assert _json_body(body, headers)["primary"] == LIVE_STATUS["primary"]
     assert router.hits == ["/api/status?live=1"]
@@ -463,29 +465,35 @@ def test_anything_but_an_explicit_live_uses_the_cache(router, hub_at, query):
 # ---------------------------------------------------------------------------
 
 
-def test_series_is_still_fetched_because_nothing_caches_it(router, hub_at):
+def test_series_is_still_fetched_because_nothing_caches_it(router, hub_at, monkeypatch):
     """The poller does not collect series, so there is nothing to serve from."""
+    monkeypatch.setenv("ZIPPIE_HUB_TOKEN", "secret")
     hostport, reg = hub_at([router.config])
     reg.note_router("travel-router", ROUTER_STATUS)
+    auth = {"Authorization": "Bearer secret"}
 
-    status, headers, body = _get(hostport, "/api/series")
+    status, headers, body = _get(hostport, "/api/series", headers=auth)
 
     assert status == 200
     assert router.hits == ["/api/series"]
     assert len(_json_body(body, headers)["points"]) == 40
 
 
-def test_series_keeps_the_since_cursor(router, hub_at):
+def test_series_keeps_the_since_cursor(router, hub_at, monkeypatch):
     """A regression guard, not a new behaviour.
 
     #70 records the proxy as dropping `since`. It does not - the query string is
     appended to the target - and this pins that, because an incremental client
     silently refetching the whole hour is invisible until somebody measures it.
     """
+    monkeypatch.setenv("ZIPPIE_HUB_TOKEN", "secret")
     hostport, reg = hub_at([router.config])
     reg.note_router("travel-router", ROUTER_STATUS)
+    auth = {"Authorization": "Bearer secret"}
 
-    status, headers, body = _get(hostport, "/api/series?since=1754600000000")
+    status, headers, body = _get(
+        hostport, "/api/series?since=1754600000000", headers=auth
+    )
 
     assert status == 200
     assert router.hits == ["/api/series?since=1754600000000"]
@@ -494,18 +502,21 @@ def test_series_keeps_the_since_cursor(router, hub_at):
     assert len(payload["points"]) == 1
 
 
-def test_the_routers_gzip_is_asked_for_and_passed_through(router, hub_at):
+def test_the_routers_gzip_is_asked_for_and_passed_through(router, hub_at, monkeypatch):
     """urllib sends `Accept-Encoding: identity` unless told otherwise.
 
     So the router's gzip was never requested and the body crossed the tailnet
     uncompressed - the one hop that costs anything. This proves the header
     reaches the router AND that what comes back is handed on intact.
     """
+    monkeypatch.setenv("ZIPPIE_HUB_TOKEN", "secret")
     hostport, reg = hub_at([router.config])
     reg.note_router("travel-router", ROUTER_STATUS)
 
     status, headers, body = _get(
-        hostport, "/api/series", headers={"Accept-Encoding": "gzip, deflate"}
+        hostport,
+        "/api/series",
+        headers={"Accept-Encoding": "gzip, deflate", "Authorization": "Bearer secret"},
     )
 
     assert status == 200
@@ -519,7 +530,7 @@ def test_the_routers_gzip_is_asked_for_and_passed_through(router, hub_at):
     assert len(json.loads(gzip.decompress(body))["points"]) == 40
 
 
-def test_a_client_that_cannot_gzip_gets_plain_json(router, hub_at):
+def test_a_client_that_cannot_gzip_gets_plain_json(router, hub_at, monkeypatch):
     """Nothing offered, nothing added.
 
     urllib supplies `Accept-Encoding: identity` when the hub passes no header
@@ -527,10 +538,12 @@ def test_a_client_that_cannot_gzip_gets_plain_json(router, hub_at):
     right on this one: a client that did not offer gzip must not be handed a
     gzip stream because the hop upstream could have used one.
     """
+    monkeypatch.setenv("ZIPPIE_HUB_TOKEN", "secret")
     hostport, reg = hub_at([router.config])
     reg.note_router("travel-router", ROUTER_STATUS)
+    auth = {"Authorization": "Bearer secret"}
 
-    status, headers, body = _get(hostport, "/api/series")
+    status, headers, body = _get(hostport, "/api/series", headers=auth)
 
     assert status == 200
     assert "gzip" not in (router.accept_encodings[0] or "")
@@ -539,13 +552,15 @@ def test_a_client_that_cannot_gzip_gets_plain_json(router, hub_at):
     assert json.loads(body)["points"]
 
 
-def test_a_router_that_is_gone_still_502s_the_series_proxy(router, hub_at):
+def test_a_router_that_is_gone_still_502s_the_series_proxy(router, hub_at, monkeypatch):
     """The proxy's own failure path, unchanged by this work."""
+    monkeypatch.setenv("ZIPPIE_HUB_TOKEN", "secret")
     hostport, reg = hub_at([router.config])
     router.shutdown()
     router.server_close()
+    auth = {"Authorization": "Bearer secret"}
 
-    status, headers, body = _get(hostport, "/api/series")
+    status, headers, body = _get(hostport, "/api/series", headers=auth)
 
     assert status == 502
     assert _json_body(body, headers)["error"] == "router not answering"

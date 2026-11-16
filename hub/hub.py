@@ -101,6 +101,14 @@ CLIENT_RETAIN_S = 86400.0
 # behind it. Named because the refusal message quotes the same number, and the
 # two silently disagreeing is exactly the sort of thing nobody notices.
 REPORT_MAX_BYTES = 262144
+# A client name is a leg identity the agent sets, not free text: 2-32 chars of
+# [a-z0-9-]. A ceiling also stops one authenticated caller from growing memory by
+# name alone, the same class as #43 and #85.
+CLIENT_NAME_RE = re.compile(r"^[a-z0-9-]{2,32}$")
+# Distinct client identities retained at once. Small and fixed: the fleet is a
+# handful of phones, and an authenticated caller must not be able to mint rows
+# without bound.
+CLIENT_MAX_RETAINED = 64
 
 
 # ---------------------------------------------------------------------------
@@ -1105,9 +1113,12 @@ class Registry:
             seen.get("config_error"),
         )
 
-    def note_client(self, name: str, payload: dict) -> None:
+    def note_client(self, name: str, payload: dict) -> bool:
         with self._lock:
+            if name not in self._clients and len(self._clients) >= CLIENT_MAX_RETAINED:
+                return False
             self._clients[name] = {"status": payload, "at": time.time()}
+            return True
 
     def _evict_forgotten_clients(self, now: float) -> None:
         """Drop clients nobody has heard from in CLIENT_RETAIN_S. Lock held.
@@ -1662,29 +1673,27 @@ def serve_primary(
     what the poller last got out of it; /api/series by fetching, because nothing
     caches series.
     """
-    # Passed in, not hung off the server object - the first version read
-    # self.server.routers, which never existed, and every proxied request died
-    # with an AttributeError the client saw as a hang.
     primary = next(iter(routers), None)
     if primary is None:
         return handler._send(
             503, b'{"error":"no router configured"}', "application/json"
         )
-    # /api/status IS ANSWERED FROM THE POLLER'S SNAPSHOT (#70). poll_routers
-    # already fetches this exact document from this exact router every
-    # POLL_INTERVAL_S, so re-fetching it per request bought nothing and cost a
-    # round trip across the tailnet to a MOBILE router over a bonded link: 5.4 s
-    # measured, against 0.03 s for the hub's own /api/nodes. The Companion app's
-    # request timeout is 8 s, so the app gave up and reported "the router is not
-    # answering" while the router was answering the same request in 0.87 s - the
-    # component named in the error was not the component that failed.
-    if path == "/api/status" and not wants_live_read(handler.path):
+    live = wants_live_read(handler.path)
+    if path == "/api/status" and not live:
         code, body = cached_status(reg, primary["name"], status_max_age_s(len(routers)))
         return handler._send(code, body, "application/json")
-    # /api/series IS STILL PROXIED, and that is not an oversight: the poller does
-    # not collect series, so there is no snapshot to answer from. `?live=1` on
-    # /api/status lands here too, which is the deliberate escape hatch for a
-    # caller that needs a read taken now rather than one that says how old it is.
+    # Live reads and series proxy straight to the router over the bond. Both cost
+    # router work and metered bytes, so they require the report token. Cached
+    # status remains open for the dashboard and companion reads.
+    if not report_authorised(handler):
+        return handler._send(401, b'{"error":"bad token"}', "application/json")
+    if live:
+        _status, _at, _reachable, config_error = reg.router_sample(primary["name"])
+        if config_error:
+            code, body = cached_status(
+                reg, primary["name"], status_max_age_s(len(routers))
+            )
+            return handler._send(code, body, "application/json")
     return proxy_to_router(handler, primary, path)
 
 
@@ -1765,12 +1774,23 @@ def handle_report(handler: BaseHTTPRequestHandler, reg: Registry) -> None:
         )
     try:
         payload = json.loads(handler.rfile.read(length))
-        name = str(payload["name"])
-    except (ValueError, KeyError, OSError):
+    except (ValueError, OSError):
         return handler._send(
             400, b'{"error":"body must be JSON with a name"}', "application/json"
         )
-    reg.note_client(name, payload)
+    if not isinstance(payload, dict):
+        return handler._send(
+            400,
+            b'{"error":"body must be a JSON object with a name"}',
+            "application/json",
+        )
+    name = payload.get("name")
+    if not isinstance(name, str) or not CLIENT_NAME_RE.match(name):
+        return handler._send(
+            400, b'{"error":"name must be 2-32 chars of [a-z0-9-]"}', "application/json"
+        )
+    if not reg.note_client(name, payload):
+        return handler._send(400, b'{"error":"too many clients"}', "application/json")
     return handler._send(200, b'{"ok":true}', "application/json")
 
 
