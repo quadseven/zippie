@@ -63,6 +63,8 @@ class ConsoleSeam(Protocol):
 
     def series_payload(self, since: int | None) -> dict[str, Any]: ...
 
+    def discovery_roster(self) -> list[dict[str, Any]]: ...
+
 
 def encode_json_body(payload: Any, accept_encoding: str | None):
     """Serialise `payload`, gzipping it when the client said it could.
@@ -527,6 +529,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/series":
             self._series(parsed.query)
+            return
+        if parsed.path == "/api/discovery/roster":
+            self._ok(json.dumps(self.seam.discovery_roster()).encode("utf-8"))
             return
         if parsed.path.lower().endswith(".apk"):
             self.send_error(403, "serving APKs from agent dashboard is forbidden")

@@ -40,6 +40,9 @@ final class BondModel: ObservableObject {
     /// Leg order, held stable so a leg does not change colour when another
     /// joins or leaves mid-drive.
     @Published private(set) var seriesOrder: [String] = []
+    /// Verified peers discovered on the local network. Updated from
+    /// PeerDiscoveryService events; only verified peers are published.
+    @Published private(set) var nearbyPeers: [VerifiedPeer] = []
 
     private let defaults: UserDefaults
     private var ticker: AnyCancellable?
@@ -53,13 +56,71 @@ final class BondModel: ObservableObject {
     /// router holds and no more.
     private static let seriesCap = 720
 
+    private let peerDiscovery: PeerDiscoveryService
+    private var peerDiscoveryTask: Task<Void, Never>?
+
     init(defaults: UserDefaults? = RelayConfiguration.sharedDefaults) {
         self.defaults = defaults ?? .standard
+
+        let config = PeerDiscoveryService.Config(
+            serviceName: Settings.routerDisplayName,
+            listenPort: UInt16(Settings.listenPort),
+            advertiseTxt: [:]
+        )
+        let verifier = GoPeerVerifier()
+        let browser = NWBrowserAdapter()
+        let advertiser = try? NWListenerAdvertiser(
+            serviceName: Settings.routerDisplayName,
+            port: UInt16(Settings.listenPort),
+            txt: [:]
+        )
+        self.peerDiscovery = PeerDiscoveryService(
+            config: config,
+            verifier: verifier,
+            browser: browser,
+            advertiser: advertiser
+        )
+
         // One second: fast enough that a share bar animating reads as live,
         // slow enough that a mounted phone is not redrawing constantly.
         ticker = Timer.publish(every: 1, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in Task { await self?.refresh() } }
+
+        startPeerDiscovery()
+    }
+
+    deinit {
+        peerDiscoveryTask?.cancel()
+        peerDiscovery.stop()
+    }
+
+    private func startPeerDiscovery() {
+        peerDiscovery.start()
+        peerDiscoveryTask = Task { [weak self] in
+            for await event in await self?.peerDiscovery.events ?? AsyncStream<PeerEvent>.makeStream().0 {
+                await self?.handlePeerEvent(event)
+            }
+        }
+    }
+
+    private func handlePeerEvent(_ event: PeerEvent) async {
+        switch event {
+        case .discovered(let peer):
+            if !nearbyPeers.contains(where: { $0.clientID == peer.clientID }) {
+                nearbyPeers.append(peer)
+                nearbyPeers.sort { $0.clientID < $1.clientID }
+            }
+        case .vanished(let name):
+            nearbyPeers.removeAll { $0.endpoint.contains(name) || $0.clientID.description == name }
+        }
+    }
+
+    func refresh() async {
+        now = Date()
+        report = RelayStatusStore.read(from: defaults)
+        await refreshBondIfDue()
+        rebuild()
     }
 
     func refresh() async {
