@@ -137,6 +137,7 @@ spec:
               zippie-home init \
                 --public-endpoint "${ZIPPIE_HOME_ENDPOINT:-}" \
                 --ports "$ZIPPIE_HOME_PORTS" \
+                --require-real-endpoint \
                 ${ZIPPIE_HOME_WAN:+--wan-iface "$ZIPPIE_HOME_WAN"}
 
               zippie-home up

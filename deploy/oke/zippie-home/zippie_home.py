@@ -471,6 +471,18 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(json.dumps(safe, indent=2))
         return 0
 
+    endpoint = args.public_endpoint or ""
+    if args.require_real_endpoint and (not endpoint or _is_reserved_value(endpoint)):
+        # The pod passes --require-real-endpoint: a first start must not
+        # write a placeholder into server.json, where reconcile would then
+        # keep it as the stored value (#390).
+        print(
+            f"init: refusing endpoint {endpoint!r}: it is empty or reserved for "
+            "documentation; set a real one in Secret zippie-home-endpoint (key endpoint)",
+            file=sys.stderr,
+        )
+        return 2
+
     priv, pub = gen_keypair()
     ports = [int(p) for p in args.ports.split(",")]
     wan = args.wan_iface or detect_wan_iface()
@@ -840,6 +852,11 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--network", default="10.66.0.0/24")
     init.add_argument("--server-address", default="10.66.0.1/24")
     init.add_argument("--wan-iface", default=None)
+    init.add_argument(
+        "--require-real-endpoint",
+        action="store_true",
+        help="refuse an empty or reserved (documentation) endpoint when creating state",
+    )
     init.add_argument(
         "--transport-port",
         type=int,
