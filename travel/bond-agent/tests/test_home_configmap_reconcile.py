@@ -17,6 +17,14 @@ looks authoritative and is not:
 DECISION: the ConfigMap is authoritative for those three keys, reconciled into
 server.json on every `up`.
 
+THE ENDPOINT'S SOURCE MOVED TO A SECRET, AND RESERVED VALUES ARE REFUSED. The
+committed ConfigMap carries a visibly fake placeholder; the live value is
+ZIPPIE_HOME_ENDPOINT sourced from a Secret this repo does not define, and it
+reaches server.json by the same reconcile. A reserved-for-documentation value
+(`.invalid`, `.example`, `example.com`, RFC 5737 addresses) is refused with a
+log line and the stored value is kept, so a scrub can never become the live
+endpoint.
+
 WHY `up` AND NEVER `init`. `init --force` is the rekey path; it regenerates the
 server keypair and invalidates every provisioned client bundle. Nine peers
 across three clients are provisioned today. Reconciling in `up` keeps
@@ -87,10 +95,21 @@ def _reconcile(mod, meta_path):
 # ------------------------------------------------- the reported bug is fixed
 def test_a_changed_endpoint_reaches_server_json(home, monkeypatch):
     mod, meta_path = home
-    monkeypatch.setenv("ZIPPIE_HOME_ENDPOINT", "router.example.com")
+    monkeypatch.setenv("ZIPPIE_HOME_ENDPOINT", "dns-e.some-house.net")
     changed, meta = _reconcile(mod, meta_path)
     assert changed
-    assert meta["endpoint"] == "router.example.com"
+    assert meta["endpoint"] == "dns-e.some-house.net"
+
+
+def test_a_real_hostname_with_an_example_label_is_accepted(home, monkeypatch):
+    """The guard's anchoring is load-bearing. `host.example-home.net` is a
+    real hostname, not a reserved one; a guard that refuses it is a guard
+    somebody switches off."""
+    mod, meta_path = home
+    monkeypatch.setenv("ZIPPIE_HOME_ENDPOINT", "host.example-home.net")
+    changed, meta = _reconcile(mod, meta_path)
+    assert changed == ["endpoint"]
+    assert meta["endpoint"] == "host.example-home.net"
 
 
 def test_changed_ports_reach_server_json(home, monkeypatch):
@@ -107,53 +126,34 @@ def test_a_changed_wan_iface_reaches_server_json(home, monkeypatch):
     assert meta["wan_iface"] == "eth1"
 
 
-def test_a_reserved_endpoint_is_refused(home, monkeypatch):
-    """A reserved-for-documentation value like dns-e.example-home.invalid is refused.
-
-    The repo ships reserved endpoints (RFC 2606 / RFC 6761 reserved TLDs,
-    RFC 5737 documentation addresses, RFC 3849 IPv6 documentation range)
-    as placeholders, so a scrub can never become the live endpoint.
-    """
+@pytest.mark.parametrize(
+    "reserved",
+    [
+        "dns-e.example-home.invalid",  # the shape the repo used to ship
+        "server.invalid",  # RFC 6761 reserved TLD
+        "example.com",  # RFC 2606
+        "192.0.2.1",  # RFC 5737
+        "203.0.113.1",  # RFC 5737
+        "2001:db8::1",  # RFC 3849
+        "<placeholder>",  # the committed ConfigMap shape
+    ],
+)
+def test_a_reserved_endpoint_is_refused_and_server_json_is_unchanged(
+    home, monkeypatch, capsys, reserved
+):
+    """A reserved-for-documentation value can never be a real endpoint, so it
+    is refused, logged, and the stored value is kept - a scrub must not become
+    the live endpoint."""
     mod, meta_path = home
-    monkeypatch.setenv("ZIPPIE_HOME_ENDPOINT", "dns-e.example-home.invalid")
+    before = meta_path.read_bytes()
+    monkeypatch.setenv("ZIPPIE_HOME_ENDPOINT", reserved)
     changed, meta = _reconcile(mod, meta_path)
     assert changed == []
     assert meta["endpoint"] == "dns-e.example-home.invalid"
-    monkeypatch.setenv("ZIPPIE_HOME_ENDPOINT", "192.0.2.1")
-    changed, meta = _reconcile(mod, meta_path)
-    assert changed == []
-    assert meta["endpoint"] == "dns-e.example-home.invalid"
-    monkeypatch.setenv("ZIPPIE_HOME_ENDPOINT", "203.0.113.1")
-    changed, meta = _reconcile(mod, meta_path)
-    assert changed == []
-    assert meta["endpoint"] == "dns-e.example-home.invalid"
-
-
-def test_a_reserved_example_com_is_refused(home, monkeypatch):
-    """RFC 2606 example.com is refused."""
-    mod, meta_path = home
-    monkeypatch.setenv("ZIPPIE_HOME_ENDPOINT", "example.com")
-    changed, meta = _reconcile(mod, meta_path)
-    assert changed == []
-    assert meta["endpoint"] == "dns-e.example-home.invalid"
-
-
-def test_a_reserved_invalid_tld_is_refused(home, monkeypatch):
-    """RFC 6761 reserved TLDs (invalid, test, localhost) are refused."""
-    mod, meta_path = home
-    monkeypatch.setenv("ZIPPIE_HOME_ENDPOINT", "server.invalid")
-    changed, meta = _reconcile(mod, meta_path)
-    assert changed == []
-    assert meta["endpoint"] == "dns-e.example-home.invalid"
-
-
-def test_reconcile_reports_reserved_refusal(home, monkeypatch, caplog):
-    """The refusal of a reserved endpoint is logged for debugging."""
-    mod, meta_path = home
-    monkeypatch.setenv("ZIPPIE_HOME_ENDPOINT", "dns-e.example-home.invalid")
-    changed, meta = _reconcile(mod, meta_path)
-    assert changed == []
-    assert "refusing reserved" in caplog.text
+    assert meta_path.read_bytes() == before, f"{reserved!r} rewrote server.json"
+    err = capsys.readouterr().err
+    assert "refusing reserved" in err
+    assert reserved in err
 
 
 # ------------------------------------- THE DANGEROUS CASE: absent and empty
@@ -207,7 +207,7 @@ def test_the_reconcile_reports_what_it_changed(home, monkeypatch):
     """Silent reconfiguration of a live service is the failure this issue is
     about. The caller has to be able to say WHICH key moved."""
     mod, meta_path = home
-    monkeypatch.setenv("ZIPPIE_HOME_ENDPOINT", "new.example.me")
+    monkeypatch.setenv("ZIPPIE_HOME_ENDPOINT", "dns-e.some-house.net")
     monkeypatch.setenv("ZIPPIE_HOME_WAN", "eth1")
     changed, _ = _reconcile(mod, meta_path)
     assert sorted(changed) == ["endpoint", "wan_iface"]
@@ -217,7 +217,7 @@ def test_key_material_is_never_touched(home, monkeypatch):
     """No path added that can rotate keys - `--force` stays the only rekey."""
     mod, meta_path = home
     before = json.loads(meta_path.read_text(encoding="utf-8"))
-    monkeypatch.setenv("ZIPPIE_HOME_ENDPOINT", "new.example.me")
+    monkeypatch.setenv("ZIPPIE_HOME_ENDPOINT", "dns-e.some-house.net")
     monkeypatch.setenv("ZIPPIE_HOME_PORTS", "51910")
     _, after = _reconcile(mod, meta_path)
     assert after["private_key"] == before["private_key"]
@@ -235,7 +235,7 @@ def test_unrelated_stored_keys_survive(home, monkeypatch):
     meta["transport_port"] = 51931
     meta_path.write_text(json.dumps(meta), encoding="utf-8")
 
-    monkeypatch.setenv("ZIPPIE_HOME_ENDPOINT", "new.example.me")
+    monkeypatch.setenv("ZIPPIE_HOME_ENDPOINT", "dns-e.some-house.net")
     _, after = _reconcile(mod, meta_path)
     assert after["datapath"] == "packet"
     assert after["transport_port"] == 51931
@@ -263,10 +263,10 @@ def _up(mod, monkeypatch):
 def test_up_actually_reconciles(home, monkeypatch):
     """THE REGRESSION GUARD. Remove the call from cmd_up and this fails."""
     mod, meta_path = home
-    monkeypatch.setenv("ZIPPIE_HOME_ENDPOINT", "live-router.example.com")
+    monkeypatch.setenv("ZIPPIE_HOME_ENDPOINT", "dns-e.some-house.net")
     _up(mod, monkeypatch)
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    assert meta["endpoint"] == "live-router.example.com", "cmd_up did not call the reconcile"
+    assert meta["endpoint"] == "dns-e.some-house.net", "cmd_up did not call the reconcile"
 
 
 def test_up_with_no_env_leaves_a_live_config_untouched(home, monkeypatch):

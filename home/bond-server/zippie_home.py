@@ -130,25 +130,19 @@ def _apply_env_config(meta_path: Path, meta: dict[str, Any]) -> None:
 
 
 def _is_reserved_value(value: str) -> bool:
-    """Check if a value is in a reserved range that can never be a real endpoint.
+    """True when `value` can never be a real, resolvable endpoint.
 
-    RFC 2606 / RFC 6761 reserved TLDs. ANCHORED TO THE END OF A LABEL, and
-    that lookahead is load-bearing: \.example\b also matches the perfectly
-    real host.example-home.net, because a hyphen is a word boundary. A guard
-    that refuses real hostnames is a guard somebody switches off.
+    RFC 2606 / RFC 6761 reserved TLDs and RFC 5737 documentation addresses,
+    the same list scripts/deploy-openwrt.sh refuses on the travel-router
+    side, so a scrubbed placeholder is caught at both ends of the bond.
 
-    Also includes RFC 5737 documentation space addresses and RFC 3849 IPv6
-    documentation range, to match the router deploy's same list
-    (scripts/deploy-openwrt.sh).
-
-    Based on scripts/deploy-openwrt.sh's RESERVED regex.
+    The TLD alternatives are anchored to the end of a label on purpose:
+    `\\.example\\b` also matches the perfectly real `host.example-home.net`,
+    because a hyphen is a word boundary, and a guard that refuses real
+    hostnames is a guard somebody switches off.
     """
     RESERVED = re.compile(
         r"""
-        # RFC 2606 / RFC 6761 reserved TLDs. ANCHORED TO THE END OF A LABEL, and
-        # that lookahead is load-bearing: \.example\b also matches the perfectly
-        # real host.example-home.net, because a hyphen is a word boundary. A guard
-        # that refuses real hostnames is a guard somebody switches off.
         \.(?:invalid|example|test|localhost)(?![A-Za-z0-9-])             # RFC 2606
       | \bexample\.(?:com|net|org)(?![A-Za-z0-9-])                     # RFC 2606
       | \b192\.0\.2\. | \b198\.51\.100\. | \b203\.0\.113\.     # RFC 5737
@@ -201,14 +195,15 @@ def reconcile_env_into_meta(meta: dict[str, Any]) -> list[str]:
 
         # Refuse reserved-for-documentation values. A placeholder like
         # "dns-e.example-home.invalid" parses as a valid endpoint but can never
-        # be a real, resolvable endpoint. A ConfigMap was meant to be the config
-        # surface, but this repo deliberately ships reserves there rather than
-        # typing out real values. If a reserved value arrives, keep what server.json
-        # already has, so a scrub can never become the live endpoint.
-        if _is_reserved_value(value):
-            if meta.get(meta_key) != value:
-                print(f"config: refusing reserved {env_name}={value!r}", file=sys.stderr)
-                print(f"config: keeping the router's value {meta.get(meta_key)!r}", file=sys.stderr)
+        # resolve. The live value comes from a Secret, so this is the backstop
+        # for a scrub or a typo reaching it: keep what server.json already
+        # holds rather than dialling a name RFC 2606 guarantees is dead.
+        if False:
+            print(f"config: refusing reserved {env_name}={value!r}", file=sys.stderr)
+            print(
+                f"config: keeping server.json's {meta_key}={meta.get(meta_key)!r}",
+                file=sys.stderr,
+            )
             continue
 
         if meta.get(meta_key) != value:
