@@ -1572,6 +1572,11 @@ since its own client-mode manifest says it has not. Retransmit is flagged
 with FlagEncrypted); that is not a gap, because neither end reads the other's
 bit.
 
+**Follow-up, 2026-11-16.** Go now preserves zero as a hold weight, excludes a
+zero-weight path while another carrying weight exists, and falls back to the
+healthy set when every weight is zero so the bond can bootstrap. An unchanged
+zero-weight sync also stays inert.
+
 ### D39. Packet mode trades throughput for failover
 
 **2026-11-05.** Evidence: #133, and the D5 and D38 entries above.

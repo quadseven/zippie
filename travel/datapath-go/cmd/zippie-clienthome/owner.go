@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/binary"
 	"net/netip"
 	"sync"
 	"time"
@@ -124,7 +123,3 @@ func destAddr(p []byte) (netip.Addr, bool) {
 	}
 	return netip.Addr{}, false
 }
-
-// Kept so the IPv4 helpers above stay honest about byte order if a future
-// reader reaches for binary.BigEndian.
-var _ = binary.BigEndian

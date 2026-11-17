@@ -112,6 +112,10 @@ func (t *Transport) SyncLinks(specs []LinkSpec) (SyncResult, error) {
 			// and this process disagree about the contract, not a cap.
 			return res, fmt.Errorf("link %q: max_kbps %d is negative", s.Name, s.MaxKbps)
 		}
+		// Zero is a valid hold state; only negative values are malformed.
+		if s.Weight < 0 {
+			return res, fmt.Errorf("link %q: weight %d is negative", s.Name, s.Weight)
+		}
 		addr, err := net.ResolveUDPAddr("udp4", s.Remote)
 		if err != nil {
 			return res, fmt.Errorf("link %q: bad remote %q: %w", s.Name, s.Remote, err)

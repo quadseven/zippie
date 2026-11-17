@@ -42,7 +42,7 @@ func main() {
 		"header MAC rung: off, observe (accept both, send v2), sign (send v3, accept both), require (v3 only)")
 	authKeyFile := flag.String("auth-key-file", "",
 		"file holding the shared secret the MAC key is derived from, mode 0600 "+
-			"(the WireGuard preshared key is the intended source). Required above -auth=off")
+			"(the WireGuard preshared key is the intended source). An adjacent .previous file is also accepted during rotation")
 	authPeerID := flag.Uint("auth-peer-id", 1,
 		"the wire-v3 peer id both ends of this bond put on the frame; must match at both ends")
 	flag.Parse()
@@ -67,20 +67,11 @@ func main() {
 		if *authPeerID == 0 || *authPeerID != uint(uint32(*authPeerID)) {
 			log.Fatalf("-auth-peer-id must be between 1 and 4294967295, not %d", *authPeerID)
 		}
-		secret, err := zippie.LoadBondSecret(*authKeyFile)
+		ident, err = zippie.LoadBondIdentity(uint32(*authPeerID), *authKeyFile)
 		if err != nil {
 			// FATAL, not a fallback to off. Silently dropping to
 			// unauthenticated because a file was unreadable is precisely the
 			// failure this whole change exists to remove.
-			log.Fatalf("auth key: %v", err)
-		}
-		ident, err = zippie.NewBondIdentity(uint32(*authPeerID), secret)
-		// The secret is not held beyond this point; only the derived key is,
-		// inside the identity, and nothing prints either.
-		for i := range secret {
-			secret[i] = 0
-		}
-		if err != nil {
 			log.Fatalf("auth key: %v", err)
 		}
 	}

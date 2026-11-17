@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -136,6 +137,103 @@ func TestAFailedRebindReportsTheLegAsFailed(t *testing.T) {
 	}
 	if n := tr.StatsSnapshot()["links"].(int); n != 0 {
 		t.Errorf("links = %d, want 0: the old socket was closed before the retry", n)
+	}
+}
+
+func TestAddLinkFinishingAfterCloseDoesNotStartAReader(t *testing.T) {
+	tr := newTestTransport(t)
+	real := dialFn
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	dialFn = func(ep LinkEndpoint) (*net.UDPConn, error) {
+		close(entered)
+		<-release
+		return real(ep)
+	}
+	t.Cleanup(func() { dialFn = real })
+	remote := mustSink(t)
+
+	added := make(chan error, 1)
+	go func() {
+		added <- tr.AddLink(LinkEndpoint{
+			PathID: 1, Name: "late", Remote: remote, Weight: 1,
+		})
+	}()
+	<-entered
+	tr.Close()
+	close(release)
+	if err := <-added; err == nil {
+		t.Fatal("AddLink succeeded after Close; its socket has no owner to close it")
+	}
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if len(tr.links) != 0 {
+		t.Fatalf("links after Close = %d, want 0", len(tr.links))
+	}
+}
+
+func TestAFrameFromAnOldLinkIsNoLongerCurrentAfterReplacement(t *testing.T) {
+	tr := newTestTransport(t)
+	old := &link{ep: LinkEndpoint{PathID: 1, Name: "old"}}
+	current := &link{ep: LinkEndpoint{PathID: 1, Name: "current"}}
+	tr.mu.Lock()
+	tr.links[1] = current
+	if tr.linkIsCurrentLocked(old) {
+		t.Fatal("a frame from an old socket still matched the replacement link")
+	}
+	if !tr.linkIsCurrentLocked(current) {
+		t.Fatal("the live socket was not recognized as current")
+	}
+	delete(tr.links, 1)
+	tr.mu.Unlock()
+}
+
+func TestReadLinkDoesNotRestoreStateAfterRemoval(t *testing.T) {
+	tr := newTestTransport(t)
+	if err := tr.AddLink(LinkEndpoint{
+		PathID: 1, Name: "leg", Remote: mustSink(t), Weight: 1,
+	}); err != nil {
+		t.Fatalf("add link: %v", err)
+	}
+	sender, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen sender: %v", err)
+	}
+	t.Cleanup(func() { sender.Close() })
+
+	tr.mu.Lock()
+	l := tr.links[1]
+	local := l.conn.LocalAddr().(*net.UDPAddr)
+	dest := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: local.Port}
+	_, err = sender.WriteToUDP(Frame{Seq: 1, Epoch: tr.cfg.Epoch,
+		Flags: FlagKeepalive | FlagKeepaliveReply}.Pack(), dest)
+	if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) {
+		tr.mu.Unlock()
+		t.Skipf("sandbox denies loopback UDP: %v", err)
+	}
+	if err != nil {
+		tr.mu.Unlock()
+		t.Fatalf("send frame: %v", err)
+	}
+	waitFor(t, "the received frame", func() bool { return tr.Stats.Received.Load() == 1 })
+	delete(tr.links, 1)
+	delete(tr.linkRX, 1)
+	delete(tr.linkRTT, 1)
+	delete(tr.kaSent, 1)
+	tr.scheduler.RemovePath(1)
+	tr.mu.Unlock()
+	if err := l.conn.Close(); err != nil {
+		t.Fatalf("close removed link: %v", err)
+	}
+	tr.wg.Wait()
+
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if _, ok := tr.linkRX[1]; ok {
+		t.Fatal("a frame from the removed socket recreated its receive timestamp")
+	}
+	if _, ok := tr.scheduler.Path(1); ok {
+		t.Fatal("a frame from the removed socket recreated its scheduler path")
 	}
 }
 

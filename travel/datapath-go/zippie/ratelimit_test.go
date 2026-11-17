@@ -112,7 +112,9 @@ func TestRefusalsAreCounted(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		r.Allow(1400)
 	}
-	passed, refused := r.Stats()
+	r.mu.Lock()
+	passed, refused := r.Passed, r.Refused
+	r.mu.Unlock()
 	if refused == 0 {
 		t.Error("a saturated cap refused nothing, or did not count it")
 	}

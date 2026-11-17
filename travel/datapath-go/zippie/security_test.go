@@ -27,6 +27,33 @@ func TestImplausibleSequenceCannotSetTheGapHighWaterMark(t *testing.T) {
 	}
 }
 
+func TestRejectedSequenceDoesNotEvictDedupeHistory(t *testing.T) {
+	r := NewReassembler(150 * time.Millisecond)
+	r.dedupeWindow = 2
+	push(r, 0, "a")
+	push(r, 1, "b")
+
+	r.Push(Frame{Seq: MaxForwardJump + 3, Payload: []byte("junk"), Epoch: 1}, nil)
+
+	if _, ok := r.seen[0]; !ok {
+		t.Fatal("an implausible frame evicted a valid sequence from the dedupe ring")
+	}
+	if len(r.seenRing) != 2 {
+		t.Fatalf("dedupe ring holds %d sequences after rejection, want 2", len(r.seenRing))
+	}
+}
+
+func TestRepeatedMisanchoredFrameDoesNotAdvanceTheReanchorStreak(t *testing.T) {
+	r := NewReassembler(150 * time.Millisecond)
+	push(r, 1<<40, "origin")
+	for i := 0; i < maxMisanchoredStreak; i++ {
+		r.Push(Frame{Seq: 0, Payload: []byte("stale"), Epoch: 1}, nil)
+	}
+	if r.Stats.Reanchors != 0 {
+		t.Fatalf("one repeated frame caused %d re-anchors", r.Stats.Reanchors)
+	}
+}
+
 // Defence in depth: even if a huge high-water mark were somehow set, the scan
 // must return in bounded time rather than walking to it.
 func TestMissingScanIsBoundedEvenWithAbsurdHighWater(t *testing.T) {

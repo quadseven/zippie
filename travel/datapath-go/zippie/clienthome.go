@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net"
 	"sync"
-	"time"
 )
 
 // The home end for PHONE CLIENTS, as distinct from the travel router.
@@ -285,10 +284,6 @@ func (c *ClientHome) ClientStats(clientID uint32) (ClientStats, bool) {
 func (c *ClientHome) AllClientStats() map[uint32]ClientStats { return c.home.AllClientStats() }
 
 func (c *ClientHome) ClientCount() int { return c.home.ClientCount() }
-
-// Seen is how a supervisor notices a client that stopped talking without
-// saying so.
-func (c *ClientHome) Seen(clientID uint32) (time.Time, bool) { return c.home.LastSeen(clientID) }
 
 func (c *ClientHome) bump(field *uint64) {
 	c.mu.Lock()

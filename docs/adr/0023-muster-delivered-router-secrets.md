@@ -158,9 +158,10 @@ wired" shape this estate keeps rediscovering: a field nothing opens.
 
 zippie#7's four-rung ladder (`off` -> `observe` -> `sign` -> `require`, ends never
 more than one rung apart, home first) solves **turning authentication on** without
-an outage. It does not solve **changing the key afterwards**: `load_bond_secret`
-returns one secret and `Identity` holds one derived key, so an authenticated bond
-has no window in which both the old and the new key verify.
+an outage. It does not rotate keys automatically. During a manual rotation, both
+the Python and Go verifiers can accept a current and a previous key while each
+endpoint continues signing with its current key. The Go datapath loads the
+optional previous secret from the adjacent `.previous` file.
 
 That is the same class of problem the ladder was built for, one layer down, and
 on this router it is worse: the management path rides the link the key protects,
@@ -169,9 +170,8 @@ so a rotation that breaks the bond also removes the route to the fix.
 This design delivers `key.current` **and** `key.previous` from day one, and writes
 the second beside the first, because a format that cannot express an overlap
 forces an outage at every rotation and cannot be widened later without changing
-both ends at once. Nothing verifies against the previous key yet; the missing
-half is a verifier that accepts either, and it is filed separately. Delivery is
-deliberately not the thing blocking it.
+both ends at once. The verifiers now accept either key during the overlap;
+deleting the previous key remains an explicit completion step.
 
 ### The cache is authoritative; muster is a refresher
 

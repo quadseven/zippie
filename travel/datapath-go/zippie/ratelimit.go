@@ -102,13 +102,3 @@ func (r *RateLimiter) Allow(n int) bool {
 	r.Passed++
 	return true
 }
-
-// Stats is a snapshot for the console.
-func (r *RateLimiter) Stats() (passed, refused uint64) {
-	if r == nil {
-		return 0, 0
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.Passed, r.Refused
-}

@@ -60,6 +60,9 @@ var (
 type Identity struct {
 	ClientID uint32
 	key      []byte
+	// previousKey is accepted for bond rotation overlap. Outbound frames
+	// always use key so each endpoint has one unambiguous signing identity.
+	previousKey []byte
 	// sealer is set only for CLIENT-MODE identities. Nil means this identity
 	// carries payloads that are already ciphertext (the travel router's
 	// WireGuard frames), where a second layer buys nothing. See seal.go.
@@ -194,7 +197,13 @@ func UnpackAs(raw []byte, id *Identity) (Frame, error) {
 	want := computeMAC(id.key, signed[:], payload)
 	// Constant time: a byte-at-a-time comparison leaks the MAC one byte per
 	// forgery attempt, which is a practical attack on an open UDP port.
-	if !hmac.Equal(want[:macLen], raw[HeaderLenV3-macLen:HeaderLenV3]) {
+	currentMatches := hmac.Equal(want[:macLen], raw[HeaderLenV3-macLen:HeaderLenV3])
+	previousMatches := false
+	if len(id.previousKey) > 0 {
+		previous := computeMAC(id.previousKey, signed[:], payload)
+		previousMatches = hmac.Equal(previous[:macLen], raw[HeaderLenV3-macLen:HeaderLenV3])
+	}
+	if !currentMatches && !previousMatches {
 		return Frame{}, ErrUnauthenticated
 	}
 

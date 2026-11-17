@@ -29,6 +29,31 @@ func TestStatsSnapshotHasEveryPythonSection(t *testing.T) {
 	}
 }
 
+func TestTransportStatsUseThePythonKeySet(t *testing.T) {
+	tr := newTestTransport(t)
+	tr.Stats.Sent.Store(3)
+	tr.Stats.RateLimited.Store(5)
+	tr.Stats.Unauthenticated.Store(7)
+
+	got, ok := tr.StatsSnapshot()["transport"].(map[string]uint64)
+	if !ok {
+		t.Fatalf("transport section is not map[string]uint64")
+	}
+	want := map[string]uint64{
+		"sent": 3, "received": 0, "send_errors": 0, "malformed": 0,
+		"nacks_received": 0, "no_path": 0, "rate_limited": 5,
+		"unauthenticated": 7,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("transport keys = %v, want exactly %v", got, want)
+	}
+	for key, value := range want {
+		if got[key] != value {
+			t.Errorf("transport[%q] = %d, want %d", key, got[key], value)
+		}
+	}
+}
+
 func TestRetransmitStatsUseThePythonKeys(t *testing.T) {
 	tr := newTestTransport(t)
 	got, ok := tr.StatsSnapshot()["retransmit"].(map[string]uint64)

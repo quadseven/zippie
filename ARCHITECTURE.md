@@ -341,6 +341,13 @@ A signed frame is 29 bytes of header rather than 17, so the tunnel MTU has to
 move with it, or full-length packets alone are dropped - which looks like a
 routing fault rather than a signing one.
 
+Key rotation is a separate, manual overlap. Each Go endpoint signs with its
+configured current key and accepts the previous key while it exists in the
+mode-0600 file adjacent to `-auth-key-file` with the `.previous` suffix. The
+Python transport has the same current-plus-previous verifier behavior. Removing
+the previous file ends the overlap after both ends use the new current key; this
+does not rotate keys automatically.
+
 Client mode adds a separate AES-256-GCM seal for confidentiality, under its own
 derived key with a random nonce, because that traffic has no WireGuard layer of
 its own.

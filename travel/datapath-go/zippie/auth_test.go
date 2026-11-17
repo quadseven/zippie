@@ -206,6 +206,29 @@ func TestAFrameSignedWithTheWrongKeyIsRefused(t *testing.T) {
 	}
 }
 
+func TestRequireAcceptsTheRetiredKeyDuringRotation(t *testing.T) {
+	oldIdentity := testIdentity(t, 7)
+	currentSecret := []byte("a-different-fixture-secret-32byt")
+	rotating, err := NewBondIdentityWithPrevious(7, currentSecret, testSecret)
+	if err != nil {
+		t.Fatalf("NewBondIdentityWithPrevious: %v", err)
+	}
+	oldFrame := Frame{Seq: 9, Epoch: 3, Payload: []byte("old key frame")}.PackAuth(oldIdentity, AuthSign)
+	if _, authenticated, err := UnpackAuth(oldFrame, rotating, AuthRequire); err != nil || !authenticated {
+		t.Fatalf("require rejected a frame signed with the retired key: authenticated=%v err=%v",
+			authenticated, err)
+	}
+
+	currentFrame := Frame{Seq: 10, Epoch: 3, Payload: []byte("current key frame")}.PackAuth(rotating, AuthSign)
+	if _, authenticated, err := UnpackAuth(currentFrame, rotating, AuthRequire); err != nil || !authenticated {
+		t.Fatalf("require rejected the current key: authenticated=%v err=%v", authenticated, err)
+	}
+	wrong, _ := NewBondIdentity(7, []byte("another-fixture-secret-with-32bytes"))
+	if _, _, err := UnpackAuth(Frame{Seq: 11, Epoch: 3}.PackAuth(wrong, AuthSign), rotating, AuthRequire); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("require accepted a frame signed by an unrelated key: %v", err)
+	}
+}
+
 // THE MIXED-VERSION RUNG. A legacy v2 frame reaching a MAC-aware receiver in
 // accept-both mode must still work, or the rollout needs a flag day.
 func TestALegacyFrameStillWorksAtTheAcceptBothRungs(t *testing.T) {
@@ -349,6 +372,27 @@ func TestTheSecretFileIsReadCarefully(t *testing.T) {
 	}
 	if _, err := LoadBondSecret(dir); err == nil {
 		t.Fatal("a directory was accepted as a key file")
+	}
+}
+
+func TestLoadBondIdentityAcceptsAnAdjacentPreviousSecret(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bond.key")
+	current := []byte("a-different-fixture-secret-32byt")
+	if err := os.WriteFile(path, current, 0o600); err != nil {
+		t.Fatalf("write current secret: %v", err)
+	}
+	if err := os.WriteFile(path+".previous", testSecret, 0o600); err != nil {
+		t.Fatalf("write previous secret: %v", err)
+	}
+
+	id, err := LoadBondIdentity(7, path)
+	if err != nil {
+		t.Fatalf("LoadBondIdentity: %v", err)
+	}
+	old := Frame{Seq: 4, Epoch: 2}.PackAuth(testIdentity(t, 7), AuthSign)
+	if _, authenticated, err := UnpackAuth(old, id, AuthRequire); err != nil || !authenticated {
+		t.Fatalf("previous secret was not accepted: authenticated=%v err=%v", authenticated, err)
 	}
 }
 

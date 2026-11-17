@@ -1,6 +1,7 @@
 package zippie
 
 import (
+	"net"
 	"testing"
 	"time"
 )
@@ -169,5 +170,36 @@ func TestOutstandingProbesDoNotGrowWithoutBound(t *testing.T) {
 	tr.mu.Unlock()
 	if outstanding > 16 {
 		t.Fatalf("%d unanswered probes retained after 200 sends", outstanding)
+	}
+}
+
+func TestHomeDoesNotProbeAPathBeforeHearingFromIt(t *testing.T) {
+	tr := newTestTransport(t)
+	if err := tr.AddLink(LinkEndpoint{
+		PathID: 0,
+		Name:   "home",
+		Listen: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0},
+		Remote: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1},
+		Weight: 1,
+	}); err != nil {
+		t.Fatalf("add home link: %v", err)
+	}
+	tr.mu.Lock()
+	tr.links[0].remote = tr.links[0].conn.LocalAddr().(*net.UDPAddr)
+	linkCount := len(tr.links)
+	tr.mu.Unlock()
+	if linkCount != 1 {
+		t.Fatalf("home links = %d, want 1", linkCount)
+	}
+
+	tr.SendKeepalives()
+	if got := tr.Stats.Sent.Load(); got != 0 {
+		t.Fatalf("sent %d keepalives before hearing from the peer, want 0", got)
+	}
+	if tr.kaProbe != 0 {
+		t.Fatalf("allocated probe %d before hearing from the peer", tr.kaProbe)
+	}
+	if tr.havePeerEpoch {
+		t.Fatal("peer epoch was adopted before any inbound frame")
 	}
 }

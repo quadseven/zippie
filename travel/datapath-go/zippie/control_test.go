@@ -223,6 +223,36 @@ func TestSyncRejectsAPathIDThatDoesNotFitTheWire(t *testing.T) {
 	}
 }
 
+func TestSyncRejectsNegativeWeights(t *testing.T) {
+	tr := newTestTransport(t)
+	spec := specFor(t, 0, "ethernet", -1)
+	if _, err := tr.SyncLinks([]LinkSpec{spec}); err == nil {
+		t.Fatal("negative weight was accepted")
+	}
+}
+
+func TestZeroWeightRemainsStableAcrossSyncs(t *testing.T) {
+	tr := newTestTransport(t)
+	spec := specFor(t, 0, "ethernet", 10)
+	if _, err := tr.SyncLinks([]LinkSpec{spec}); err != nil {
+		t.Fatalf("initial sync: %v", err)
+	}
+	spec.Weight = 0
+	if result, err := tr.SyncLinks([]LinkSpec{spec}); err != nil || len(result.Updated) != 1 {
+		t.Fatalf("zero-weight sync = %+v, %v; want one update", result, err)
+	}
+	result, err := tr.SyncLinks([]LinkSpec{spec})
+	if err != nil {
+		t.Fatalf("steady sync: %v", err)
+	}
+	if len(result.Updated) != 0 {
+		t.Fatalf("steady zero-weight sync reported churn: %+v", result)
+	}
+	if path, ok := tr.scheduler.Path(0); !ok || path.Weight != 0 {
+		t.Fatalf("scheduler path = %+v, %v; want weight 0", path, ok)
+	}
+}
+
 // A rejected sync must change NOTHING. Applying the valid half of a bad request
 // leaves the datapath in a state neither side asked for, and the agent will not
 // know: it got an error and assumes its request did not land.

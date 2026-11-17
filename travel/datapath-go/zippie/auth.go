@@ -161,9 +161,9 @@ var (
 // missing at the other while the tunnel still works.
 //
 // The cost of that choice is coupling. Rotating the WireGuard PSK now also
-// rotates the bond MAC key, and if the two ends are rotated one at a time the
-// bond stops verifying - which is survivable at the observe and sign rungs and
-// is an outage at require. Carrying a SEPARATE secret would keep the two
+// rotates the bond MAC key. During a one-end-at-a-time rotation, the current
+// and previous secret files let each endpoint verify either key while still
+// signing with its current one. Carrying a SEPARATE secret would keep the two
 // failure domains apart, at the price of one more thing to provision and one
 // more thing to get out of step. Either works here: this function takes bytes
 // and does not care where they came from, and the deployment decides by
@@ -216,6 +216,33 @@ func LoadBondSecret(path string) ([]byte, error) {
 	return secret, nil
 }
 
+// LoadBondIdentity reads the current bond secret and, when present, its
+// adjacent previous secret for verification overlap. Both files are checked
+// with LoadBondSecret's permission and length rules.
+func LoadBondIdentity(peerID uint32, path string) (*Identity, error) {
+	current, err := LoadBondSecret(path)
+	if err != nil {
+		return nil, err
+	}
+	defer wipeSecret(current)
+
+	previous, err := LoadBondSecret(path + ".previous")
+	if os.IsNotExist(err) {
+		return NewBondIdentity(peerID, current)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("previous auth key: %w", err)
+	}
+	defer wipeSecret(previous)
+	return NewBondIdentityWithPrevious(peerID, current, previous)
+}
+
+func wipeSecret(secret []byte) {
+	for i := range secret {
+		secret[i] = 0
+	}
+}
+
 // NewBondIdentity is the credential for the router-to-home bond: one shared
 // symmetric key, used by both ends to sign and to verify.
 //
@@ -229,16 +256,29 @@ func LoadBondSecret(path string) ([]byte, error) {
 // same one - a mismatch fails verification with the same single error as a bad
 // MAC, on purpose.
 func NewBondIdentity(peerID uint32, secret []byte) (*Identity, error) {
+	return NewBondIdentityWithPrevious(peerID, secret, nil)
+}
+
+// NewBondIdentityWithPrevious signs with currentSecret and also verifies
+// frames signed with previousSecret while that overlap is needed.
+func NewBondIdentityWithPrevious(peerID uint32, currentSecret, previousSecret []byte) (*Identity, error) {
 	if peerID == 0 {
 		// Zero cannot be told apart from a field nobody set, and the receiver
 		// compares it, so a zero at one end only would be a silent mismatch.
 		return nil, errors.New("auth peer id must not be zero")
 	}
-	key, err := DeriveBondKey(secret)
+	key, err := DeriveBondKey(currentSecret)
 	if err != nil {
 		return nil, err
 	}
-	return NewIdentity(peerID, key), nil
+	id := NewIdentity(peerID, key)
+	if len(previousSecret) > 0 {
+		id.previousKey, err = DeriveBondKey(previousSecret)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return id, nil
 }
 
 // KeyID is a short, one-way name for the key this identity holds, safe to log

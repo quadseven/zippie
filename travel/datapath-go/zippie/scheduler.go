@@ -9,12 +9,11 @@ const (
 	// ModeSingle sends one copy on the heaviest healthy path. Same shape as
 	// weighted-ECMP behaviour; kept so a metered path can be spared.
 	ModeSingle SendMode = iota
+	// ModeDuplicate sends copies on every healthy positive-weight path. If all
+	// healthy paths have zero weight, it falls back to them to bootstrap.
+	ModeDuplicate
 	// ModeSpray sends one copy, path chosen by weighted round-robin. Aggregate
 	// bandwidth, at the cost of occasional reordering.
-	ModeDuplicate
-	// ModeDuplicate sends a copy on EVERY healthy path. Costs bandwidth equal
-	// to the path count and buys immunity to loss on any one of them, which is
-	// what keeps a call up through a 3-second obstruction.
 	ModeSpray
 )
 
@@ -48,6 +47,9 @@ type Scheduler struct {
 func NewScheduler() *Scheduler { return &Scheduler{} }
 
 func (s *Scheduler) AddPath(p PathState) {
+	if p.Weight < 0 {
+		p.Weight = 0
+	}
 	for i := range s.paths {
 		if s.paths[i].PathID == p.PathID {
 			s.paths[i] = p
@@ -78,8 +80,8 @@ func (s *Scheduler) SetHealthy(id uint8, healthy bool) {
 }
 
 func (s *Scheduler) SetWeight(id uint8, w int) {
-	if w < 1 {
-		w = 1
+	if w < 0 {
+		w = 0
 	}
 	for i := range s.paths {
 		if s.paths[i].PathID == id {
@@ -148,8 +150,15 @@ func (s *Scheduler) Select(mode SendMode) []uint8 {
 
 	switch mode {
 	case ModeDuplicate:
+		hasWeightedPath := false
 		for i := range s.paths {
-			if s.paths[i].Healthy {
+			if s.paths[i].Healthy && s.paths[i].Weight > 0 {
+				hasWeightedPath = true
+				break
+			}
+		}
+		for i := range s.paths {
+			if s.paths[i].Healthy && (!hasWeightedPath || s.paths[i].Weight > 0) {
 				s.scratch = append(s.scratch, s.paths[i].PathID)
 			}
 		}
@@ -170,19 +179,28 @@ func (s *Scheduler) Select(mode SendMode) []uint8 {
 	default: // ModeSpray: weighted round-robin by credit
 		total := 0
 		for i := range s.paths {
-			if s.paths[i].Healthy {
+			if s.paths[i].Healthy && s.paths[i].Weight > 0 {
 				total += s.paths[i].Weight
 			}
 		}
-		if total == 0 {
-			total = 1
+		allWeightsZero := total == 0
+		if allWeightsZero {
+			for i := range s.paths {
+				if s.paths[i].Healthy {
+					total++
+				}
+			}
 		}
 		chosen, bestCredit := -1, 0.0
 		for i := range s.paths {
-			if !s.paths[i].Healthy {
+			if !s.paths[i].Healthy || (!allWeightsZero && s.paths[i].Weight == 0) {
 				continue
 			}
-			s.credit[i] += float64(s.paths[i].Weight) / float64(total)
+			share := float64(s.paths[i].Weight)
+			if allWeightsZero {
+				share = 1
+			}
+			s.credit[i] += share / float64(total)
 			if chosen < 0 || s.credit[i] > bestCredit {
 				chosen, bestCredit = i, s.credit[i]
 			}

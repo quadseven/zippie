@@ -2,6 +2,10 @@ package zippie
 
 import (
 	"bytes"
+	"crypto/rand"
+	"errors"
+	"net"
+	"syscall"
 	"testing"
 )
 
@@ -56,6 +60,99 @@ func TestAnotherClientsKeyCannotOpenIt(t *testing.T) {
 	sealed, _ := mine.Seal(nil, []byte("mine"), []byte("hdr"))
 	if _, err := theirs.Open(nil, sealed, []byte("hdr")); err == nil {
 		t.Fatal("another client's key opened this frame")
+	}
+}
+
+type failedRandomReader struct{}
+
+func (failedRandomReader) Read([]byte) (int, error) {
+	return 0, errors.New("entropy unavailable")
+}
+
+func TestFailedSealDoesNotSendAnEmptyFrame(t *testing.T) {
+	identity, err := NewSealedIdentity(1, []byte("client-one-key-client-one-key-32b"))
+	if err != nil {
+		t.Fatalf("NewSealedIdentity: %v", err)
+	}
+	reader := rand.Reader
+	rand.Reader = failedRandomReader{}
+	defer func() { rand.Reader = reader }()
+
+	scheduler := NewScheduler()
+	scheduler.AddPath(PathState{PathID: 1, Weight: 1, Healthy: true})
+	ids, frames, _ := scheduler.BuildAs([]byte("payload"), ModeSingle, 1, identity, nil)
+	if len(ids) != 1 || len(frames) != 1 || len(frames[0]) != 0 {
+		t.Fatalf("failed seal result = ids %v, frames %v; want one empty frame", ids, frames)
+	}
+
+	tr := newTestTransport(t)
+	tr.mu.Lock()
+	tr.links[1] = &link{ep: LinkEndpoint{PathID: 1}}
+	sent := tr.sendOnLocked(1, frames[0])
+	delete(tr.links, 1)
+	tr.mu.Unlock()
+	if sent {
+		t.Fatal("an empty frame was reported as sent")
+	}
+	if got := tr.Stats.Sent.Load(); got != 0 {
+		t.Fatalf("sent counter = %d after seal failure, want 0", got)
+	}
+}
+
+func TestReadLocalDropsFailedSealBeforeRecordingOrFEC(t *testing.T) {
+	identity, err := NewSealedIdentity(1, []byte("client-one-key-client-one-key-32b"))
+	if err != nil {
+		t.Fatalf("NewSealedIdentity: %v", err)
+	}
+	tr, err := New(Config{
+		LocalBind:  &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)},
+		Identity:   identity,
+		Auth:       AuthSign,
+		Epoch:      7,
+		FEC:        FECConfig{GroupSize: 2},
+		Classifier: DefaultClassifierConfig(),
+	})
+	if err != nil {
+		t.Fatalf("New transport: %v", err)
+	}
+	t.Cleanup(tr.Close)
+	if err := tr.AddLink(LinkEndpoint{
+		PathID: 1, Name: "leg", Remote: mustSink(t), Weight: 1,
+	}); err != nil {
+		t.Fatalf("add link: %v", err)
+	}
+	tr.wg.Add(1)
+	go tr.readLocal()
+	sender, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen sender: %v", err)
+	}
+	t.Cleanup(func() { sender.Close() })
+
+	reader := rand.Reader
+	rand.Reader = failedRandomReader{}
+	defer func() { rand.Reader = reader }()
+	if _, err := sender.WriteToUDP([]byte("payload"), tr.LocalAddr()); errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) {
+		t.Skipf("sandbox denies loopback UDP: %v", err)
+	} else if err != nil {
+		t.Fatalf("send local payload: %v", err)
+	}
+	waitFor(t, "the local frame to be consumed", func() bool {
+		tr.mu.Lock()
+		defer tr.mu.Unlock()
+		return tr.scheduler.seq == 1
+	})
+
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if got := tr.Stats.Sent.Load(); got != 0 {
+		t.Fatalf("sent counter = %d after sealing failed, want 0", got)
+	}
+	if len(tr.retransmit.items) != 0 {
+		t.Fatalf("retransmit buffer contains sequence 0 after sealing failed")
+	}
+	if tr.fecEnc.n != 0 {
+		t.Fatalf("FEC encoder accepted a failed frame: group has %d packets", tr.fecEnc.n)
 	}
 }
 

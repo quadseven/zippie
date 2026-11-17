@@ -31,14 +31,14 @@ const MaxPlausibleOrigin = 1 << 48
 const maxMisanchoredStreak = 32
 
 type ReassemblerStats struct {
-	Delivered        uint64
-	DeliveredBytes   uint64
+	Delivered         uint64
+	DeliveredBytes    uint64
 	DuplicatesDropped uint64
-	TooLateDropped   uint64
-	GapsAbandoned    uint64
-	LostEstimate     uint64
-	StreamRestarts   uint64
-	ImplausibleSeq   uint64
+	TooLateDropped    uint64
+	GapsAbandoned     uint64
+	LostEstimate      uint64
+	StreamRestarts    uint64
+	ImplausibleSeq    uint64
 	// Reanchors counts streams that had to recover from a bogus origin. In
 	// steady state this is zero; anything else means someone is injecting, or
 	// the peer restarted in a way the epoch gate did not catch.
@@ -75,12 +75,16 @@ type Reassembler struct {
 	// "new".
 	seen     map[uint64]struct{}
 	seenRing []uint64
+	// Misanchored candidates are tracked separately from accepted sequences.
+	// Otherwise repeated copies could advance the recovery streak, while
+	// remembering every rejected sequence would let junk evict valid history.
+	misanchoredSeen map[uint64]struct{}
 
 	// Gap bookkeeping, kept incrementally. The Python version recomputed the
 	// missing set on every packet, which was O(gap depth) per packet and
 	// throttled the tunnel (#2169). A sequence only needs looking at once.
-	gapHighWater uint64
-	gapScannedTo uint64
+	gapHighWater  uint64
+	gapScannedTo  uint64
 	haveHighWater bool
 
 	// Consecutive frames seen absurdly far below the anchor. See Push.
@@ -98,6 +102,7 @@ func NewReassembler(reorderDeadline time.Duration) *Reassembler {
 		buf:             make(map[uint64]buffered, 256),
 		seen:            make(map[uint64]struct{}, 8192),
 		seenRing:        make([]uint64, 0, 8192),
+		misanchoredSeen: make(map[uint64]struct{}, maxMisanchoredStreak),
 		now:             time.Now,
 	}
 }
@@ -125,6 +130,7 @@ func (r *Reassembler) ResetStream() {
 	r.buf = make(map[uint64]buffered, 256)
 	r.seen = make(map[uint64]struct{}, 8192)
 	r.seenRing = r.seenRing[:0]
+	r.misanchoredSeen = make(map[uint64]struct{}, maxMisanchoredStreak)
 	r.haveStream = false
 	r.nextSeq = 0
 	r.gapHighWater, r.gapScannedTo, r.haveHighWater = 0, 0, false
@@ -146,6 +152,7 @@ func (r *Reassembler) reanchorTo(seq uint64) {
 	r.nextSeq = seq
 	r.gapHighWater, r.gapScannedTo, r.haveHighWater = seq, seq, true
 	r.misanchoredStreak = 0
+	r.misanchoredSeen = make(map[uint64]struct{}, maxMisanchoredStreak)
 	r.Stats.Reanchors++
 }
 
@@ -156,7 +163,7 @@ func (r *Reassembler) Push(f Frame, out [][]byte) [][]byte {
 	if f.IsKeepalive() {
 		return out
 	}
-	if !r.remember(f.Seq) {
+	if _, dup := r.seen[f.Seq]; dup {
 		r.Stats.DuplicatesDropped++
 		return out
 	}
@@ -193,6 +200,10 @@ func (r *Reassembler) Push(f Frame, out [][]byte) [][]byte {
 		// Requiring a sustained streak keeps a single stray packet from moving the
 		// anchor, so this cannot itself be used to drag the stream around.
 		if r.nextSeq-f.Seq > MaxForwardJump {
+			if _, dup := r.misanchoredSeen[f.Seq]; dup {
+				return out
+			}
+			r.misanchoredSeen[f.Seq] = struct{}{}
 			r.misanchoredStreak++
 			if r.misanchoredStreak < maxMisanchoredStreak {
 				return out
@@ -212,6 +223,11 @@ func (r *Reassembler) Push(f Frame, out [][]byte) [][]byte {
 		return out
 	}
 	r.misanchoredStreak = 0
+	r.misanchoredSeen = make(map[uint64]struct{}, maxMisanchoredStreak)
+	if !r.remember(f.Seq) {
+		r.Stats.DuplicatesDropped++
+		return out
+	}
 
 	// Copy: Payload aliases the read buffer, which the caller reuses for the
 	// next datagram. This is the one place a copy is unavoidable, and only

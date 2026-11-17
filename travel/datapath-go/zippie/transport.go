@@ -60,9 +60,9 @@ type LinkEndpoint struct {
 }
 
 type TransportStats struct {
-	Sent          atomic.Uint64
-	Received      atomic.Uint64
-	SendErrors    atomic.Uint64
+	Sent       atomic.Uint64
+	Received   atomic.Uint64
+	SendErrors atomic.Uint64
 	// RateLimited counts frames a deliberate per-link cap turned away. A
 	// capped link refusing everything looks identical to one nobody scheduled
 	// onto, so it is counted separately from a send error.
@@ -93,6 +93,10 @@ type TransportStats struct {
 type link struct {
 	ep   LinkEndpoint
 	conn *net.UDPConn
+	// heard distinguishes a newly-bound home listener from a path with a
+	// return address learned from an inbound frame. linkRX is seeded at add
+	// time, so it cannot answer this question.
+	heard bool
 	// Reply target, mutated by roaming. Guarded by Transport.mu.
 	remote *net.UDPAddr
 	// limiter is nil for an uncapped link, which is most of them. A nil
@@ -115,7 +119,7 @@ type Config struct {
 	// half-configuration that reads as protection and provides none.
 	Auth AuthLevel
 	// LocalBind is the loopback socket WireGuard is pointed at.
-	LocalBind *net.UDPAddr
+	LocalBind       *net.UDPAddr
 	ReorderDeadline time.Duration
 	NackDelay       time.Duration
 	// Roam makes a link's reply target follow the source of each received
@@ -173,8 +177,8 @@ type Transport struct {
 	fecDec        *FECDecoder
 	fecWire       []byte  // reused parity datagram buffer, guarded by mu
 	fecHealthy    []uint8 // reused scratch for the healthy-path scan
-	wgPeer      *net.UDPAddr
-	peerEpoch   uint32
+	wgPeer        *net.UDPAddr
+	peerEpoch     uint32
 	havePeerEpoch bool
 
 	// When a frame last passed the epoch check. A restart may only take over
@@ -300,6 +304,11 @@ func (t *Transport) AddLink(ep LinkEndpoint) error {
 		return err
 	}
 	t.mu.Lock()
+	if t.stopped.Load() {
+		t.mu.Unlock()
+		conn.Close()
+		return errors.New("transport is closed")
+	}
 	if old, exists := t.links[ep.PathID]; exists {
 		old.conn.Close()
 	}
@@ -311,9 +320,11 @@ func (t *Transport) AddLink(ep LinkEndpoint) error {
 	// epoch" for the one tick before its first keepalive is answered, which
 	// would evict it before it ever had a chance to prove itself.
 	t.linkRX[ep.PathID] = time.Now()
+	// Add while holding mu: Close takes the same lock before waiting, so it
+	// cannot observe a zero WaitGroup and return before this reader is counted.
+	t.wg.Add(1)
 	t.mu.Unlock()
 
-	t.wg.Add(1)
 	go t.readLink(l)
 	log.Printf("link up: %s via %s -> %s", ep.Name, ep.Device, ep.Remote)
 	return nil
@@ -338,12 +349,6 @@ func (t *Transport) RemoveLink(id uint8) {
 func (t *Transport) SetLinkHealth(id uint8, healthy bool) {
 	t.mu.Lock()
 	t.scheduler.SetHealthy(id, healthy)
-	t.mu.Unlock()
-}
-
-func (t *Transport) SetLinkWeight(id uint8, w int) {
-	t.mu.Lock()
-	t.scheduler.SetWeight(id, w)
 	t.mu.Unlock()
 }
 
@@ -401,6 +406,13 @@ func (t *Transport) readLocal() {
 		if len(ids) == 0 {
 			t.mu.Unlock()
 			t.Stats.NoPath.Add(1)
+			continue
+		}
+		if len(frames[0]) == 0 {
+			// AppendAs returns an empty frame if sealing cannot obtain entropy.
+			// Do not let frameSeq turn that failure into a zero-sequence send or
+			// feed the unsealed payload into the FEC group.
+			t.mu.Unlock()
 			continue
 		}
 		seq := frameSeq(frames[0])
@@ -472,6 +484,10 @@ func (t *Transport) readLink(l *link) {
 		t.Stats.Received.Add(1)
 
 		t.mu.Lock()
+		if !t.linkIsCurrentLocked(l) {
+			t.mu.Unlock()
+			continue
+		}
 
 		// NOTHING BELOW THIS POINT IS AUTHENTICATED AT THE OFF AND OBSERVE
 		// RUNGS, so be careful what a stranger's packet is allowed to do. At
@@ -531,6 +547,7 @@ func (t *Transport) readLink(l *link) {
 		// the more common proof. Receiving must also be able to UNDO a
 		// demotion: nothing else on the home side ever marks a link healthy
 		// again, so one transient send error would otherwise be permanent.
+		l.heard = true
 		t.linkRX[l.ep.PathID] = time.Now()
 		t.scheduler.SetHealthy(l.ep.PathID, true)
 
@@ -624,6 +641,12 @@ func (t *Transport) readLink(l *link) {
 	}
 }
 
+// linkIsCurrentLocked prevents a reader whose socket was removed or replaced
+// from restoring state for the old path. Requires t.mu.
+func (t *Transport) linkIsCurrentLocked(l *link) bool {
+	return t.links[l.ep.PathID] == l
+}
+
 func (t *Transport) deliver(peer *net.UDPAddr, payloads [][]byte) {
 	if peer == nil {
 		return
@@ -638,6 +661,9 @@ func (t *Transport) deliver(peer *net.UDPAddr, payloads [][]byte) {
 
 // sendOnLocked requires t.mu.
 func (t *Transport) sendOnLocked(id uint8, wire []byte) bool {
+	if len(wire) == 0 {
+		return false
+	}
 	l, ok := t.links[id]
 	if !ok {
 		return false
@@ -769,6 +795,10 @@ func (t *Transport) SendKeepalives() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for id := range t.links {
+		l := t.links[id]
+		if l.ep.Listen != nil && !l.heard {
+			continue
+		}
 		t.kaProbe++
 		probe := t.kaProbe
 		// The probe's OWN identifier, where a data frame carries its sequence.
@@ -895,15 +925,17 @@ func (t *Transport) statsSnapshotLocked() map[string]any {
 			"sent": t.Stats.Sent.Load(), "received": t.Stats.Received.Load(),
 			"send_errors": t.Stats.SendErrors.Load(), "malformed": t.Stats.Malformed.Load(),
 			"nacks_received": t.Stats.NacksReceived.Load(), "no_path": t.Stats.NoPath.Load(),
+			"rate_limited":    t.Stats.RateLimited.Load(),
+			"unauthenticated": t.Stats.Unauthenticated.Load(),
 		},
 		"reassembly": map[string]uint64{
-			"delivered": t.reassembler.Stats.Delivered,
-			"delivered_bytes":   t.reassembler.Stats.DeliveredBytes,
+			"delivered":          t.reassembler.Stats.Delivered,
+			"delivered_bytes":    t.reassembler.Stats.DeliveredBytes,
 			"duplicates_dropped": t.reassembler.Stats.DuplicatesDropped,
-			"too_late_dropped":  t.reassembler.Stats.TooLateDropped,
-			"gaps_abandoned":    t.reassembler.Stats.GapsAbandoned,
-			"lost_estimate":     t.reassembler.Stats.LostEstimate,
-			"stream_restarts":   t.reassembler.Stats.StreamRestarts,
+			"too_late_dropped":   t.reassembler.Stats.TooLateDropped,
+			"gaps_abandoned":     t.reassembler.Stats.GapsAbandoned,
+			"lost_estimate":      t.reassembler.Stats.LostEstimate,
+			"stream_restarts":    t.reassembler.Stats.StreamRestarts,
 		},
 		"retransmit": map[string]uint64{
 			"resent": t.retransmit.Stats.Resent, "expired": t.retransmit.Stats.Expired,
