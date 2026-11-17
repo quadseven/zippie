@@ -554,7 +554,10 @@ def test_travel_hears_a_restarted_home_on_keepalives_alone():
 
     home = _start_home(home_listen, wg_server_port)
     try:
-        probe_for(0.3)
+        baseline_deadline = time.monotonic() + 5.0
+        while travel.link_rtt_ms(0) is None and time.monotonic() < baseline_deadline:
+            travel.send_keepalives()
+            time.sleep(0.05)
         assert travel.link_rtt_ms(0) is not None, "baseline: the first home never answered"
     finally:
         _stop_home(home)
