@@ -51,6 +51,9 @@ targets:
       # without this product there is no way to instrument a request at all.
       - package: Datadog
         product: DatadogTrace
+      # The Go datapath framework for peer verification (mobile.VerifyPeer).
+      - framework: Frameworks/Zippie.xcframework
+        embed: false
       # Embeds the packet-tunnel extension into the app's PlugIns directory.
       # An extension that is not embedded still builds and still signs; it is
       # simply never found at runtime, and startVPNTunnel() then fails with a

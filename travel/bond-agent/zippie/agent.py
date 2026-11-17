@@ -3629,6 +3629,34 @@ class BondAgent:
             log.warning("could not persist console token: %s", exc)
         return token
 
+    def discovery_roster(self) -> list[dict[str, Any]]:
+        """Return the discovery roster for peer verification.
+
+        Each entry has client_id and key_hex (the discovery key derived from
+        the pairing key). All dynamic legs share the same pairing key (the
+        console token), so they share the same discovery key. Client IDs are
+        assigned sequentially based on dynamic leg names.
+        """
+        token = self.console_token()
+        # Derive discovery key from pairing key (console token).
+        # PeerDiscoveryKey in Go: HMAC-SHA256(pairing_key, "zippie/peer-proof/v1")
+        import hashlib
+        import hmac
+
+        pairing_key = token.encode("utf-8")
+        peer_domain = b"zippie/peer-proof/v1"
+        discovery_key = hmac.new(pairing_key, peer_domain, hashlib.sha256).digest()
+        discovery_key_hex = discovery_key.hex()
+
+        # Assign client IDs to dynamic legs sequentially by name.
+        roster = []
+        dynamic_legs = []
+        with self.dynamic._lock:
+            dynamic_legs = sorted(self.dynamic._legs.values(), key=lambda leg: leg.name)
+        for idx, _ in enumerate(dynamic_legs, start=1):
+            roster.append({"client_id": idx, "key_hex": discovery_key_hex})
+        return roster
+
     def set_leg_fields(self, name: str, fields: dict[str, Any]) -> dict[str, Any]:
         """Apply an operator edit and make it take effect immediately.
 

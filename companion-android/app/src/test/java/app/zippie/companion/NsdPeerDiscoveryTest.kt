@@ -35,7 +35,7 @@ class NsdPeerDiscoveryTest {
     private fun start() {
         discovery.start(
             ROSTER,
-            onVerified = { verified.add(it) },
+            onVerified = { _, peer -> verified.add(peer) },
             onRefused = { name, reason -> refused.add(name to reason) },
             onLost = { lost.add(it) },
         )
@@ -192,7 +192,7 @@ class NsdPeerDiscoveryTest {
         val release = java.util.concurrent.CountDownLatch(1)
         discovery.start(
             ROSTER,
-            onVerified = {},
+            onVerified = { _, _ -> },
             onRefused = { _, _ ->
                 inCallback.countDown()
                 release.await()

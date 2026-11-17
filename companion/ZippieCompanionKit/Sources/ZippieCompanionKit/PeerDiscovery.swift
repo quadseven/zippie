@@ -40,7 +40,10 @@ public struct VerifiedPeer: Sendable, Equatable, Hashable {
 
 /// A change to the set of verified peers, published to the app.
 public enum PeerEvent: Sendable, Equatable {
-    case discovered(VerifiedPeer)
+    /// A verified peer was discovered. The service name is the Bonjour name
+    /// used as the key in the discovery service's internal mapping, so the
+    /// app can track peers across appearances and disappearances.
+    case discovered(VerifiedPeer, serviceName: String)
     /// The service name of a peer that went away (browser removed it).
     case vanished(String)
 }
@@ -79,18 +82,18 @@ public protocol PeerAdvertising: AnyObject {
 /// results and `Set<NWBrowser.Result.Change>` for removed changes. Added
 /// results carry endpoint and metadata directly; removed changes carry the
 /// removed result via their `.removed` case.
-final class NWBrowserAdapter: PeerBrowsing {
+public final class NWBrowserAdapter: PeerBrowsing {
     private let browser: NWBrowser
-    var resultsChangedHandler: (([DiscoveredPeer], [String]) -> Void)? = nil
+    public var resultsChangedHandler: (([DiscoveredPeer], [String]) -> Void)? = nil
 
-    init() {
+    public init() {
         let params = NWParameters()
         params.includePeerToPeer = true
         self.browser = NWBrowser(for: .bonjour(type: "_zippie._tcp", domain: "local"),
                                   using: params)
     }
 
-    func start(queue: DispatchQueue) {
+    public func start(queue: DispatchQueue) {
         browser.browseResultsChangedHandler = { [weak self] rawAdded, rawRemoved in
             guard let self else { return }
             let added = rawAdded.compactMap { Self.discovered(from: $0) }
@@ -100,7 +103,7 @@ final class NWBrowserAdapter: PeerBrowsing {
         browser.start(queue: queue)
     }
 
-    func stop() {
+    public func stop() {
         browser.cancel()
     }
 

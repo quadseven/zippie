@@ -26,7 +26,7 @@ class NsdPeerDiscovery(
 
     override fun start(
         rosterJson: String,
-        onVerified: (VerifiedPeer) -> Unit,
+        onVerified: (String, VerifiedPeer) -> Unit,
         onRefused: (String, String) -> Unit,
         onLost: (String) -> Unit,
     ) {
@@ -50,7 +50,7 @@ class NsdPeerDiscovery(
     /** One start-to-stop run; its state dies with it. */
     private inner class Run(
         val rosterJson: String,
-        val onVerified: (VerifiedPeer) -> Unit,
+        val onVerified: (String, VerifiedPeer) -> Unit,
         val onRefused: (String, String) -> Unit,
         val onLost: (String) -> Unit,
     ) : NsdSource.Listener {
@@ -86,7 +86,7 @@ class NsdPeerDiscovery(
             when (val result = crypto.verifyPeer(rosterJson, txtJson)) {
                 is VerificationResult.Refused -> deliver { onRefused(serviceName, result.reason) }
                 is VerificationResult.Verified -> deliver {
-                    if (verified.putIfAbsent(serviceName, result.peer) == null) onVerified(result.peer)
+                    if (verified.putIfAbsent(serviceName, result.peer) == null) onVerified(serviceName, result.peer)
                 }
             }
         }
