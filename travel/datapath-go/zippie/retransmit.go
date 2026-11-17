@@ -211,8 +211,25 @@ func (n *NackTracker) Due(out []uint64) []uint64 {
 
 // ForgetBefore drops sequences the stream has moved past, so a path dying and
 // leaving a permanent hole cannot grow this without bound.
+//
+// If seq < forgottenBelow, the sequence space has moved backwards (a re-anchor).
+// Reset legSeq to the new baseline so legs must re-earn their marks in the new
+// space. Reset legWatch timestamps to now so the maxDelay timer starts fresh.
+// Stale gaps (pending/asked) are cleared because they belong to the old sequence
+// space.
 func (n *NackTracker) ForgetBefore(seq uint64) {
-	if seq <= n.forgottenBelow {
+	if seq < n.forgottenBelow {
+		n.pending = make(map[uint64]time.Time, 256)
+		n.asked = make(map[uint64]struct{}, 256)
+		now := n.now()
+		for pathID := range n.legSeq {
+			n.legSeq[pathID] = seq
+			n.legWatch[pathID] = legMark{seq: seq, since: now}
+		}
+		n.forgottenBelow = seq
+		return
+	}
+	if seq == n.forgottenBelow {
 		return
 	}
 	for s := range n.pending {

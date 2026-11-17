@@ -402,3 +402,165 @@ func TestAnAnsweredNackCarriesFlagRetransmitOnTheWire(t *testing.T) {
 			"which is the one distinction a receiving Go end needs", got.Flags)
 	}
 }
+
+// ReanchorWithPendingNacks resets the NackTracker when the reassembler re-anchors.
+//
+// A re-anchor moves nextSeq backwards (to a lower sequence). The old
+// forgottenBelow is now higher than the new nextSeq, so ForgetBefore would
+// previously return early and leave stale gaps and leg marks. This test drives
+// a re-anchor through Push (the same path Transport uses) and asserts the
+// tracker is clean afterwards.
+func TestReanchorWithPendingNacksClearsTracker(t *testing.T) {
+	start := time.Unix(0, 0)
+	now := start
+	reassembler := NewReassembler(150 * time.Millisecond)
+	reassembler.now = func() time.Time { return now }
+	nacks := NewNackTracker(60*time.Millisecond, 150*time.Millisecond)
+	nacks.now = func() time.Time { return now }
+
+	// Establish a stream at a high sequence (well above MaxForwardJump from 0).
+	const highStart = 100000
+	for i := uint64(0); i < 100; i++ {
+		nacks.Resolve(highStart+i, fastLeg, true)
+		reassembler.Push(Frame{Seq: highStart + i, PathID: fastLeg, Payload: []byte("x")}, nil)
+	}
+	var missing []uint64
+	missing = reassembler.MissingSince(missing)
+	if len(missing) > 0 {
+		nacks.NoteGap(missing)
+	}
+	nacks.ForgetBefore(reassembler.nextSeq)
+
+	// Inject frames far below the anchor to trigger re-anchor (misanchoredStreak).
+	// Need > MaxForwardJump (65536) difference and 32 consecutive frames.
+	const reanchorBase = 10
+	reassembler.Push(Frame{Seq: reanchorBase, Payload: []byte("evil"), Epoch: 1}, nil)
+	for i := uint64(0); i < 32; i++ {
+		reassembler.Push(Frame{Seq: reanchorBase + i, Payload: []byte("evil"), Epoch: 1}, nil)
+	}
+
+	// The re-anchor should have moved nextSeq down to ~reanchorBase+31.
+	// Now push legitimate data in the new space.
+	var delivered [][]byte
+	for i := uint64(0); i < 50; i++ {
+		seq := reanchorBase + 32 + i
+		nacks.Resolve(seq, fastLeg, true)
+		delivered = reassembler.Push(Frame{Seq: seq, PathID: fastLeg, Payload: []byte("real")}, delivered)
+		missing = reassembler.MissingSince(missing)
+		if len(missing) > 0 {
+			nacks.NoteGap(missing)
+		}
+		nacks.ForgetBefore(reassembler.nextSeq)
+	}
+
+	// The tracker should be clean: no pending gaps from the old space.
+	if nacks.Pending() != 0 {
+		t.Fatalf("Pending = %d after re-anchor, want 0", nacks.Pending())
+	}
+
+	// Due should return nothing for sequences in the old space.
+	now = now.Add(200 * time.Millisecond)
+	due := nacks.Due(nil)
+	if len(due) != 0 {
+		t.Fatalf("Due returned %v for old space after re-anchor, want empty", due)
+	}
+
+	// Leg marks should be from the new space only.
+	// The old space had marks at ~highStart+100; new space marks should be ~reanchorBase+80.
+	// If old marks leaked, the gate would think legs are far ahead and release NACKs early.
+	expectedMax := uint64(reanchorBase + 100)
+	if nacks.legSeq[fastLeg] > expectedMax {
+		t.Fatalf("legSeq[fastLeg] = %d, expected <= %d from new space; old space mark leaked", nacks.legSeq[fastLeg], expectedMax)
+	}
+}
+
+// ReanchorLegProgressGate holds a NACK after a re-anchor until the new space shows progress.
+//
+// After a re-anchor, if stale leg marks from the old (high) sequence space
+// remained, the gate would read "every leg already proven past this gap" for
+// any new low sequence, and NACKs would fire at the bare delay with no leg
+// evidence. This test asserts the gate waits for fresh progress in the new space.
+func TestReanchorLegProgressGateWaitsForNewSpace(t *testing.T) {
+	start := time.Unix(0, 0)
+	now := start
+	reassembler := NewReassembler(150 * time.Millisecond)
+	reassembler.now = func() time.Time { return now }
+	nacks := NewNackTracker(60*time.Millisecond, 150*time.Millisecond)
+	nacks.now = func() time.Time { return now }
+
+	// Establish stream at high sequence, both legs delivering.
+	const highStart = 100000
+	for i := uint64(0); i < 100; i++ {
+		pathID := fastLeg
+		if i%2 == 1 {
+			pathID = slowLeg
+		}
+		nacks.Resolve(highStart+i, pathID, true)
+		reassembler.Push(Frame{Seq: highStart + i, PathID: pathID, Payload: []byte("x")}, nil)
+	}
+	var missing []uint64
+	missing = reassembler.MissingSince(missing)
+	if len(missing) > 0 {
+		nacks.NoteGap(missing)
+	}
+	nacks.ForgetBefore(reassembler.nextSeq)
+
+	// Trigger re-anchor to a low sequence.
+	const reanchorBase = 10
+	reassembler.Push(Frame{Seq: reanchorBase, Payload: []byte("evil"), Epoch: 1}, nil)
+	for i := uint64(0); i < 32; i++ {
+		reassembler.Push(Frame{Seq: reanchorBase + i, Payload: []byte("evil"), Epoch: 1}, nil)
+	}
+
+	// Push new data but ONLY on fastLeg - slowLeg is silent in the new space.
+	// Start after the re-anchor streak (which consumed up to reanchorBase+31).
+	for i := uint64(0); i < 20; i++ {
+		seq := reanchorBase + 32 + i
+		nacks.Resolve(seq, fastLeg, true)
+		reassembler.Push(Frame{Seq: seq, PathID: fastLeg, Payload: []byte("real")}, nil)
+		missing = reassembler.MissingSince(missing)
+		if len(missing) > 0 {
+			nacks.NoteGap(missing)
+		}
+		nacks.ForgetBefore(reassembler.nextSeq)
+	}
+
+	// Open a gap at seq 52 (missing), only fastLeg has passed it.
+	// slowLeg has NOT delivered anything in the new space yet.
+	gapSeq := uint64(reanchorBase + 32 + 20) // 52
+	nextSeq := gapSeq + 1                    // 53
+	nacks.Resolve(nextSeq, fastLeg, true)
+	reassembler.Push(Frame{Seq: nextSeq, PathID: fastLeg, Payload: []byte("real")}, nil)
+	missing = reassembler.MissingSince(missing)
+	if len(missing) > 0 {
+		nacks.NoteGap(missing)
+	}
+	nacks.ForgetBefore(reassembler.nextSeq)
+
+	// Wait past base delay but not past maxDelay.
+	now = now.Add(70 * time.Millisecond)
+
+	// Due should NOT return the gap yet because slowLeg has no mark in the new space.
+	// If stale marks from the old space (at ~highStart) leaked, the gate would think
+	// slowLeg is at highStart >> gapSeq and would release the NACK immediately.
+	due := nacks.Due(nil)
+	if len(due) != 0 {
+		t.Fatalf("Due returned %v; stale leg marks from old space unblocked the gate", due)
+	}
+
+	// Now slowLeg delivers in the new space (at a sequence below the gap).
+	slowSeq := uint64(reanchorBase + 32 + 10) // 42
+	nacks.Resolve(slowSeq, slowLeg, true)
+	reassembler.Push(Frame{Seq: slowSeq, PathID: slowLeg, Payload: []byte("real")}, nil)
+	missing = reassembler.MissingSince(missing)
+	if len(missing) > 0 {
+		nacks.NoteGap(missing)
+	}
+	nacks.ForgetBefore(reassembler.nextSeq)
+
+	now = now.Add(10 * time.Millisecond)
+	due = nacks.Due(nil)
+	if len(due) != 1 || due[0] != gapSeq {
+		t.Fatalf("Due = %v, want [%d] after slowLeg proves progress in new space", due, gapSeq)
+	}
+}
