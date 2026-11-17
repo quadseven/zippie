@@ -604,18 +604,10 @@ func (t *Transport) readLink(l *link) {
 				// reassembler will discard.
 				t.fecDec.Observe(f.Seq, f.Payload)
 			}
-			// A resend proves nothing about the leg it arrived on: it was
-			// deliberately routed AWAY from the leg that lost the packet, so
-			// it carries a sequence far ahead of anything else that leg's own
-			// traffic has reached (#108, FlagRetransmit).
-			t.nacks.Resolve(f.Seq, f.PathID, !f.IsRetransmit())
-			out = t.reassembler.Push(f, out[:0])
-			var missing []uint64
-			missing = t.reassembler.MissingSince(missing)
-			if len(missing) > 0 {
-				t.nacks.NoteGap(missing)
-			}
-			t.nacks.ForgetBefore(t.reassembler.nextSeq)
+			// The shared receive path: a resend is not credited to the leg it
+			// arrived on (#108, FlagRetransmit), and a re-anchor inside Push
+			// moves the NACK tracker into the new sequence space with it.
+			out = pushAndTrack(t.reassembler, t.nacks, f, out[:0])
 			peer := t.wgPeer
 			t.mu.Unlock()
 			t.deliver(peer, out)

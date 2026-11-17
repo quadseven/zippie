@@ -257,6 +257,21 @@ func (n *NackTracker) ResetStream() {
 
 func (n *NackTracker) Pending() int { return len(n.pending) }
 
+// pushAndTrack feeds one received data frame through r and keeps n in the same
+// sequence space. Transport and MultiClientHome both receive data through this
+// one path, so a re-anchor inside Push always reaches ForgetBefore, which reads
+// the lower nextSeq as a rewind and drops the old space's gaps and leg marks.
+func pushAndTrack(r *Reassembler, n *NackTracker, f Frame, out [][]byte) [][]byte {
+	// A resend proves nothing about the leg it arrived on; see Resolve.
+	n.Resolve(f.Seq, f.PathID, !f.IsRetransmit())
+	out = r.Push(f, out)
+	if missing := r.MissingSince(nil); len(missing) > 0 {
+		n.NoteGap(missing)
+	}
+	n.ForgetBefore(r.nextSeq)
+	return out
+}
+
 // RetransmitStats mirrors the Python counters.
 type RetransmitStats struct {
 	Resent       uint64

@@ -208,16 +208,9 @@ func (cs *clientState) acceptControl(epoch uint32, now time.Time) bool {
 }
 
 // push feeds one data frame into the client's stream, appending what became
-// deliverable to out, and notes any gap it opened.
+// deliverable to out, and notes any gap it opened. Same path as Transport.
 func (cs *clientState) push(f Frame, out [][]byte) [][]byte {
-	// A resend proves nothing about the leg it arrived on; see Resolve.
-	cs.nacks.Resolve(f.Seq, f.PathID, !f.IsRetransmit())
-	out = cs.reassembler.Push(f, out)
-	if missing := cs.reassembler.MissingSince(nil); len(missing) > 0 {
-		cs.nacks.NoteGap(missing)
-	}
-	cs.nacks.ForgetBefore(cs.reassembler.nextSeq)
-	return out
+	return pushAndTrack(cs.reassembler, cs.nacks, f, out)
 }
 
 func (cs *clientState) stats() ClientStats {
