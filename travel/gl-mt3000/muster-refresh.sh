@@ -28,6 +28,7 @@ STATE="$PERSIST/state"
 PKG="${ZIPPIE_PKG:-/opt/zippie-agent/zippie}"
 IDENT="${MUSTER_IDENTITY_DIR:-$PERSIST/muster}"
 KEYS="${ZIPPIE_KEYS:-$PERSIST/keys.json}"
+BOND_KEY="${MUSTER_BOND_KEY:-$PERSIST/bond.key}"
 LOG="$STATE/muster-refresh.log"
 TOLD="$STATE/muster-cert-warned"
 TRIED="$STATE/muster-renew-tried"
@@ -82,11 +83,11 @@ fi
 # do about an expiring certificate. Step 2 below renews automatically now, and
 # muster does it at 60 days remaining - so a healthy router NEVER reaches the 45
 # day threshold. Getting here means renewal has been failing for a fortnight.
-verdict=$(PYTHONPATH="$(dirname "$PKG")" python3 -c "
-import sys
+verdict=$(ZIPPIE_DEVICE_CRT="$IDENT/device.crt" PYTHONPATH="$(dirname "$PKG")" python3 -c "
+import os
 from zippie import musterwrt
 try:
-    severity, message = musterwrt.enrollment_verdict(open('$IDENT/device.crt').read())
+    severity, message = musterwrt.enrollment_verdict(open(os.environ['ZIPPIE_DEVICE_CRT']).read())
 except musterwrt.Refused as refused:
     print('urgent|%s' % refused)
 except Exception as bad:
@@ -142,15 +143,15 @@ esac
 # spent on nothing.
 today=$(date -u +%F)
 if [ -n "$BASE" ] && [ "$(cat "$TRIED" 2>/dev/null)" != "$today" ]; then
-    renewal=$(MUSTER_BASE_URL="$BASE" PYTHONPATH="$(dirname "$PKG")" python3 -c "
+    renewal=$(MUSTER_BASE_URL="$BASE" ZIPPIE_DEVICE_KEY="$IDENT/device.key" ZIPPIE_DEVICE_CRT="$IDENT/device.crt" PYTHONPATH="$(dirname "$PKG")" python3 -c "
 import os
 from pathlib import Path
 from zippie import musterwrt
 try:
     print('ok|%s' % musterwrt.renew(
         os.environ['MUSTER_BASE_URL'],
-        Path('$IDENT/device.key'),
-        Path('$IDENT/device.crt'),
+        Path(os.environ['ZIPPIE_DEVICE_KEY']),
+        Path(os.environ['ZIPPIE_DEVICE_CRT']),
     ))
 except musterwrt.NotYet as early:
     print('early|%s' % early)
@@ -206,17 +207,17 @@ if [ -z "$BASE" ]; then
     exit 0
 fi
 
-out=$(MUSTER_BASE_URL="$BASE" PYTHONPATH="$(dirname "$PKG")" python3 -c "
+out=$(MUSTER_BASE_URL="$BASE" ZIPPIE_DEVICE_KEY="$IDENT/device.key" ZIPPIE_DEVICE_CRT="$IDENT/device.crt" ZIPPIE_KEYS_PATH="$KEYS" ZIPPIE_BOND_KEY_PATH="$BOND_KEY" PYTHONPATH="$(dirname "$PKG")" python3 -c "
 import os
 from pathlib import Path
 from zippie import musterwrt
 try:
     print('ok|%s' % musterwrt.refresh(
         os.environ['MUSTER_BASE_URL'],
-        Path('$IDENT/device.key'),
-        Path('$IDENT/device.crt').read_text(),
-        Path('$KEYS'),
-        Path('${MUSTER_BOND_KEY:-$PERSIST/bond.key}'),
+        Path(os.environ['ZIPPIE_DEVICE_KEY']),
+        Path(os.environ['ZIPPIE_DEVICE_CRT']).read_text(),
+        Path(os.environ['ZIPPIE_KEYS_PATH']),
+        Path(os.environ['ZIPPIE_BOND_KEY_PATH']),
     ))
 except musterwrt.Unreachable as unreachable:
     print('soft|%s' % unreachable)

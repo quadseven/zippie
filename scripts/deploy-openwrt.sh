@@ -95,7 +95,7 @@ REQUIRED_PKGS="${REQUIRED_PKGS:-python3-pynacl curl tailscale}"
 # shipping a change into an outage on someone's only uplink. Arming is an
 # explicit act - see docs/coldboot-testing.md.
 HELPER_SCRIPTS=(watchdog.sh lan-guard.sh lan-health.sh config-snapshot.sh
-                failsafe-rollback.sh m2000-join.sh carrying.sh
+                m2000-join.sh carrying.sh
                 autotest.sh autotest-arm.sh coldboot-trace.sh drift-check.sh
                 muster-refresh.sh)
 
