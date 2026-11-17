@@ -14,6 +14,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -128,6 +129,31 @@ def _apply_env_config(meta_path: Path, meta: dict[str, Any]) -> None:
         print(f"config: {key} <- {meta[key]!r} (from the environment)")
 
 
+def _is_reserved_value(value: str) -> bool:
+    """True when `value` can never be a real, resolvable endpoint.
+
+    RFC 2606 / RFC 6761 reserved TLDs and RFC 5737 documentation addresses,
+    the same list scripts/deploy-openwrt.sh refuses on the travel-router
+    side, so a scrubbed placeholder is caught at both ends of the bond.
+
+    The TLD alternatives are anchored to the end of a label on purpose:
+    `\\.example\\b` also matches the perfectly real `host.example-home.net`,
+    because a hyphen is a word boundary, and a guard that refuses real
+    hostnames is a guard somebody switches off.
+    """
+    RESERVED = re.compile(
+        r"""
+        \.(?:invalid|example|test|localhost)(?![A-Za-z0-9-])             # RFC 2606
+      | \bexample\.(?:com|net|org)(?![A-Za-z0-9-])                     # RFC 2606
+      | \b192\.0\.2\. | \b198\.51\.100\. | \b203\.0\.113\.     # RFC 5737
+      | \b2001:0?db8                                           # RFC 3849
+      | ^<.*>$                                                 # the 2026-08-29 shape
+        """,
+        re.VERBOSE | re.IGNORECASE,
+    )
+    return bool(RESERVED.search(value))
+
+
 def reconcile_env_into_meta(meta: dict[str, Any]) -> list[str]:
     """Make the ConfigMap authoritative for its three keys. Returns what moved.
 
@@ -166,6 +192,19 @@ def reconcile_env_into_meta(meta: dict[str, Any]) -> list[str]:
                 continue
         else:
             value = raw
+
+        # Refuse reserved-for-documentation values. A placeholder like
+        # "dns-e.example-home.invalid" parses as a valid endpoint but can never
+        # resolve. The live value comes from a Secret, so this is the backstop
+        # for a scrub or a typo reaching it: keep what server.json already
+        # holds rather than dialling a name RFC 2606 guarantees is dead.
+        if isinstance(value, str) and _is_reserved_value(value):
+            print(f"config: refusing reserved {env_name}={value!r}", file=sys.stderr)
+            print(
+                f"config: keeping server.json's {meta_key}={meta.get(meta_key)!r}",
+                file=sys.stderr,
+            )
+            continue
 
         if meta.get(meta_key) != value:
             meta[meta_key] = value
@@ -431,6 +470,18 @@ def cmd_init(args: argparse.Namespace) -> int:
         safe.pop("private_key", None)
         print(json.dumps(safe, indent=2))
         return 0
+
+    endpoint = args.public_endpoint or ""
+    if args.require_real_endpoint and (not endpoint or _is_reserved_value(endpoint)):
+        # The pod passes --require-real-endpoint: a first start must not
+        # write a placeholder into server.json, where reconcile would then
+        # keep it as the stored value (#390).
+        print(
+            f"init: refusing endpoint {endpoint!r}: it is empty or reserved for "
+            "documentation; set a real one in Secret zippie-home-endpoint (key endpoint)",
+            file=sys.stderr,
+        )
+        return 2
 
     priv, pub = gen_keypair()
     ports = [int(p) for p in args.ports.split(",")]
@@ -801,6 +852,11 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--network", default="10.66.0.0/24")
     init.add_argument("--server-address", default="10.66.0.1/24")
     init.add_argument("--wan-iface", default=None)
+    init.add_argument(
+        "--require-real-endpoint",
+        action="store_true",
+        help="refuse an empty or reserved (documentation) endpoint when creating state",
+    )
     init.add_argument(
         "--transport-port",
         type=int,
