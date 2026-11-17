@@ -22,6 +22,10 @@ from zippie.config import parse_config
 
 FIXTURES = Path(__file__).parent / "fixtures"
 EXPECTED_SPKI_SHA256 = "ZgYDZHo+HCK4pCvxqbdMIijYbtJf3AiUyxL/keWQ/Wg="
+# Announce accepts only private IPv4 hosts, so these are private on purpose:
+# arbitrary test values, not addresses of any real network.
+PHONE_HOST_A = "172.16.5.2"  # leak-guard-allow
+PHONE_HOST_B = "172.16.5.3"  # leak-guard-allow
 
 
 def _require_http_scheme(url: str) -> None:
@@ -254,11 +258,78 @@ def _device_certificates(directory: Path):
 
 
 def _certificate_context(ca_cert: Path, client: tuple[Path, Path] | None):
-    context = ssl.create_default_context(cafile=str(ca_cert))
+    # The server leaf fixture is CA:FALSE, which Python 3.9's TLS stack cannot
+    # use as a trust anchor (see `served`). These tests are about the CLIENT
+    # certificate the router verifies, so the client skips server
+    # verification exactly as `served` does. ca_cert stays in the signature so
+    # each call names the home CA that signed the presented certificate.
+    del ca_cert
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
     if client:
         context.load_cert_chain(*map(str, client))
     return context
+
+
+def _der(cert: Path) -> bytes:
+    return subprocess.run(
+        ["openssl", "x509", "-in", str(cert), "-outform", "DER"],
+        check=True,
+        capture_output=True,
+    ).stdout
+
+
+def _foreign_client(directory: Path, label: str) -> tuple[Path, Path]:
+    """A self-signed client certificate no home CA ever issued."""
+    key, cert = directory / f"{label}.key", directory / f"{label}.crt"
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+            "-days",
+            "1",
+            "-subj",
+            "/CN=first",
+            "-addext",
+            "extendedKeyUsage=clientAuth",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return cert, key
+
+
+def _refused(call) -> bool:
+    """True when a write did not succeed: a 401/403 answer or a failed handshake."""
+    try:
+        status = call()
+    except (urllib.error.URLError, ssl.SSLError, OSError):
+        return True
+    return status in (401, 403)
+
+
+def _announce_as(url: str, context: ssl.SSLContext, name: str, host: str, headers=None):
+    sent = {"Content-Type": "application/json", **(headers or {})}
+    try:
+        with _open_http(
+            url + "/api/legs/announce",
+            context=context,
+            data=json.dumps({"name": name, "host": host, "port": 51999}).encode(),
+            headers=sent,
+            method="POST",
+        ) as response:
+            return response.status
+    except urllib.error.HTTPError as error:
+        return error.code
 
 
 def _write_leg(url: str, context: ssl.SSLContext, token: str | None = None):
@@ -278,51 +349,61 @@ def _write_leg(url: str, context: ssl.SSLContext, token: str | None = None):
         return error.code
 
 
+def _device_record(device_id, fingerprint, status="active", migration="migrated"):
+    return {
+        "device_id": device_id,
+        "fingerprint_sha256": fingerprint,
+        "status": status,
+        "migration_status": migration,
+    }
+
+
+def _write_records(path: Path, devices: list) -> None:
+    path.write_text(json.dumps({"version": 1, "devices": devices}), encoding="utf-8")
+
+
+def _start_device_agent(tmp_path: Path, ca_cert: Path, records_path: Path) -> BondAgent:
+    agent = _agent(tmp_path, tls=True)
+    agent.config.dashboard_client_ca = str(ca_cert)
+    agent.config.dashboard_device_records = str(records_path)
+    agent.start_dashboard()
+    return agent
+
+
 @pytest.fixture
 def device_served(tmp_path):
     ca_cert, clients = _device_certificates(tmp_path)
-    agent = _agent(tmp_path, tls=True)
-    agent.config.dashboard_client_ca = str(ca_cert)
     records_path = tmp_path / "authorized-devices.json"
-    fingerprints = []
-    for cert, _key in clients:
-        der = subprocess.run(
-            ["openssl", "x509", "-in", str(cert), "-outform", "DER"],
-            check=True,
-            capture_output=True,
-        ).stdout
-        fingerprints.append(hashlib.sha256(der).hexdigest())
-    records_path.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "devices": [
-                    {
-                        "device_id": "device-one",
-                        "fingerprint_sha256": fingerprints[0],
-                        "status": "active",
-                        "migration_status": "migrated",
-                    },
-                    {
-                        "device_id": "device-two",
-                        "fingerprint_sha256": fingerprints[1],
-                        "status": "active",
-                        "migration_status": "migrated",
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
+    fingerprints = [hashlib.sha256(_der(cert)).hexdigest() for cert, _key in clients]
+    _write_records(
+        records_path,
+        [
+            _device_record("device-one", fingerprints[0]),
+            _device_record("device-two", fingerprints[1], migration="not_migrated"),
+        ],
     )
-    agent.config.dashboard_device_records = str(records_path)
-    agent.start_dashboard()
-    url = f"https://127.0.0.1:{agent._https.server_address[1]}"
-    yield agent, url, ca_cert, clients, records_path, fingerprints
-    agent.stop_dashboard()
+    agents = [_start_device_agent(tmp_path, ca_cert, records_path)]
+
+    def restart() -> BondAgent:
+        agents[-1].stop_dashboard()
+        agents.append(_start_device_agent(tmp_path, ca_cert, records_path))
+        return agents[-1]
+
+    yield agents[0], ca_cert, clients, records_path, fingerprints, restart
+    agents[-1].stop_dashboard()
+
+
+def _https_url(agent: BondAgent) -> str:
+    return f"https://127.0.0.1:{agent._https.server_address[1]}"
+
+
+def _http_url(agent: BondAgent) -> str:
+    return f"http://127.0.0.1:{agent._http.server_address[1]}"
 
 
 def test_device_mode_rejects_missing_unknown_and_revoked_certificates(device_served):
-    agent, url, ca_cert, clients, records_path, fingerprints = device_served
+    agent, ca_cert, clients, records_path, _fingerprints, _restart = device_served
+    url = _https_url(agent)
     assert _get_json(url + "/api/status", _certificate_context(ca_cert, None))[0] == 200
     assert _write_leg(url, _certificate_context(ca_cert, None), agent.console_token()) == 401
     assert _write_leg(url, _certificate_context(ca_cert, clients[2]), agent.console_token()) == 401
@@ -335,15 +416,131 @@ def test_device_mode_rejects_missing_unknown_and_revoked_certificates(device_ser
     assert _write_leg(url, _certificate_context(ca_cert, clients[1])) == 200
 
 
-def test_device_identities_are_certificate_bound_and_records_survive_restart(device_served):
-    _agent_obj, _url, _ca, _clients, records_path, fingerprints = device_served
+def test_write_attribution_follows_the_certificate_not_leg_name_or_address(device_served, caplog):
+    agent, ca_cert, clients, _records, _fingerprints, _restart = device_served
+    url = _https_url(agent)
+    first = _certificate_context(ca_cert, clients[0])
+    second = _certificate_context(ca_cert, clients[1])
+    caplog.set_level("INFO", logger="zippie.agent")
+
+    # Each certificate announces under one leg name and address, then the two
+    # swap names and addresses. Attribution must follow the certificate.
+    assert _announce_as(url, first, "alpha", PHONE_HOST_A) == 200
+    assert _announce_as(url, second, "beta", PHONE_HOST_B) == 200
+    assert _announce_as(url, first, "beta", PHONE_HOST_B) == 200
+    assert _announce_as(url, second, "alpha", PHONE_HOST_A) == 200
+
+    announced = [r.getMessage() for r in caplog.records if "leg announced" in r.getMessage()]
+    assert [line.rsplit("by=", 1)[1] for line in announced] == [
+        "device-one",
+        "device-two",
+        "device-one",
+        "device-two",
+    ]
+    assert not any("by=127.0.0.1" in line for line in announced)
+
+
+def test_device_authorization_and_migration_status_survive_agent_restart(device_served):
+    agent, ca_cert, clients, records_path, _fingerprints, restart = device_served
+    assert _write_leg(_https_url(agent), _certificate_context(ca_cert, clients[0])) == 200
     records = json.loads(records_path.read_text(encoding="utf-8"))
-    assert records["devices"][0]["device_id"] != records["devices"][1]["device_id"]
-    assert records["devices"][0]["fingerprint_sha256"] == fingerprints[0]
-    assert records["devices"][1]["fingerprint_sha256"] == fingerprints[1]
-    restarted = json.loads(records_path.read_text(encoding="utf-8"))
-    assert restarted == records
-    assert all(item["migration_status"] == "migrated" for item in restarted["devices"])
+    records["devices"][0]["status"] = "revoked"
+    records_path.write_text(json.dumps(records), encoding="utf-8")
+
+    restarted = restart()
+    assert restarted is not agent
+    url = _https_url(restarted)
+    assert _write_leg(url, _certificate_context(ca_cert, clients[0])) == 401
+    assert _write_leg(url, _certificate_context(ca_cert, clients[1])) == 200
+    assert _write_leg(url, _certificate_context(ca_cert, clients[2])) == 401
+    assert _write_leg(url, _certificate_context(ca_cert, None), restarted.console_token()) == 401
+    persisted = json.loads(records_path.read_text(encoding="utf-8"))
+    assert [(d["device_id"], d["status"], d["migration_status"]) for d in persisted["devices"]] == [
+        ("device-one", "revoked", "migrated"),
+        ("device-two", "active", "not_migrated"),
+    ]
+
+
+def test_device_mode_refuses_the_bearer_token_on_plain_http(device_served):
+    agent, _ca, _clients, _records, _fingerprints, _restart = device_served
+    assert _announce(_http_url(agent), token=agent.console_token()) == 401
+
+
+def test_device_mode_ignores_identity_claimed_in_headers(device_served):
+    agent, ca_cert, _clients, _records, _fingerprints, _restart = device_served
+    spoofed = {
+        "X-Device-Id": "device-one",
+        "X-Client-Cert-Fingerprint": "device-one",
+        "X-Forwarded-For": PHONE_HOST_A,
+        "X-SSL-Client-Verify": "SUCCESS",
+    }
+    status = _announce_as(
+        _https_url(agent), _certificate_context(ca_cert, None), "alpha", PHONE_HOST_A, spoofed
+    )
+    assert status == 401
+
+
+def test_device_mode_refuses_a_listed_certificate_the_home_ca_did_not_issue(
+    device_served, tmp_path
+):
+    agent, ca_cert, _clients, records_path, _fingerprints, _restart = device_served
+    foreign = _foreign_client(tmp_path, "foreign")
+    records = json.loads(records_path.read_text(encoding="utf-8"))
+    records["devices"].append(
+        _device_record("device-foreign", hashlib.sha256(_der(foreign[0])).hexdigest())
+    )
+    records_path.write_text(json.dumps(records), encoding="utf-8")
+    assert _refused(lambda: _write_leg(_https_url(agent), _certificate_context(ca_cert, foreign)))
+
+
+@pytest.mark.parametrize(
+    "devices",
+    [
+        pytest.param(
+            lambda fp: [_device_record("device-one", fp), _device_record("other", fp, "revoked")],
+            id="active-then-revoked",
+        ),
+        pytest.param(
+            lambda fp: [_device_record("other", fp, "revoked"), _device_record("device-one", fp)],
+            id="revoked-then-active",
+        ),
+        pytest.param(
+            lambda fp: [_device_record("device-one", fp), _device_record("device-two", fp)],
+            id="two-active-identities",
+        ),
+        pytest.param(lambda fp: [_device_record("", fp)], id="empty-id"),
+        pytest.param(lambda fp: [_device_record(7, fp)], id="non-string-id"),
+        pytest.param(lambda fp: [_device_record("dev\nice", fp)], id="newline-in-id"),
+        pytest.param(lambda fp: [_device_record("dev ice", fp)], id="space-in-id"),
+        pytest.param(lambda fp: [_device_record("device-one", fp, "Active")], id="status-case"),
+        pytest.param(lambda fp: [_device_record("device-one", fp, None)], id="no-status"),
+        pytest.param(lambda fp: [_device_record("device-one", fp.upper())], id="fp-uppercase"),
+        pytest.param(lambda fp: ["not-a-record", _device_record("x", fp, "revoked")], id="junk"),
+    ],
+)
+def test_device_mode_refuses_ambiguous_or_malformed_records(device_served, devices):
+    agent, ca_cert, clients, records_path, fingerprints, _restart = device_served
+    _write_records(records_path, devices(fingerprints[0]))
+    assert _write_leg(_https_url(agent), _certificate_context(ca_cert, clients[0])) == 401
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(None, id="missing"),
+        pytest.param("not json", id="not-json"),
+        pytest.param("[]", id="not-an-object"),
+        pytest.param('{"version": 2, "devices": []}', id="wrong-version"),
+        pytest.param('{"version": 1, "devices": {}}', id="devices-not-a-list"),
+    ],
+)
+def test_device_mode_refuses_writes_when_records_are_unreadable(device_served, content):
+    agent, ca_cert, clients, records_path, _fingerprints, _restart = device_served
+    if content is None:
+        records_path.unlink()
+    else:
+        records_path.write_text(content, encoding="utf-8")
+    assert _write_leg(_https_url(agent), _certificate_context(ca_cert, clients[0])) == 401
 
 
 def test_device_records_resolve_durable_identity_and_revocation(tmp_path):

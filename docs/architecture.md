@@ -217,7 +217,13 @@ files are present on the router. Provision records in this shape:
 }
 ```
 
-Use a unique durable `device_id`; valid statuses are `active` and `revoked`.
+Use a unique durable `device_id` of 1 to 128 characters from `A-Z a-z 0-9 . _ : -`;
+valid statuses are `active` and `revoked`. Matching fails closed: a write is
+refused unless exactly one record carries the certificate's fingerprint, that
+record is `active`, and its `device_id` is well formed. A revoked record for a
+certificate therefore cannot be shadowed by an active duplicate, and a missing,
+unparsable or wrong-version document refuses every write. Identity comes only
+from the verified TLS client certificate, never from a request header.
 `migration_status` is retained in the same durable record so home can track
 `not_migrated` and `migrated` devices across router restarts. Replacing the
 document is the authorization update mechanism; the console reads it for each
@@ -230,9 +236,11 @@ Before completing the bearer rollback tracked by #344, verify on the router
 that the expected fingerprint and device ID are present, send an HTTPS write
 with that phone certificate and confirm success, then mark that record revoked
 and confirm its write is rejected while another active phone still succeeds.
-Confirm `/api/status` still responds without a client certificate. This
-foundation does not refuse the legacy bearer or prove the rollback; that
-remains gated on migration and field verification.
+Confirm `/api/status` still responds without a client certificate. Enabling
+device mode refuses the bearer token for writes on both listeners, including
+plain HTTP, so it is enabled only after every writing phone holds a record.
+This foundation does not prove the rollback; that remains gated on migration
+and field verification.
 
 ## Failure modes
 

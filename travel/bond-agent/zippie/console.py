@@ -17,6 +17,7 @@ import gzip
 import hashlib
 import json
 import logging
+import re
 import secrets
 import ssl
 import threading
@@ -45,6 +46,10 @@ GZIP_MIN_BYTES = 1024
 # Largest request body any route reads. An unbounded read lets anything on the
 # LAN sit on a socket and grow the router's memory until it dies.
 MAX_BODY_BYTES = 16384
+
+# A device identity is written into every write's log line, so it must not be
+# able to forge or split one: no whitespace, no control characters, bounded.
+_DEVICE_ID = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 
 
 class ConsoleSeam(Protocol):
@@ -126,14 +131,21 @@ def _authorized_device(config: AgentConfig, certificate: bytes | None) -> str | 
     devices = records.get("devices")
     if not isinstance(devices, list):
         raise ValueError("device records must contain a devices list")
-    for device in devices:
-        if not isinstance(device, dict) or device.get("fingerprint_sha256") != fingerprint:
-            continue
-        if device.get("status") != "active":
-            return ""
-        identity = device.get("device_id")
-        return identity if isinstance(identity, str) and identity else ""
-    return ""
+    # EVERY record for this certificate, not the first. First-match would let an
+    # active record shadow a later revocation of the same certificate, and two
+    # records naming different identities make attribution a guess. Exactly one
+    # matching record, active, with a well-formed identity, or no write.
+    matches = [
+        device
+        for device in devices
+        if isinstance(device, dict) and device.get("fingerprint_sha256") == fingerprint
+    ]
+    if len(matches) != 1 or matches[0].get("status") != "active":
+        return ""
+    identity = matches[0].get("device_id")
+    if not isinstance(identity, str) or not _DEVICE_ID.fullmatch(identity):
+        return ""
+    return identity
 
 
 # A TLS handshake must not run in the accept loop. Wrapping the LISTENING
