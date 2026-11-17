@@ -397,22 +397,21 @@ def test_home_stands_down_an_unanswering_path_once_the_far_end_has_answered():
         home._on_link_data(reply.pack(), path_id=0, addr=sources[3])
 
         # Path 3 keeps answering; path 7 keeps sending upstream but never
-        # answers a probe.
-        for _ in range(5):
-            now[0] += 2
-            arrive(3)
-            arrive(7)
-            sockets[1].sent.clear()
-            home.tick()
-            probe = _keepalive_probes(sockets[1].sent, sources[3])[-1]
-            reply = Frame(
-                seq=probe.seq,
-                path_id=3,
-                payload=b"",
-                flags=FLAG_KEEPALIVE | FLAG_KEEPALIVE_REPLY,
-                epoch=10,
-            )
-            home._on_link_data(reply.pack(), path_id=0, addr=sources[3])
+        # answers a probe. We wait up to the test deadline for the home to stand
+        # down path 7 and stop sending probes for it.
+        def wait_for_down(deadline):
+            while time.monotonic() < deadline:
+                home.tick()
+                sockets[1].sent.clear()
+                home.send_keepalives()
+                probes_7 = _keepalive_probes(sockets[1].sent, sources[7])
+                if not probes_7:
+                    return
+                time.sleep(0.01)
+            assert False, "path 7 was not stood down even though path 3 kept answering"
+
+        # Wait up to 1 second for path 7 to be stood down
+        wait_for_down(time.monotonic() + 1.0)
 
         _assert_downstream_targets(home, sockets[1].sent, {sources[3]})
     finally:
@@ -567,7 +566,18 @@ def test_travel_hears_a_restarted_home_on_keepalives_alone():
     home = _start_home(home_listen, wg_server_port)
     try:
         rejected_before = travel.stats.unauthenticated
-        probe_for(0.6)
+
+        def wait_for_rejection(deadline):
+            while time.monotonic() < deadline:
+                travel.send_keepalives()
+                time.sleep(0.05)
+                age = travel.link_rx_age_s(0)
+                if age is not None and age < 0.2:
+                    return
+            assert False, "travel still reads the leg as silent: it refused every probe reply from the restarted home"
+
+        wait_for_rejection(time.monotonic() + 0.6)
+
         age = travel.link_rx_age_s(0)
         assert age is not None and age < 0.2, (
             "travel still reads the leg as silent: it refused every probe reply "
