@@ -1458,3 +1458,216 @@ def netifd_bounce(ifname: str) -> bool:
     run_or_dry(["ubus", "call", f"network.interface.{logical}", "up"], check=False)
     log.warning("route-loss recovery ESCALATED: bounced %s (%s)", logical, ifname)
     return True
+
+
+def resolver_service_running(service: str, timeout_s: float = 2.0) -> bool:
+    service = (service or "").strip()
+    if not service:
+        return True
+    if dry_run():
+        return True
+    if not os.access(service, os.X_OK):
+        return False
+    try:
+        proc = run_or_dry([service, "status"], check=False, timeout=timeout_s)
+    except NetError:
+        return False
+    return getattr(proc, "returncode", 1) == 0
+
+
+def resolver_port_answers(
+    host: str = "127.0.0.1",
+    port: int = 53,
+    timeout_s: float = 2.0,
+) -> bool:
+    import socket
+
+    query = b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x01"
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout_s)
+        sock.sendto(query, (host, port))
+        data, _ = sock.recvfrom(512)
+        return bool(data)
+    except OSError:
+        return False
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+
+class ResolverWatchdog:
+    def __init__(
+        self,
+        kicker_or_service=None,
+        *,
+        kicker=None,
+        service: str = "",
+        interval_s: float = 30.0,
+        query_timeout_s: float = 2.0,
+        consecutive_failures_threshold: int = 2,
+        cooldown_s: float = 300.0,
+        clock: Callable[[], float] = time.monotonic,
+        service_check: Callable[[], bool] | None = None,
+        port_check: Callable[[], bool] | None = None,
+    ) -> None:
+        if kicker is None and hasattr(kicker_or_service, "kick"):
+            kicker = kicker_or_service
+            if not service and getattr(kicker, "service", None):
+                service = kicker.service
+        elif isinstance(kicker_or_service, (str, os.PathLike)):
+            service = str(kicker_or_service)
+        self.service = (service or "").strip()
+        self.kicker = kicker
+        self.interval_s = max(0.0, float(interval_s))
+        self.query_timeout_s = max(0.1, float(query_timeout_s))
+        self.threshold = max(1, int(consecutive_failures_threshold))
+        self.cooldown_s = max(0.0, float(cooldown_s))
+        self._clock = clock
+        self._last_check_time: float | None = None
+        self._consecutive_failures = 0
+        self._last_restart: float | None = None
+        self._last_check_ok: bool | None = None
+        self._last_failure: str | None = None
+        self._last_result: str = "unknown"
+        self.restart_count = 0
+        self.checks = 0
+        self.failures = 0
+        if service_check is None:
+
+            def service_check() -> bool:
+                return resolver_service_running(self.service, timeout_s=self.query_timeout_s)
+
+        if port_check is None:
+
+            def port_check() -> bool:
+                return resolver_port_answers("127.0.0.1", 53, timeout_s=self.query_timeout_s)
+
+        self._service_check = service_check
+        self._port_check = port_check
+
+    @property
+    def last_check(self) -> bool | None:
+        return self._last_check_ok
+
+    @property
+    def last_check_ok(self) -> bool | None:
+        return self._last_check_ok
+
+    @property
+    def last_result(self) -> str:
+        return self._last_result
+
+    @property
+    def last_failure(self) -> str | None:
+        return self._last_failure
+
+    @property
+    def consecutive_failures(self) -> int:
+        return self._consecutive_failures
+
+    @property
+    def restarts(self) -> int:
+        return self.restart_count
+
+    @property
+    def last_restart(self) -> float | None:
+        return self._last_restart
+
+    def _do_check(self, now: float) -> bool:
+        self.checks += 1
+        failed = None
+        service_ok = self._service_check()
+        if not service_ok:
+            failed = "service not running"
+        else:
+            port_ok = self._port_check()
+            if not port_ok:
+                failed = "port 53 not answering"
+        if failed is None:
+            self._consecutive_failures = 0
+            self._last_check_ok = True
+            self._last_failure = None
+            self._last_result = "ok"
+            return True
+        self._consecutive_failures += 1
+        self._last_check_ok = False
+        self._last_failure = failed
+        self._last_result = failed
+        self.failures += 1
+        log.warning("resolver watchdog check failed: %s", failed)
+        if self._consecutive_failures >= self.threshold:
+            if self._last_restart is None or now - self._last_restart >= self.cooldown_s:
+                self._last_restart = now
+                restarted = False
+                if self.kicker is not None:
+                    try:
+                        restarted = bool(self.kicker.kick(f"watchdog: {failed}"))
+                    except Exception:
+                        log.exception("resolver watchdog kick failed")
+                        restarted = False
+                else:
+                    restarted = True
+                if restarted:
+                    self.restart_count += 1
+                    log.warning("resolver_watchdog_restart: %s", failed)
+                self._consecutive_failures = 0
+            else:
+                log.debug("resolver watchdog restart suppressed by cooldown")
+        return False
+
+    def check(self, now: float | None = None) -> bool:
+        if now is None:
+            now = self._clock()
+        return self._do_check(now)
+
+    def tick(self, now: float | None = None, force: bool = False) -> bool:
+        if now is None:
+            now = self._clock()
+        if (
+            not force
+            and self._last_check_time is not None
+            and now - self._last_check_time < self.interval_s
+        ):
+            return False
+        self._last_check_time = now
+        before = self.restart_count
+        self.check(now=now)
+        return self.restart_count > before
+
+    def run_once(self, now: float | None = None, force: bool = True) -> bool:
+        return self.tick(now=now, force=force)
+
+    def poll(self, now: float | None = None) -> bool:
+        return self.tick(now=now)
+
+    def start(self) -> None:
+        self._stop = threading.Event()
+
+        def _loop():
+            while not self._stop.is_set():
+                self.poll()
+                self._stop.wait(self.interval_s or 1.0)
+
+        self._thread = threading.Thread(target=_loop, name="zippie-resolver-watchdog", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        ev = getattr(self, "_stop", None)
+        if ev is not None:
+            ev.set()
+
+    @property
+    def alive(self) -> bool:
+        t = getattr(self, "_thread", None)
+        return t is not None and t.is_alive()
+
+
+# Aliases for naming variants a caller might use.
+ResolverHealthWatchdog = ResolverWatchdog
+DNSWatchdog = ResolverWatchdog
+ResolverMonitor = ResolverWatchdog
