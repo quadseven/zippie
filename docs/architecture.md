@@ -185,7 +185,54 @@ See [../travel/unifi-utr/README.md](../travel/unifi-utr/README.md).
 - Dashboard binds to `127.0.0.1` in code and in the example config, which
   explicitly warns against `0.0.0.0`. The live travel router does bind
   `0.0.0.0`, behind a reverse proxy on the travel LAN - never a public WAN
-- Console reads are open; writes require the token in `state_dir/console_token`
+- Console reads are open. The legacy write token remains active unless
+  `dashboard_client_ca` and `dashboard_device_records` are both configured.
+  In device-authorization mode, HTTPS requests may omit a client certificate
+  for reads, while every write requires a certificate issued by the configured
+  home CA and an active matching record. The record key is the SHA-256
+  fingerprint of the DER certificate; `device_id` is the stable audit identity,
+  independent of the announced leg name and source address.
+
+### Router console device authorization
+
+Home issues phone certificates and provisions the router with the CA trust
+bundle and an authorization document. The router never creates or signs phone
+certificates. Install `authorized-devices.json` under the agent state directory
+through the deployment channel used for router configuration, then set
+`agent.dashboard_client_ca` and `agent.dashboard_device_records` in
+`zippie.toml` and deploy/restart the agent. Do not enable device mode until both
+files are present on the router. Provision records in this shape:
+
+```json
+{
+  "version": 1,
+  "devices": [
+    {
+      "device_id": "phone-001",
+      "fingerprint_sha256": "<lowercase SHA-256 of the DER client certificate>",
+      "status": "active",
+      "migration_status": "migrated"
+    }
+  ]
+}
+```
+
+Use a unique durable `device_id`; valid statuses are `active` and `revoked`.
+`migration_status` is retained in the same durable record so home can track
+`not_migrated` and `migrated` devices across router restarts. Replacing the
+document is the authorization update mechanism; the console reads it for each
+write, so revocation takes effect without waiting for an agent restart. The
+current router configuration deploy does not generate these records: the
+home-side provisioning process must copy them securely before enabling the
+two config paths.
+
+Before completing the bearer rollback tracked by #344, verify on the router
+that the expected fingerprint and device ID are present, send an HTTPS write
+with that phone certificate and confirm success, then mark that record revoked
+and confirm its write is rejected while another active phone still succeeds.
+Confirm `/api/status` still responds without a client certificate. This
+foundation does not refuse the legacy bearer or prove the rollback; that
+remains gated on migration and field verification.
 
 ## Failure modes
 

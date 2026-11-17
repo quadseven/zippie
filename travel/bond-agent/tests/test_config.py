@@ -111,6 +111,41 @@ def test_parse_optional_dashboard_tls_listener():
     assert cfg.dashboard_tls_key == "/etc/zippie/console.key"
 
 
+def test_parse_home_provisioned_console_device_authorization():
+    cfg = parse_config(
+        {
+            "home": {"endpoint": "home.example.com"},
+            "policy": {},
+            "paths": [],
+            "agent": {
+                "dashboard_tls_port": 9443,
+                "dashboard_tls_cert": "/etc/zippie/console.crt",
+                "dashboard_tls_key": "/etc/zippie/console.key",
+                "dashboard_client_ca": "/etc/zippie/home-client-ca.crt",
+                "dashboard_device_records": "/var/lib/zippie/authorized-devices.json",
+            },
+        }
+    )
+    assert cfg.dashboard_client_ca == "/etc/zippie/home-client-ca.crt"
+    assert cfg.dashboard_device_records == "/var/lib/zippie/authorized-devices.json"
+
+
+def test_console_device_authorization_requires_tls_and_both_files():
+    base = {"home": {"endpoint": "home.example.com"}, "policy": {}, "paths": []}
+    with pytest.raises(ValueError, match="must be set together"):
+        parse_config({**base, "agent": {"dashboard_client_ca": "/ca.crt"}})
+    with pytest.raises(ValueError, match="requires the HTTPS listener"):
+        parse_config(
+            {
+                **base,
+                "agent": {
+                    "dashboard_client_ca": "/ca.crt",
+                    "dashboard_device_records": "/records.json",
+                },
+            }
+        )
+
+
 @pytest.mark.parametrize(
     "partial",
     [

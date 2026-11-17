@@ -14,6 +14,7 @@ what the router dials, so they need the bearer token.
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import logging
 import secrets
@@ -54,6 +55,7 @@ class ConsoleSeam(Protocol):
 
     dynamic: DynamicLegs
     pairing: PairingRequests
+    config: AgentConfig
 
     def console_token(self) -> str: ...
 
@@ -92,6 +94,10 @@ def encode_json_body(payload: Any, accept_encoding: str | None):
 
 
 def _dashboard_tls_context(config: AgentConfig) -> ssl.SSLContext | None:
+    if bool(config.dashboard_client_ca) != bool(config.dashboard_device_records):
+        raise ValueError("dashboard_client_ca and dashboard_device_records must be set together")
+    if config.dashboard_client_ca and config.dashboard_tls_port is None:
+        raise ValueError("device authorization requires the HTTPS listener")
     if not validate_dashboard_tls(
         config.dashboard_tls_port,
         config.dashboard_tls_cert,
@@ -101,7 +107,33 @@ def _dashboard_tls_context(config: AgentConfig) -> ssl.SSLContext | None:
 
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(config.dashboard_tls_cert, config.dashboard_tls_key)
+    if config.dashboard_client_ca:
+        context.load_verify_locations(config.dashboard_client_ca)
+        context.verify_mode = ssl.CERT_OPTIONAL
     return context
+
+
+def _authorized_device(config: AgentConfig, certificate: bytes | None) -> str | None:
+    """Return the durable identity for an active, home-provisioned certificate."""
+    if not config.dashboard_device_records:
+        return None
+    if not certificate:
+        return ""
+    fingerprint = hashlib.sha256(certificate).hexdigest()
+    records = json.loads(Path(config.dashboard_device_records).read_text(encoding="utf-8"))
+    if not isinstance(records, dict) or records.get("version") != 1:
+        raise ValueError("unsupported device record format")
+    devices = records.get("devices")
+    if not isinstance(devices, list):
+        raise ValueError("device records must contain a devices list")
+    for device in devices:
+        if not isinstance(device, dict) or device.get("fingerprint_sha256") != fingerprint:
+            continue
+        if device.get("status") != "active":
+            return ""
+        identity = device.get("device_id")
+        return identity if isinstance(identity, str) and identity else ""
+    return ""
 
 
 # A TLS handshake must not run in the accept loop. Wrapping the LISTENING
@@ -316,7 +348,21 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _authed(self) -> bool:
+        config = getattr(self.seam, "config", None)
+        if config is not None and config.dashboard_device_records:
+            try:
+                get_certificate = getattr(self.connection, "getpeercert", None)
+                certificate = get_certificate(binary_form=True) if get_certificate else None
+                identity = _authorized_device(config, certificate)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                log.error("console device authorization records could not be read: %s", exc)
+                return False
+            self.write_identity = identity
+            return bool(identity)
         return _token_matches(self.headers.get("Authorization"), self.seam.console_token())
+
+    def _actor(self) -> str:
+        return self.write_identity or self.client_address[0]
 
     def _json_body(self) -> dict | None:
         try:
@@ -365,7 +411,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 "leg withdrawn name=%s existed=%s by=%s",
                 name or "<unnamed>",
                 gone,
-                self.client_address[0],
+                self._actor(),
             )
             payload = json.dumps({"leg": name, "withdrawn": gone}).encode()
             self._ok(payload)
@@ -405,7 +451,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "leg announced name=%s endpoint=%s by=%s",
             leg.name,
             leg.relay_endpoint,
-            self.client_address[0],
+            self._actor(),
         )
         self._ok(
             json.dumps(
@@ -466,7 +512,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "pairing approved name=%s host=%s by=%s",
             req.name,
             req.host,
-            self.client_address[0],
+            self._actor(),
         )
         self._ok(json.dumps({"leg": req.name, "approved": True}).encode())
 
@@ -517,6 +563,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self._reject(400, str(exc))
             return
 
+        log.info("leg fields updated name=%s fields=%s by=%s", name, sorted(fields), self._actor())
         self._ok(json.dumps({"leg": name, "applied": entry}).encode("utf-8"))
 
     def do_GET(self) -> None:  # noqa: N802
@@ -567,4 +614,6 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
 def make_handler(seam: ConsoleSeam) -> type[BaseHTTPRequestHandler]:
     """A request handler class bound to `seam`, shared by every listener."""
-    return type("Handler", (ConsoleHandler,), {"seam": seam, "claimed_hosts": {}})
+    return type(
+        "Handler", (ConsoleHandler,), {"seam": seam, "claimed_hosts": {}, "write_identity": ""}
+    )

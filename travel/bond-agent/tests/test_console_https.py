@@ -176,6 +176,230 @@ def test_bearer_protection_is_identical_on_both_listeners(served):
     assert _announce(https, token=agent.console_token(), context=context) == 200
 
 
+def _device_certificates(directory: Path):
+    ca_key, ca_cert = directory / "ca.key", directory / "ca.crt"
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            str(ca_key),
+            "-out",
+            str(ca_cert),
+            "-days",
+            "1",
+            "-subj",
+            "/CN=test-ca",
+            "-addext",
+            "basicConstraints=critical,CA:TRUE",
+            "-addext",
+            "keyUsage=critical,keyCertSign,cRLSign",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    client_extensions = directory / "client-extensions.cnf"
+    client_extensions.write_text("[client]\nextendedKeyUsage=clientAuth\n", encoding="ascii")
+    certs = []
+    for label in ("first", "second", "unknown"):
+        key, csr, cert = (directory / f"{label}.{ext}" for ext in ("key", "csr", "crt"))
+        subprocess.run(
+            [
+                "openssl",
+                "req",
+                "-new",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-keyout",
+                str(key),
+                "-out",
+                str(csr),
+                "-subj",
+                f"/CN={label}",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            [
+                "openssl",
+                "x509",
+                "-req",
+                "-in",
+                str(csr),
+                "-CA",
+                str(ca_cert),
+                "-CAkey",
+                str(ca_key),
+                "-CAcreateserial",
+                "-out",
+                str(cert),
+                "-days",
+                "1",
+                "-extfile",
+                str(client_extensions),
+                "-extensions",
+                "client",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        certs.append((cert, key))
+    return ca_cert, certs
+
+
+def _certificate_context(ca_cert: Path, client: tuple[Path, Path] | None):
+    context = ssl.create_default_context(cafile=str(ca_cert))
+    context.check_hostname = False
+    if client:
+        context.load_cert_chain(*map(str, client))
+    return context
+
+
+def _write_leg(url: str, context: ssl.SSLContext, token: str | None = None):
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        with _open_http(
+            url + "/api/legs/att",
+            context=context,
+            data=b'{"tier":2}',
+            headers=headers,
+            method="PUT",
+        ) as response:
+            return response.status
+    except urllib.error.HTTPError as error:
+        return error.code
+
+
+@pytest.fixture
+def device_served(tmp_path):
+    ca_cert, clients = _device_certificates(tmp_path)
+    agent = _agent(tmp_path, tls=True)
+    agent.config.dashboard_client_ca = str(ca_cert)
+    records_path = tmp_path / "authorized-devices.json"
+    fingerprints = []
+    for cert, _key in clients:
+        der = subprocess.run(
+            ["openssl", "x509", "-in", str(cert), "-outform", "DER"],
+            check=True,
+            capture_output=True,
+        ).stdout
+        fingerprints.append(hashlib.sha256(der).hexdigest())
+    records_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "devices": [
+                    {
+                        "device_id": "device-one",
+                        "fingerprint_sha256": fingerprints[0],
+                        "status": "active",
+                        "migration_status": "migrated",
+                    },
+                    {
+                        "device_id": "device-two",
+                        "fingerprint_sha256": fingerprints[1],
+                        "status": "active",
+                        "migration_status": "migrated",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    agent.config.dashboard_device_records = str(records_path)
+    agent.start_dashboard()
+    url = f"https://127.0.0.1:{agent._https.server_address[1]}"
+    yield agent, url, ca_cert, clients, records_path, fingerprints
+    agent.stop_dashboard()
+
+
+def test_device_mode_rejects_missing_unknown_and_revoked_certificates(device_served):
+    agent, url, ca_cert, clients, records_path, fingerprints = device_served
+    assert _get_json(url + "/api/status", _certificate_context(ca_cert, None))[0] == 200
+    assert _write_leg(url, _certificate_context(ca_cert, None), agent.console_token()) == 401
+    assert _write_leg(url, _certificate_context(ca_cert, clients[2]), agent.console_token()) == 401
+    assert _write_leg(url, _certificate_context(ca_cert, clients[0])) == 200
+    assert _write_leg(url, _certificate_context(ca_cert, clients[1])) == 200
+    records = json.loads(records_path.read_text(encoding="utf-8"))
+    records["devices"][0]["status"] = "revoked"
+    records_path.write_text(json.dumps(records), encoding="utf-8")
+    assert _write_leg(url, _certificate_context(ca_cert, clients[0])) == 401
+    assert _write_leg(url, _certificate_context(ca_cert, clients[1])) == 200
+
+
+def test_device_identities_are_certificate_bound_and_records_survive_restart(device_served):
+    _agent_obj, _url, _ca, _clients, records_path, fingerprints = device_served
+    records = json.loads(records_path.read_text(encoding="utf-8"))
+    assert records["devices"][0]["device_id"] != records["devices"][1]["device_id"]
+    assert records["devices"][0]["fingerprint_sha256"] == fingerprints[0]
+    assert records["devices"][1]["fingerprint_sha256"] == fingerprints[1]
+    restarted = json.loads(records_path.read_text(encoding="utf-8"))
+    assert restarted == records
+    assert all(item["migration_status"] == "migrated" for item in restarted["devices"])
+
+
+def test_device_records_resolve_durable_identity_and_revocation(tmp_path):
+    ca_cert, clients = _device_certificates(tmp_path)
+    del ca_cert
+    cert_der = [
+        subprocess.run(
+            ["openssl", "x509", "-in", str(cert), "-outform", "DER"],
+            check=True,
+            capture_output=True,
+        ).stdout
+        for cert, _key in clients[:2]
+    ]
+    records_path = tmp_path / "authorized-devices.json"
+    records = {
+        "version": 1,
+        "devices": [
+            {
+                "device_id": "device-one",
+                "fingerprint_sha256": hashlib.sha256(cert_der[0]).hexdigest(),
+                "status": "active",
+                "migration_status": "migrated",
+            },
+            {
+                "device_id": "device-two",
+                "fingerprint_sha256": hashlib.sha256(cert_der[1]).hexdigest(),
+                "status": "active",
+                "migration_status": "not_migrated",
+            },
+        ],
+    }
+    records_path.write_text(json.dumps(records), encoding="utf-8")
+    agent = _agent(tmp_path, tls=True)
+    agent.config.dashboard_client_ca = str(tmp_path / "ca.crt")
+    agent.config.dashboard_device_records = str(records_path)
+    unknown_der = subprocess.run(
+        ["openssl", "x509", "-in", str(clients[2][0]), "-outform", "DER"],
+        check=True,
+        capture_output=True,
+    ).stdout
+    assert console_module._authorized_device(agent.config, None) == ""
+    assert console_module._authorized_device(agent.config, unknown_der) == ""
+    assert console_module._authorized_device(agent.config, cert_der[0]) == "device-one"
+    assert console_module._authorized_device(agent.config, cert_der[1]) == "device-two"
+    restarted_agent = _agent(tmp_path, tls=True)
+    restarted_agent.config.dashboard_client_ca = str(tmp_path / "ca.crt")
+    restarted_agent.config.dashboard_device_records = str(records_path)
+    assert console_module._authorized_device(restarted_agent.config, cert_der[0]) == "device-one"
+    records["devices"][0]["status"] = "revoked"
+    records_path.write_text(json.dumps(records), encoding="utf-8")
+    assert console_module._authorized_device(restarted_agent.config, cert_der[0]) == ""
+    assert console_module._authorized_device(restarted_agent.config, cert_der[1]) == "device-two"
+    persisted = json.loads(records_path.read_text(encoding="utf-8"))
+    assert persisted["devices"][1]["migration_status"] == "not_migrated"
+
+
 def test_tls_is_absent_when_it_is_not_configured(tmp_path):
     agent = _agent(tmp_path, tls=False)
     agent.start_dashboard()
