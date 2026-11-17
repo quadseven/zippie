@@ -1,7 +1,9 @@
 """A first start must not write a placeholder endpoint into server.json (#390).
 
 reconcile_env_into_meta refuses a reserved ZIPPIE_HOME_ENDPOINT and keeps the
-stored value. On a fresh state there is no stored value yet, so `init` itself
+stored value; that is proven by
+test_a_reserved_endpoint_is_refused_and_server_json_is_unchanged in
+test_home_configmap_reconcile.py. On a fresh state there is no stored value yet, so `init` itself
 must refuse: the pod passes --require-real-endpoint, and an empty or reserved
 endpoint then exits non-zero before any key or server.json is written.
 Without the flag `init` behaves as before, so local and test setups that use
