@@ -15,12 +15,20 @@ computed from age rather than from what still pointed at it.
 
 So the safe order is:
 
-  1. BOUND THE ROLLBACK WINDOW declaratively - `revisionHistoryLimit` on the
-     Deployment, which is set to 3 in both manifests here. Kubernetes garbage-
-     collects the excess ReplicaSets itself.
-  2. Their ConfigMaps then become genuinely unreferenced.
-  3. Only then is deleting them safe - and this script is how you see which
-     ones, with the reason, before anyone types `kubectl delete`.
+   1. BOUND THE ROLLBACK WINDOW declaratively - `revisionHistoryLimit` on the
+      Deployment, which is set to 3 in both manifests here. Kubernetes garbage-
+      collects the excess ReplicaSets itself.
+   2. Their ConfigMaps then become genuinely unreferenced.
+   3. Only then is deleting them safe - and this script is how you see which
+      ones, with the reason, before anyone types `kubectl delete`.
+
+A CURRENT DEPLOYMENT COUNTS AS A REFERENCE. `kubectl apply` returns before the
+controller has created the new ReplicaSet, so there is a window in which the
+freshly generated `*-<hash>` ConfigMap is named by the Deployment's pod template
+and by no ReplicaSet or Pod yet. Reading only ReplicaSets and Pods (the bug this
+section's rule closes) deletes it in that window and the new pods fail with
+`CreateContainerConfigError`. A ConfigMap a current Deployment names is held,
+exactly as a running pod's or a retained ReplicaSet's is.
 
 To see which ConfigMaps would be pruned (dry run, the default):
     ./deploy/oke/unreferenced-configmaps.py [--namespace zippie] [--context NAME]
@@ -122,18 +130,23 @@ def _kubectl(context: str | None) -> list:
 
 
 def _fetch(namespace: str, context: str | None) -> list:
-    """Every ConfigMap, Pod and ReplicaSet in the namespace, or raise.
+    """Every ConfigMap, Pod, ReplicaSet and Deployment in the namespace, or raise.
 
     A REPORT THAT CANNOT SEE THE CLUSTER MUST NOT SAY "NOTHING IS REFERENCED" -
     that reads as "safe to delete everything", which is the worst failure this
     particular tool could have. So this raises and the caller exits non-zero.
+
+    Deployments are in the list because a Deployment's pod template names the
+    ConfigMap it wants BEFORE any ReplicaSet or Pod exists for it. A read that
+    omits Deployments cannot see the one reference that exists in the apply
+    window - see the module docstring.
     """
     cmd = [
         *_kubectl(context),
         "-n",
         namespace,
         "get",
-        "cm,pod,rs",
+        "cm,pod,rs,deploy",
         "-o",
         "json",
     ]
@@ -141,8 +154,14 @@ def _fetch(namespace: str, context: str | None) -> list:
     return json.loads(raw).get("items") or []
 
 
-def _report(configmaps: list, live: set, rollback: set) -> list:
-    """Print the reconciliation. Returns the names nothing references."""
+def _report(configmaps: list, live: set, rollback: set, current: set) -> list:
+    """Print the reconciliation. Returns the names nothing references.
+
+    `current` is the set of ConfigMaps a live Deployment's pod template names.
+    It is a reference in its own right, not a lesser one: the Deployment is the
+    object that will create the pods, and in the apply window it is the only
+    thing that does.
+    """
     unreferenced = []
     print(f"{'configmap':<34} {'created':<12} referenced by")
     for cm in sorted(configmaps, key=lambda c: c["metadata"]["name"]):
@@ -154,6 +173,8 @@ def _report(configmaps: list, live: set, rollback: set) -> list:
             where.append("RUNNING POD")
         if name in rollback:
             where.append("replicaset (rollback)")
+        if name in current:
+            where.append("deployment (current)")
         if not where:
             where = ["NOTHING"]
             unreferenced.append(name)
@@ -221,11 +242,12 @@ def main() -> int:
     configmaps = [i for i in items if i["kind"] == "ConfigMap"]
     pods = [i for i in items if i["kind"] == "Pod"]
     replicasets = [i for i in items if i["kind"] == "ReplicaSet"]
+    deployments = [i for i in items if i["kind"] == "Deployment"]
 
-    if not pods and not replicasets:
+    if not pods and not replicasets and not deployments:
         print(
-            "no pods and no replicasets found - refusing to call anything "
-            "unreferenced from that",
+            "no pods, replicasets or deployments found - refusing to call "
+            "anything unreferenced from that",
             file=sys.stderr,
         )
         return 2
@@ -236,12 +258,16 @@ def main() -> int:
     rollback = set()
     for rs in replicasets:
         rollback |= _configmap_names(_pod_spec(rs))
+    current = set()
+    for deploy in deployments:
+        current |= _configmap_names(_pod_spec(deploy))
 
-    unreferenced = _report(configmaps, live, rollback)
+    unreferenced = _report(configmaps, live, rollback, current)
     names = {c["metadata"]["name"] for c in configmaps}
     print()
     print(f"mounted by a running pod : {len(live & names)}")
     print(f"held for rollback only   : {len(rollback - live)}")
+    print(f"named by a deployment    : {len(current & names)}")
     print(f"referenced by NOTHING    : {len(unreferenced)}")
 
     if args.prune:

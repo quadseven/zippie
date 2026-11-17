@@ -245,6 +245,7 @@ def test_only_the_genuinely_unreferenced_are_returned(capsys):
         [_cmobj("live"), _cmobj("rollback"), _cmobj("orphan")],
         live={"live"},
         rollback={"rollback"},
+        current=set(),
     )
     assert unreferenced == ["orphan"]
     out = capsys.readouterr().out
@@ -255,8 +256,115 @@ def test_the_service_account_token_ca_is_ignored(capsys):
     """kube-root-ca.crt is injected by the control plane into every namespace
     and referenced by nothing this script can see. Listing it as unreferenced
     would put a "delete this" line under it."""
-    assert cm._report([_cmobj("kube-root-ca.crt")], live=set(), rollback=set()) == []
+    assert (
+        cm._report([_cmobj("kube-root-ca.crt")], live=set(), rollback=set(), current=set())
+        == []
+    )
     assert "kube-root-ca.crt" not in capsys.readouterr().out
+
+
+# ----------------------------------- the apply window: a Deployment references
+def test_a_deployment_pod_template_counts_as_a_reference():
+    """A Deployment's pod template names the ConfigMaps it wants. Reading only
+    ReplicaSets and Pods misses this in the window between `kubectl apply` and
+    the controller creating the new ReplicaSet - which is exactly when the
+    deploy workflow used to prune."""
+    deploy = {
+        "kind": "Deployment",
+        "metadata": {"name": "zippie-home"},
+        "spec": {
+            "template": {
+                "spec": {
+                    "volumes": [
+                        {"name": "transport-pkg", "configMap": {"name": "wanted"}}
+                    ]
+                }
+            }
+        },
+    }
+    assert cm._configmap_names(cm._pod_spec(deploy)) == {"wanted"}
+
+
+def test_a_deployment_named_configmap_is_not_reported_unreferenced(capsys):
+    unreferenced = cm._report(
+        [_cmobj("wanted")], live=set(), rollback=set(), current={"wanted"}
+    )
+    assert unreferenced == []
+    assert "deployment (current)" in capsys.readouterr().out
+
+
+def test_prune_holds_a_deployment_configmap_before_any_replicaset(monkeypatch, capsys):
+    """THE WINDOW, END TO END. The new hash ConfigMap exists, the Deployment
+    names it, and there is no ReplicaSet and no Pod for it yet. The old hash is
+    genuinely orphaned and may go; the new one must not, or the pods the
+    Deployment is about to create fail with CreateContainerConfigError."""
+    items = [
+        _cmobj("zippie-transport-pkg-new"),
+        _cmobj("zippie-transport-pkg-old"),
+        {
+            "kind": "Deployment",
+            "metadata": {"name": "zippie-home"},
+            "spec": {
+                "template": {
+                    "spec": {
+                        "volumes": [
+                            {
+                                "name": "transport-pkg",
+                                "configMap": {"name": "zippie-transport-pkg-new"},
+                            }
+                        ]
+                    }
+                }
+            },
+        },
+    ]
+    seen = []
+
+    def record(cmd, *a, **k):
+        seen.append(cmd)
+        if "get" in cmd:
+            return type("R", (), {"stdout": json.dumps({"items": items})})()
+        return type("R", (), {"stdout": "", "returncode": 0})()
+
+    monkeypatch.setattr(cm.subprocess, "run", record)
+    monkeypatch.setattr("sys.argv", ["x", "--prune"])
+    assert cm.main() == 0
+    deleted = [c for c in seen if "delete" in c]
+    assert deleted, "the genuinely orphaned ConfigMap was not pruned"
+    assert all("zippie-transport-pkg-old" in c for c in deleted), deleted
+    out = capsys.readouterr().out
+    assert "deployment (current)" in out
+
+
+def test_main_fetches_deployments(monkeypatch, capsys):
+    seen = []
+
+    def record(cmd, *a, **k):
+        seen.append(cmd)
+        return type(
+            "R",
+            (),
+            {
+                "stdout": json.dumps(
+                    {
+                        "items": [
+                            _cmobj("mounted"),
+                            _pod(
+                                volumes=[
+                                    {"name": "v", "configMap": {"name": "mounted"}}
+                                ]
+                            ),
+                        ]
+                    }
+                )
+            },
+        )()
+
+    monkeypatch.setattr(cm.subprocess, "run", record)
+    monkeypatch.setattr("sys.argv", ["x"])
+    assert cm.main() == 0
+    assert len(seen) == 1, seen
+    assert "deploy" in seen[0], seen[0]
 
 
 # ----------------------------------------------------- refusing to guess
