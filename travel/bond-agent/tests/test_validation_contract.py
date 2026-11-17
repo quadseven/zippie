@@ -15,11 +15,13 @@ def test_validation_contract_lists_ci_checks_in_order():
         ".github/workflows/check.python-lint.yml",
         ".github/workflows/check.agent-tests.yml",
         ".github/workflows/check.agent-tests.yml",
+        ".github/workflows/check.agent-tests.yml",
     ]
     assert [source.split(" | ", 2)[1] for source in sources] == [
         "lint",
         "format",
         "type",
+        "test",
         "test",
     ]
     for source in sources:
@@ -32,6 +34,8 @@ def test_validation_contract_lists_ci_checks_in_order():
         "uvx ruff@0.15.10 format --check .",
         "go vet ./...",
         "python -m pytest -q",
+        # `zippie datapath go test`, a required check on main (#423).
+        "(cd travel/datapath-go && go test ./... -race -count=1)",
     ]
     positions = [check.index(command) for command in commands]
     assert positions == sorted(positions)
@@ -40,6 +44,7 @@ def test_validation_contract_lists_ci_checks_in_order():
     ) == 1
     agent_workflow = (ROOT / ".github/workflows/check.agent-tests.yml").read_text()
     assert "run: go vet ./..." in agent_workflow
+    assert "run: go test ./... -race -count=1" in agent_workflow
     assert (
         "test-cmd: \"uv run --with 'pytest>=8.0' --with tomli --python 3.9 python -m pytest -q"
         in agent_workflow
