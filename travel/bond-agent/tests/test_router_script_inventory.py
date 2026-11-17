@@ -100,7 +100,12 @@ def test_muster_refresh_passes_paths_to_python_through_the_environment():
             "the program instead of the lookup - pass it through the "
             "environment, as MUSTER_BASE_URL already is"
         )
-    for var in ("ZIPPIE_DEVICE_KEY", "ZIPPIE_DEVICE_CRT", "ZIPPIE_KEYS_PATH", "ZIPPIE_BOND_KEY_PATH"):
+    for var in (
+        "ZIPPIE_DEVICE_KEY",
+        "ZIPPIE_DEVICE_CRT",
+        "ZIPPIE_KEYS_PATH",
+        "ZIPPIE_BOND_KEY_PATH",
+    ):
         assert f"os.environ['{var}']" in code, f"no Python block reads its path from {var}"
 
 
