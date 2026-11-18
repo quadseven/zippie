@@ -478,8 +478,10 @@ otherwise. A phone on two networks cannot know which of its addresses this
 router can route to; the router does not have to guess, because the packet
 demonstrably arrived from somewhere.
 
-Announcing needs the console write token. A phone plugged in by ethernet that
-does not have it yet can ask for it (`zippie/pairing.py`):
+Announcing accepts the legacy console write token or a home-authorized
+certificate over HTTPS. See the [console authorization setup](docs/architecture.md#router-console-device-authorization).
+The legacy flow in `zippie/pairing.py` lets a phone plugged in by ethernet
+request a token.
 
 ```
   phone     --POST /api/legs/pair {name, link: ethernet}------->  console

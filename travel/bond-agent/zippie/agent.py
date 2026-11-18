@@ -3739,7 +3739,9 @@ class BondAgent:
     def start_dashboard(self) -> None:
         # The console reaches the agent only through console.ConsoleSeam, which
         # this class satisfies as it stands (#374).
-        _install_dashboard_listeners(self, console.make_handler(self))
+        _install_dashboard_listeners(
+            self, console.make_handler(self, device_records=self.config.dashboard_device_records)
+        )
 
     def stop_dashboard(self) -> None:
         for server in (self._https, self._http):
