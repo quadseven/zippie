@@ -19,12 +19,6 @@ import java.util.Locale
  * side, which is the wrong way round - the phone is the half we understand
  * least.
  *
- * WHY NOT CellularLogShipper: that ships to Datadog OVER CELLULAR, and the
- * failure being diagnosed is "cellular never came up". An instrument that needs
- * the thing under test to work cannot report on it failing. The shipper is the
- * right tool when the phone is healthy and the ROUTER is dark; this file is the
- * right tool when the phone itself is the suspect. They are not redundant.
- *
  * DEVICE-PROTECTED STORAGE, so it is writable before first unlock. BootReceiver
  * is directBootAware and runs on LOCKED_BOOT_COMPLETED, when credential-
  * protected storage is not available at all - a log written there would throw

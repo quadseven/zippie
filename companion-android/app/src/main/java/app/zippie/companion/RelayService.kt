@@ -20,7 +20,6 @@ import android.os.HandlerThread
 import android.os.IBinder
 import android.util.Log
 import java.net.DatagramPacket
-import kotlinx.coroutines.runBlocking
 import java.net.DatagramSocket
 import java.net.InetSocketAddress
 import java.util.concurrent.atomic.AtomicLong
@@ -55,11 +54,6 @@ class RelayService : Service() {
          *  Unthrottled, the downstream drops would call publish() thousands of
          *  times a second and bury the signal they exist to report. */
         private const val RENOTE_MS = 30_000L
-
-        /** How often queued telemetry is pushed to Datadog. Frequent enough that
-         *  a cold boot is visible while it is happening, rare enough to be a
-         *  rounding error on a metered plan. */
-        private const val SHIP_INTERVAL_MS = 20_000L
 
         /** Stops the relay from the notification without opening the app. */
         const val ACTION_STOP = "app.zippie.companion.action.STOP_RELAY"
@@ -128,9 +122,6 @@ class RelayService : Service() {
     private val downDroppedNoSocket = AtomicLong()
     private val downDroppedSendError = AtomicLong()
 
-    // Telemetry, shipped over CELLULAR so it survives the router being dark -
-    // see CellularLogShipper for why that is the entire point.
-    @Volatile private var shipper: CellularLogShipper? = null
     private var lastNoteAtMs = 0L
     private var lastNoteText: String? = null
 
@@ -254,42 +245,6 @@ class RelayService : Service() {
         ) ?: BudgetLedger(validated.budget)
         carrier = CarrierInfo.read(this)
 
-        // BUILT BEFORE ANY PUMP STARTS, so the earliest decisions of a cold boot
-        // are already queued when cellular finally binds and the first flush
-        // goes out. Built even when the token is empty: the shipper no-ops, and
-        // a null-check at every call site would be one more thing to forget.
-        // #74 DECISION: ONE Datadog service across both platforms, with a
-        // MANDATORY `platform` tag rather than a second service name. Every
-        // existing dashboard and monitor is built against
-        // `service:zippie-companion`; splitting the service would silently
-        // break all of them with no channel from this repo to fix Datadog's
-        // live config in the same change. `platform:android` here is the
-        // iOS side's explicit `Observability.platform` mirrored back -
-        // declared, not inferred from `ddsource` (which this shipper already
-        // hardcodes to "android" below, but that is an SDK/implementation
-        // detail, not a fact this app asserts on purpose). The per-device
-        // identifier #74 also asked for is `leg:`, already here: it is the
-        // same identity the router knows this phone by, which is what would
-        // have made the 2026-09-11 misdiagnosis impossible - "relay
-        // heartbeat" could not have read as one continuous stream when every
-        // line already said which Pixel it came from.
-        shipper = CellularLogShipper(
-            clientToken = validated.ddClientToken,
-            site = validated.ddSite,
-            service = "zippie-companion",
-            tags = "platform:android,leg:" + (legName ?: "unresolved") + ",device:" + Build.MODEL,
-        )
-        ship(
-            "relay starting",
-            fields = mapOf(
-                "unlocked" to getSystemService(UserManager::class.java)?.isUserUnlocked,
-                "console" to validated.consoleLanHost.ifEmpty { "(none)" },
-                "home" to validated.homeHost.ifEmpty { "(none)" },
-                "announce_token" to (validated.announceToken.isNotBlank()),
-                "telemetry" to (validated.ddClientToken.isNotBlank()),
-            ),
-        )
-
         running = true
         // REGISTERED AT RUNTIME, not in the manifest.
         // ACTION_APPLICATION_RESTRICTIONS_CHANGED is delivered only to
@@ -400,15 +355,6 @@ class RelayService : Service() {
         // Logged without the token, which lives only in the Config and is
         // redacted even in its toString.
         Log.i(TAG, text)
-        // SHIPPED, not only logged (#18's own "make the deadlock legible").
-        // logcat resets every boot and is unreachable from outside exactly
-        // when the router is dark - the same reasoning CellularLogShipper's
-        // own header comment gives for existing at all. Without this, an
-        // announce failure during the cold-start deadlock is visible only
-        // to someone watching logcat live at the moment it happens, which
-        // is how the 2026-08-29 incident went unexplained for 25 minutes.
-        val status = if (outcome is LegAnnouncer.Outcome.Announced) "info" else "warn"
-        ship(text, status, mapOf("announce_outcome" to outcome::class.simpleName))
         publish()
     }
 
@@ -613,13 +559,6 @@ class RelayService : Service() {
             // phone actually became able to carry.
             BootLog.record(this, "cellular",
                 "bound: home=${config.homeHost} resolved on the cellular network")
-            // Telemetry rides the SAME handle as the bond. This is the line that
-            // makes the phone visible while the router is dark (#186).
-            shipper?.useNetwork(network)
-            ship(
-                "cellular bound; relay can reach home",
-                fields = mapOf("home" to config.homeHost, "home_port" to config.homePort),
-            )
             carrier = CarrierInfo.read(this)
             // The radio has only now said which network it registered on. A
             // phone that started the relay in a tunnel would otherwise keep
@@ -631,12 +570,6 @@ class RelayService : Service() {
             lastError = "cellular bind failed: ${e.message}"
             errors.incrementAndGet()
             Log.w(TAG, "cellular bind failed", e)
-            // Queued even though cellular is NOT bound: the shipper holds lines
-            // until it has a network, so the report of the failure survives and
-            // goes out the moment one arrives. A shipper that could only report
-            // successes would be worthless here.
-            shipper?.useNetwork(network)
-            ship("cellular bind FAILED", "error", mapOf("cause" to e.message))
         }
         publish()
     }
@@ -797,26 +730,12 @@ class RelayService : Service() {
     private fun startHeartbeat() {
         thread(name = "zippie-relay-heartbeat") {
             var sinceSaveMs = 0L
-            var sinceShipMs = 0L
             while (running) {
                 publish()
                 sinceSaveMs += RelayReport.HEARTBEAT_MS
-                sinceShipMs += RelayReport.HEARTBEAT_MS
                 if (sinceSaveMs >= LEDGER_SAVE_INTERVAL_MS) {
                     saveLedger()
                     sinceSaveMs = 0
-                }
-                // Flushed from THIS thread, never the packet loops: a POST that
-                // blocks for its full timeout on a dying uplink must not be able
-                // to stall the bond it is reporting on.
-                if (sinceShipMs >= SHIP_INTERVAL_MS) {
-                    // THE ROUTER'S OWN VERDICT, CARRIED OUT OVER CELLULAR. This
-                    // is the only path by which an islanded router can be heard
-                    // from at all - see IslandReport. Computed on THIS thread,
-                    // which is already the one allowed to block on the network.
-                    ship("relay heartbeat", fields = mapOf("router_view" to routerView().wireValue))
-                    shipper?.flush()
-                    sinceShipMs = 0
                 }
                 try {
                     Thread.sleep(RelayReport.HEARTBEAT_MS)
@@ -831,7 +750,6 @@ class RelayService : Service() {
         errors.incrementAndGet()
         lastError = message
         Log.w(TAG, message)
-        ship(message, "warn")
         publish()
     }
 
@@ -855,59 +773,6 @@ class RelayService : Service() {
         lastNoteText = message
         lastNoteAtMs = now
         note(message)
-    }
-
-    /** Best-effort telemetry. Never throws, never blocks the caller. */
-    /**
-     * Ask the router, over WIFI ONLY, what it thinks of itself.
-     *
-     * LOCAL CANDIDATES ONLY, and that is the whole trick. The console is also
-     * reachable over the tailnet, and a tailnet read would succeed only when the
-     * router already has internet - which is precisely the thing in question. It
-     * would make this signal silent at exactly the moment it is needed, which is
-     * the same construction failure that makes the hub observer blind to
-     * islanding (zippie#286).
-     *
-     * A failure here is NOT an error. Being away from the router is the normal
-     * state of a phone, and IslandReport turns that into NOT_NEAR_ROUTER rather
-     * than an alarm.
-     */
-    private fun routerView(): IslandState {
-        val listening = lanSocket != null
-        val local = config.consoleCandidates.filter { it.isLocal }
-        if (local.isEmpty()) {
-            return IslandReport.evaluate(listening, RouterProximity.UNREACHABLE, null)
-        }
-        val probe = runCatching {
-            runBlocking {
-                BondStatusClient.probe(local, wifi = SystemWifiRoute(this@RelayService))
-            }
-        }.getOrNull()
-        val proximity = probe?.second ?: RouterProximity.UNREACHABLE
-        val status = probe?.first as? ConsoleResult.Ok
-        return IslandReport.evaluate(
-            relayListening = listening,
-            proximity = proximity,
-            carryingLegs = status?.status?.carryingCount,
-        )
-    }
-
-    private fun ship(message: String, status: String = "info", fields: Map<String, Any?> = emptyMap()) {
-        val s = shipper ?: return
-        s.event(
-            message,
-            status,
-            fields + mapOf(
-                "leg" to legName,
-                "cellular_ready" to cellularReady,
-                "up_datagrams" to upDatagrams.get(),
-                "down_datagrams" to downDatagrams.get(),
-                "down_dropped_no_peer" to downDroppedNoPeer.get(),
-                "down_dropped_no_socket" to downDroppedNoSocket.get(),
-                "down_dropped_send_error" to downDroppedSendError.get(),
-                "budget_blocked" to budgetBlocked.get(),
-            ),
-        )
     }
 
     private fun fail(message: String) {
