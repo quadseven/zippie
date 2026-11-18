@@ -92,7 +92,14 @@ class _Host:
 
 
 def _agent(
-    tmp_path, monkeypatch, host: _Host, *, auto_rate=True, datapath="packet", **extra_policy
+    tmp_path,
+    monkeypatch,
+    host: _Host,
+    *,
+    auto_rate=True,
+    datapath="packet",
+    wired_floor=None,
+    **extra_policy,
 ) -> BondAgent:
     import zippie.agent as agent_mod
 
@@ -120,7 +127,7 @@ def _agent(
                     **extra_policy,
                 ),
                 "paths": [
-                    {"name": "leg0", "interface": "eth0"},
+                    {"name": "leg0", "interface": "eth0", **(wired_floor or {})},
                     {"name": "leg1", "interface": "eth1"},
                 ],
             }
@@ -204,6 +211,25 @@ def test_first_pass_applies_a_rate_from_the_carrying_leg(tmp_path, monkeypatch):
     assert host.down_kbit == 8_000.0
     assert host.up_kbit == 2_000.0
     assert agent._shaper_applied_kbit == (8_000.0, 2_000.0)
+
+
+def test_wired_floor_applies_only_while_the_wired_leg_carries(tmp_path, monkeypatch):
+    host = _Host(cake=True)
+    agent = _agent(
+        tmp_path,
+        monkeypatch,
+        host,
+        shaper_capacity_fraction=1.0,
+        wired_floor={"shaper_download_floor_kbit": 40_000, "shaper_upload_floor_kbit": 8_000},
+    )
+    wired = _make_carrying(agent, "leg0", rx_bps=0.0, tx_bps=0.0, link_id=0)
+    _make_carrying(agent, "leg1", rx_bps=3_000_000.0, tx_bps=800_000.0, link_id=1)
+    agent._update_bond_shaper_rate()
+    assert agent._shaper_applied_kbit == (40_000, 8_000)
+
+    wired.effective_weight = 0
+    agent._update_bond_shaper_rate()
+    assert agent._shaper_applied_kbit == (3_000, 800)
 
 
 def test_a_leg_not_contributing_does_not_count(tmp_path, monkeypatch):

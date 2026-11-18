@@ -652,6 +652,7 @@ class Transport:
         # decision behind a name that says classification.
         duplicate_fanout: int = DEFAULT_DUPLICATE_FANOUT,
         adaptive_duplicate_loss_pct: float = 10.0,
+        advertise_downstream_weight: bool = False,
         reorder_deadline_ms: int = 150,
         nack_delay_ms: int = 60,
         # THE EXPLICIT UPPER BOUND adaptive recovery may widen the reorder
@@ -722,6 +723,7 @@ class Transport:
         # dials fixed remotes and must not roam to a spoofed source.
         self._roam = roam
         self._home_downstream = home_downstream
+        self._advertise_downstream_weight = advertise_downstream_weight and not home_downstream
         self._last_home_probe_at = self._clock()
         # Has the far end answered any home probe since this process started?
         # Until it has, probe silence proves nothing (#334): a travel end that
@@ -1005,6 +1007,14 @@ class Transport:
                 self._ka_probe += 1
                 probe = self._ka_probe
                 adaptive_epoch = self._adaptive_epoch.get(path_id, 0)
+                rtt = self._link_rtt.get(path_id)
+                path = self.scheduler._paths.get(path_id)
+                weight = path.weight if self._advertise_downstream_weight and path else None
+            payload = b""
+            if rtt is not None:
+                payload = struct.pack("!H", min(65535, max(0, round(rtt))))
+                if weight is not None:
+                    payload += struct.pack("!H", min(65535, max(0, weight)))
             # The probe's OWN identifier, where a data frame carries its
             # sequence. Every responder - this module and the Go datapath -
             # already echoes `seq` back unchanged, so this needs nothing new on
@@ -1015,11 +1025,7 @@ class Transport:
                 Frame(
                     seq=probe,
                     path_id=path_id,
-                    payload=(
-                        struct.pack("!H", min(65535, max(0, round(self._link_rtt[path_id]))))
-                        if path_id in self._link_rtt
-                        else b""
-                    ),
+                    payload=payload,
                     flags=FLAG_KEEPALIVE,
                     epoch=self._epoch,
                 )
@@ -1550,14 +1556,18 @@ class Transport:
             if path_id is not None:
                 self._note_keepalive_reply(frame.seq, path_id)
         elif path_id is not None:
-            if len(frame.payload) == 2:
-                rtt_ms = struct.unpack("!H", frame.payload)[0]
+            weighted_report = self._home_downstream and len(frame.payload) == 4
+            if len(frame.payload) == 2 or weighted_report:
+                rtt_ms = struct.unpack_from("!H", frame.payload)[0]
                 self._peer_rtt[frame.path_id] = (rtt_ms, self._clock())
                 if self._home_downstream:
                     # Travel measured this path's round trip. Give slow paths
                     # a smaller share while retaining a positive recovery
                     # share for every path still sending frames upstream.
-                    self.set_link_weight(path_id, max(1, 5000 // max(50, rtt_ms)))
+                    weight = max(1, 5000 // max(50, rtt_ms))
+                    if weighted_report:
+                        weight = struct.unpack_from("!H", frame.payload, 2)[0]
+                    self.set_link_weight(path_id, weight)
             # Answer on the SAME leg it arrived on. Replying over whichever
             # link the scheduler happens to like would measure that link
             # instead, and the answer would prove nothing about the leg
