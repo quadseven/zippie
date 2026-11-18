@@ -1765,6 +1765,8 @@ def handle_report(handler: BaseHTTPRequestHandler, reg: Registry) -> None:
         )
     try:
         payload = json.loads(handler.rfile.read(length))
+        if not isinstance(payload, dict):
+            raise ValueError("client report must be a JSON object")
         name = str(payload["name"])
     except (ValueError, KeyError, OSError):
         return handler._send(

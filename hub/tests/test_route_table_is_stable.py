@@ -195,3 +195,23 @@ def test_post_report_without_auth_is_refused(hub_at):
         headers={"Content-Type": "application/json"},
     )
     assert code in (401, 403), f"unauthenticated report got {code}"
+
+
+@pytest.mark.parametrize("payload", [[], "phone", 1, True, None])
+def test_post_report_rejects_json_scalars_and_arrays(hub_at, monkeypatch, payload):
+    monkeypatch.setenv("ZIPPIE_HUB_TOKEN", "test-report-token")
+    at = hub_at()
+    code, headers, body = _req(
+        at,
+        "POST",
+        "/api/report",
+        body=json.dumps(payload),
+        headers={
+            "Authorization": "Bearer test-report-token",
+            "Content-Type": "application/json",
+        },
+    )
+    assert code == 400
+    assert headers["Content-Type"] == "application/json"
+    assert json.loads(body) == {"error": "body must be JSON with a name"}
+    assert json.loads(_req(at, "GET", "/api/nodes")[2]) == {"nodes": []}
