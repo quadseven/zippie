@@ -644,7 +644,8 @@ func (t *Transport) deliver(peer *net.UDPAddr, payloads [][]byte) {
 // sendOnLocked requires t.mu.
 func (t *Transport) sendOnLocked(id uint8, wire []byte) bool {
 	l, ok := t.links[id]
-	if !ok {
+	// A roaming listener has no destination until a frame teaches it one.
+	if !ok || (t.cfg.Roam && l.remote == nil) {
 		return false
 	}
 	// THE CAP IS ENFORCED HERE, at the last point before the bytes leave, so
