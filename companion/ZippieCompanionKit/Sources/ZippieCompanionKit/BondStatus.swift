@@ -188,11 +188,6 @@ public enum BondStatusClient {
     /// Fetch and decode the router's status. Deliberately takes the full URL so
     /// the app can point at a tailnet name, a LAN IP, or the public console
     /// without the Kit knowing anything about the topology.
-    /// The session is injectable so the APP can pass a Datadog-instrumented
-    /// one. dd-sdk-ios only traces a task whose delegate matches the class it
-    /// was told to instrument, and URLSession.shared has no delegate at all -
-    /// so tracing configured against the shared session is silently inert.
-    /// Defaulting to .shared keeps the Kit usable on a bare toolchain.
     public static func fetch(url: URL,
                              timeout: TimeInterval = 8,
                              session: URLSession = .shared) async -> Result<BondStatus, BondStatusError> {

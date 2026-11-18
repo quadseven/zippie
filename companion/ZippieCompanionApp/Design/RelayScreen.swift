@@ -26,11 +26,6 @@ private struct RouterSSIDRow: Identifiable {
 /// deleting a proven capability because it is unglamorous would leave the
 /// operator with nothing.
 struct RelayScreen: View {
-    /// #77: the RUM view name for this screen. Named here, once, so the
-    /// `startView`/`stopView` pair below cannot drift out of sync with each
-    /// other - see `Observability.viewAppeared`.
-    private static let rumViewName = "Relay"
-
     /// The LIVE mode decision, not a second copy of the reasoning.
     ///
     /// `BondModel` probes the console every five seconds and is the only thing
@@ -75,12 +70,6 @@ struct RelayScreen: View {
             routerNetworks
             advanced
         }
-        // #77: every RUM event on this screen - including the actions the
-        // buttons below now emit - used to attribute to `ApplicationLaunch`,
-        // because nothing ever named a view. This is the screen the operator
-        // actually presses things on, so it is named first.
-        .onAppear { Observability.viewAppeared(Self.rumViewName) }
-        .onDisappear { Observability.viewDisappeared(Self.rumViewName) }
         .task { await tunnel.refresh() }
         .task {
             while !Task.isCancelled {
@@ -487,7 +476,6 @@ struct RelayScreen: View {
             do {
                 try await r.start { s in
                     Task { @MainActor in foregroundStats = s }
-                    Observability.relayStats(s)
                 }
                 await MainActor.run { foregroundRunning = true }
             } catch {

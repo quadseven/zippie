@@ -112,7 +112,7 @@ final class BondModeTests: XCTestCase {
                                   unreachableReason: .noTailnetRoute).unreachableReason)
     }
 
-    /// The log names match what logs and RUM carry.
+    /// The log names match what the unified log carries.
     func testReasonLogNames() {
         XCTAssertEqual(UnreachableReason.noTailnetRoute.logName, "no_tailnet_route")
         XCTAssertEqual(UnreachableReason.notAnswering.logName, "console_timeout")
