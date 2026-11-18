@@ -338,6 +338,12 @@ def parse_config(
 
     agent_raw = data.get("agent") or {}
     dashboard_tls_port, dashboard_tls_cert, dashboard_tls_key = _dashboard_tls_config(agent_raw)
+    dashboard_client_ca = str(agent_raw.get("dashboard_client_ca", ""))
+    dashboard_device_records = str(agent_raw.get("dashboard_device_records", ""))
+    if bool(dashboard_client_ca) != bool(dashboard_device_records):
+        raise ValueError("dashboard_client_ca and dashboard_device_records must be set together")
+    if dashboard_client_ca and dashboard_tls_port is None:
+        raise ValueError("device authorization requires the HTTPS listener")
 
     return AgentConfig(
         home=home,
@@ -352,6 +358,8 @@ def parse_config(
         dashboard_tls_port=dashboard_tls_port,
         dashboard_tls_cert=dashboard_tls_cert,
         dashboard_tls_key=dashboard_tls_key,
+        dashboard_client_ca=dashboard_client_ca,
+        dashboard_device_records=dashboard_device_records,
         table_base=int(agent_raw.get("table_base", 100)),
         fwmark_base=int(agent_raw.get("fwmark_base", 0x6400)),
         interface_prefix=str(agent_raw.get("interface_prefix", "pb")),

@@ -209,6 +209,10 @@ dashboard_host = "0.0.0.0"
 # dashboard_tls_port = 8788
 # dashboard_tls_cert = "/etc/zippie/tls/console.crt"
 # dashboard_tls_key = "/etc/zippie/tls/console.key"
+# Home-provisioned phone authorization is an opt-in migration foundation.
+# Install the home CA bundle and JSON device records before setting both paths.
+# dashboard_client_ca = "/etc/zippie/tls/home-client-ca.crt"
+# dashboard_device_records = "/var/lib/zippie/authorized-devices.json"
 
 # NO STATIC COMPANION LEGS. Removed 2026-08-07 (zippie#34).
 #
