@@ -497,13 +497,10 @@ def unpack_as(raw: bytes, identity: Identity) -> Frame:
     - and not before. A frame under the retired key is then refused with the
     same single error as any other bad MAC.
 
-    NOTE ON FLAG 0x20. Go's UnpackAs additionally refuses a frame whose flags
-    carry FlagEncrypted (0x20) when the reader holds no sealer. That check is
-    deliberately NOT ported: 0x20 is FLAG_RETRANSMIT in this implementation
-    (transport.py, and frame.go says so explicitly - "NOT 0x20, EVEN THOUGH
-    THAT IS WHAT PYTHON USES FOR THE SAME MEANING"). Porting it would make this
-    end reject every retransmit it was sent. Python has no sealing, so there is
-    no sealed frame for it to guard against.
+    Python accepts 0x20 on authenticated frames from older Python bond peers,
+    which used it for the retransmit hint. The current hint is 0x40 in both
+    implementations. Go reserves 0x20 for sealed client-mode frames, a wire
+    mode Python does not implement.
     """
     if len(raw) < HEADER_LEN_V3:
         raise DatapathError(f"short frame: {len(raw)} < {HEADER_LEN_V3}")

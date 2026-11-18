@@ -48,19 +48,8 @@ const (
 	// own traffic, and counting it as evidence the leg advanced would unblock
 	// every gap behind it and restart the storm the gate exists to stop.
 	//
-	// NOT 0x20, EVEN THOUGH THAT IS WHAT PYTHON USES FOR THE SAME MEANING
-	// (FLAG_RETRANSMIT in transport.py). 0x20 is already FlagEncrypted here
-	// (seal.go) - a collision the Python-side guard
-	// (tests/test_nack_waits_for_leg_progress.py) did not catch because it
-	// only reads this file, and seal.go is a different one. Reusing it would
-	// have made a Go client-mode retransmit, sent while sealing is on, get
-	// handed to AES-GCM as if it were ciphertext.
-	//
-	// This does not need to match Python's bit. The two never have to agree on
-	// it: Python speaks wire v2 only and does not read this flag at all - an
-	// unrecognised bit is simply not one of the ones it checks for - and this
-	// flag is read only by a Go end interpreting frames from another Go end
-	// that set it via the same constant.
+	// The bit is shared with Python on wire v2 and v3. The separate
+	// FlagEncrypted (0x20 in seal.go) is reserved for sealed client frames.
 	FlagRetransmit = 0x40
 )
 
@@ -84,8 +73,7 @@ type Frame struct {
 	Epoch  uint32
 	PathID uint8
 	Flags  uint8
-	// ClientID is set only on wire v3 (identity.go). Zero on v2, which is
-	// every frame exchanged with the Python home end.
+	// ClientID is set only on wire v3 (identity.go). Zero on v2.
 	ClientID uint32
 	Payload  []byte
 }
