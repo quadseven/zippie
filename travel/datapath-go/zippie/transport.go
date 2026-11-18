@@ -408,29 +408,37 @@ func (t *Transport) readLocal() {
 			t.Stats.NoPath.Add(1)
 			continue
 		}
-		seq := frameSeq(frames[0])
-		var sent int
-		for i, id := range ids {
-			if t.sendOnLocked(id, frames[i]) {
-				sent++
-			}
-		}
-		if sent > 0 {
-			// Only remember what actually went out; a NACK for a packet that
-			// never left is unanswerable anyway.
-			t.retransmit.Record(seq, buf[:n], ids[0])
-		}
-		if t.fecEnc != nil {
-			// Folded in regardless of whether the sends SUCCEEDED, unlike the
-			// retransmit buffer above. The sequence was consumed either way, and
-			// a group has to cover a consecutive run or it cannot be described by
-			// a base and a count. A frame that never left is one the far end can
-			// then reconstruct from the parity, which is a bonus rather than a
-			// problem.
-			t.sendParityLocked(seq, buf[:n], ids)
-		}
+		t.sendBuiltFramesLocked(buf[:n], ids, frames)
 		t.mu.Unlock()
 		t.noteLoop(start)
+	}
+}
+
+// sendBuiltFramesLocked forwards the scheduler output. Requires t.mu.
+func (t *Transport) sendBuiltFramesLocked(payload []byte, ids []uint8, frames [][]byte) {
+	firstEncoded, firstSent := -1, -1
+	for i, id := range ids {
+		wire := frames[i]
+		if firstEncoded < 0 && len(wire) > 0 {
+			firstEncoded = i
+		}
+		if t.sendOnLocked(id, wire) && firstSent < 0 {
+			firstSent = i
+		}
+	}
+	if firstEncoded < 0 {
+		return
+	}
+	seq := frameSeq(frames[firstEncoded])
+	if firstSent >= 0 {
+		// Only remember what actually went out; a NACK for a packet that
+		// never left is unanswerable anyway.
+		t.retransmit.Record(seq, payload, ids[firstSent])
+	}
+	if t.fecEnc != nil {
+		// An encoded frame still goes into FEC if the socket could not send it.
+		// This keeps the group consecutive and lets parity recover that frame.
+		t.sendParityLocked(seq, payload, ids)
 	}
 }
 
@@ -652,6 +660,10 @@ func (t *Transport) sendOnLocked(id uint8, wire []byte) bool {
 	// retried on this link: the caller has other legs, and delaying a frame on
 	// a deliberately-tiny link would add latency to a bond whose whole purpose
 	// is to avoid it.
+	// A failed encoding never spends link budget or reaches the socket.
+	if len(wire) == 0 {
+		return false
+	}
 	if !l.limiter.Allow(len(wire)) {
 		t.Stats.RateLimited.Add(1)
 		return false
