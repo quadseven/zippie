@@ -300,6 +300,11 @@ func (t *Transport) AddLink(ep LinkEndpoint) error {
 		return err
 	}
 	t.mu.Lock()
+	if t.stopped.Load() {
+		t.mu.Unlock()
+		conn.Close()
+		return net.ErrClosed
+	}
 	if old, exists := t.links[ep.PathID]; exists {
 		old.conn.Close()
 	}
@@ -311,9 +316,9 @@ func (t *Transport) AddLink(ep LinkEndpoint) error {
 	// epoch" for the one tick before its first keepalive is answered, which
 	// would evict it before it ever had a chance to prove itself.
 	t.linkRX[ep.PathID] = time.Now()
-	t.mu.Unlock()
-
+	// Register the reader before Close can take the lock and wait for it.
 	t.wg.Add(1)
+	t.mu.Unlock()
 	go t.readLink(l)
 	log.Printf("link up: %s via %s -> %s", ep.Name, ep.Device, ep.Remote)
 	return nil
