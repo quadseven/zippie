@@ -1,6 +1,7 @@
 package zippie
 
 import (
+	"maps"
 	"testing"
 	"time"
 )
@@ -26,6 +27,25 @@ func TestStatsSnapshotHasEveryPythonSection(t *testing.T) {
 		if _, ok := snap[section]; !ok {
 			t.Errorf("stats snapshot is missing section %q", section)
 		}
+	}
+}
+
+func TestTransportStatsSnapshot(t *testing.T) {
+	tr := newTestTransport(t)
+	tr.Stats.RateLimited.Store(7)
+	tr.Stats.Unauthenticated.Store(11)
+
+	got, ok := tr.StatsSnapshot()["transport"].(map[string]uint64)
+	if !ok {
+		t.Fatal("transport section is not map[string]uint64")
+	}
+	want := map[string]uint64{
+		"sent": 0, "received": 0, "send_errors": 0, "malformed": 0,
+		"nacks_received": 0, "no_path": 0,
+		"rate_limited": 7, "unauthenticated": 11,
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("transport stats = %v, want %v", got, want)
 	}
 }
 

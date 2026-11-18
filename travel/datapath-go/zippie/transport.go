@@ -895,6 +895,7 @@ func (t *Transport) statsSnapshotLocked() map[string]any {
 			"sent": t.Stats.Sent.Load(), "received": t.Stats.Received.Load(),
 			"send_errors": t.Stats.SendErrors.Load(), "malformed": t.Stats.Malformed.Load(),
 			"nacks_received": t.Stats.NacksReceived.Load(), "no_path": t.Stats.NoPath.Load(),
+			"rate_limited": t.Stats.RateLimited.Load(), "unauthenticated": t.Stats.Unauthenticated.Load(),
 		},
 		"reassembly": map[string]uint64{
 			"delivered": t.reassembler.Stats.Delivered,
