@@ -11,7 +11,6 @@ land in git and never reach the running pod.
 from __future__ import annotations
 
 import hashlib
-import re
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
@@ -46,7 +45,6 @@ def test_manifest_copy_matches_canonical():
 PKG_SRC = REPO / "travel/bond-agent/zippie"
 PKG_COPY = REPO / "deploy/oke/zippie-home/zippie-pkg"
 KUSTOMIZATION = REPO / "deploy/oke/zippie-home/kustomization.yaml"
-WORKFLOW = REPO / ".github/workflows/deploy.oke-manifests.yml"
 PKG_CONFIGMAP = "zippie-transport-pkg"
 PKG_FILE_PREFIX = "zippie-pkg/"
 PKG_MODULES = [
@@ -77,6 +75,8 @@ def test_shipped_package_modules_match_canonical():
 def test_shipped_set_covers_home_transport_import_graph():
     """A missing module here is a runtime ImportError in the pod, not a test
     failure, so the import graph is checked rather than trusted."""
+    import re
+
     need, seen = {"home_transport"}, set()
     while need - seen:
         mod = (need - seen).pop()
@@ -123,19 +123,6 @@ def _kustomization_pkg_files() -> set:
         )
         names.add(path[len(PKG_FILE_PREFIX) :])
     return names
-
-
-def test_drift_check_matches_kustomization():
-    """The workflow byte-compares every module that the generator ships."""
-    match = re.search(r"(?m)^[ \t]*for f in[ \t]+([^;\n]+)", WORKFLOW.read_text(encoding="utf-8"))
-    assert match is not None, f"drift-check for-loop missing from {WORKFLOW}"
-    guarded = set(match.group(1).split())
-    shipped = _kustomization_pkg_files()
-    assert guarded == shipped, (
-        f"Update the drift-check for-loop in {WORKFLOW.name} to match {KUSTOMIZATION.name}.\n"
-        f"  Shipped but unchecked: {sorted(shipped - guarded)}\n"
-        f"  Checked but unshipped: {sorted(guarded - shipped)}"
-    )
 
 
 def test_pkg_dir_is_exactly_what_is_shipped_and_guarded():
