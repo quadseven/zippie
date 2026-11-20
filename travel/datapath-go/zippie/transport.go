@@ -300,6 +300,11 @@ func (t *Transport) AddLink(ep LinkEndpoint) error {
 		return err
 	}
 	t.mu.Lock()
+	if t.stopped.Load() {
+		t.mu.Unlock()
+		conn.Close()
+		return net.ErrClosed
+	}
 	if old, exists := t.links[ep.PathID]; exists {
 		old.conn.Close()
 	}
@@ -311,9 +316,9 @@ func (t *Transport) AddLink(ep LinkEndpoint) error {
 	// epoch" for the one tick before its first keepalive is answered, which
 	// would evict it before it ever had a chance to prove itself.
 	t.linkRX[ep.PathID] = time.Now()
-	t.mu.Unlock()
-
+	// Register the reader before Close can take the lock and wait for it.
 	t.wg.Add(1)
+	t.mu.Unlock()
 	go t.readLink(l)
 	log.Printf("link up: %s via %s -> %s", ep.Name, ep.Device, ep.Remote)
 	return nil
@@ -403,29 +408,37 @@ func (t *Transport) readLocal() {
 			t.Stats.NoPath.Add(1)
 			continue
 		}
-		seq := frameSeq(frames[0])
-		var sent int
-		for i, id := range ids {
-			if t.sendOnLocked(id, frames[i]) {
-				sent++
-			}
-		}
-		if sent > 0 {
-			// Only remember what actually went out; a NACK for a packet that
-			// never left is unanswerable anyway.
-			t.retransmit.Record(seq, buf[:n], ids[0])
-		}
-		if t.fecEnc != nil {
-			// Folded in regardless of whether the sends SUCCEEDED, unlike the
-			// retransmit buffer above. The sequence was consumed either way, and
-			// a group has to cover a consecutive run or it cannot be described by
-			// a base and a count. A frame that never left is one the far end can
-			// then reconstruct from the parity, which is a bonus rather than a
-			// problem.
-			t.sendParityLocked(seq, buf[:n], ids)
-		}
+		t.sendBuiltFramesLocked(buf[:n], ids, frames)
 		t.mu.Unlock()
 		t.noteLoop(start)
+	}
+}
+
+// sendBuiltFramesLocked forwards the scheduler output. Requires t.mu.
+func (t *Transport) sendBuiltFramesLocked(payload []byte, ids []uint8, frames [][]byte) {
+	firstEncoded, firstSent := -1, -1
+	for i, id := range ids {
+		wire := frames[i]
+		if firstEncoded < 0 && len(wire) > 0 {
+			firstEncoded = i
+		}
+		if t.sendOnLocked(id, wire) && firstSent < 0 {
+			firstSent = i
+		}
+	}
+	if firstEncoded < 0 {
+		return
+	}
+	seq := frameSeq(frames[firstEncoded])
+	if firstSent >= 0 {
+		// Only remember what actually went out; a NACK for a packet that
+		// never left is unanswerable anyway.
+		t.retransmit.Record(seq, payload, ids[firstSent])
+	}
+	if t.fecEnc != nil {
+		// An encoded frame still goes into FEC if the socket could not send it.
+		// This keeps the group consecutive and lets parity recover that frame.
+		t.sendParityLocked(seq, payload, ids)
 	}
 }
 
@@ -639,7 +652,8 @@ func (t *Transport) deliver(peer *net.UDPAddr, payloads [][]byte) {
 // sendOnLocked requires t.mu.
 func (t *Transport) sendOnLocked(id uint8, wire []byte) bool {
 	l, ok := t.links[id]
-	if !ok {
+	// A roaming listener has no destination until a frame teaches it one.
+	if !ok || (t.cfg.Roam && l.remote == nil) {
 		return false
 	}
 	// THE CAP IS ENFORCED HERE, at the last point before the bytes leave, so
@@ -647,6 +661,10 @@ func (t *Transport) sendOnLocked(id uint8, wire []byte) bool {
 	// retried on this link: the caller has other legs, and delaying a frame on
 	// a deliberately-tiny link would add latency to a bond whose whole purpose
 	// is to avoid it.
+	// A failed encoding never spends link budget or reaches the socket.
+	if len(wire) == 0 {
+		return false
+	}
 	if !l.limiter.Allow(len(wire)) {
 		t.Stats.RateLimited.Add(1)
 		return false
@@ -895,6 +913,7 @@ func (t *Transport) statsSnapshotLocked() map[string]any {
 			"sent": t.Stats.Sent.Load(), "received": t.Stats.Received.Load(),
 			"send_errors": t.Stats.SendErrors.Load(), "malformed": t.Stats.Malformed.Load(),
 			"nacks_received": t.Stats.NacksReceived.Load(), "no_path": t.Stats.NoPath.Load(),
+			"rate_limited": t.Stats.RateLimited.Load(), "unauthenticated": t.Stats.Unauthenticated.Load(),
 		},
 		"reassembly": map[string]uint64{
 			"delivered": t.reassembler.Stats.Delivered,

@@ -30,7 +30,8 @@ between the router and home over cellular. It never parses what it carries, so
 the wire format can change without an app release.
 
 **console** - the agent's status page and write API, on port 8787. Reads are
-open. Writes need a token.
+open. Writes use a home-authorized phone certificate over HTTPS or the legacy
+bearer token during migration.
 
 **announce** - how a phone tells the router it exists. The relay POSTs to the
 console every 15s with a 45s lease. No announce, no leg.

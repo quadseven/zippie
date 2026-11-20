@@ -59,6 +59,12 @@ sticky_rtt_slack_ms = 40
 # proxy in front; do not simply set 0.0.0.0.
 dashboard_host = "127.0.0.1"
 dashboard_port = 8787
+# Optional HTTPS listener and home-issued phone authorization. See docs/architecture.md.
+# dashboard_tls_port = 8788
+# dashboard_tls_cert = "/etc/zippie/tls/console.crt"
+# dashboard_tls_key = "/etc/zippie/tls/console.key"
+# dashboard_client_ca = "/etc/zippie/tls/phone-ca.pem"
+# dashboard_device_records = "/etc/zippie/state/authorized-devices.json"
 
 # --- WAN paths ----------------------------------------------------------
 # Selection order (prefer mode), among paths that are up:

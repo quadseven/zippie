@@ -129,6 +129,8 @@ def test_parse_optional_dashboard_tls_listener():
             "dashboard_tls_cert": "/etc/zippie/console.crt",
             "dashboard_tls_key": "/etc/zippie/console.key",
         },
+        {"dashboard_client_ca": "/etc/zippie/phone-ca.pem"},
+        {"dashboard_device_records": "/etc/zippie/authorized-devices.json"},
     ],
 )
 def test_dashboard_tls_configuration_is_all_or_none(partial):
@@ -139,6 +141,19 @@ def test_dashboard_tls_configuration_is_all_or_none(partial):
                 "policy": {"mode": "aggregate"},
                 "paths": [],
                 "agent": partial,
+            }
+        )
+
+
+def test_dashboard_device_authorization_requires_https():
+    with pytest.raises(ValueError, match="requires the HTTPS listener"):
+        parse_config(
+            {
+                "home": {"endpoint": "home.example.com"},
+                "agent": {
+                    "dashboard_client_ca": "ca.pem",
+                    "dashboard_device_records": "devices.json",
+                },
             }
         )
 
