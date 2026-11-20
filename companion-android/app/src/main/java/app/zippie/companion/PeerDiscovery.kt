@@ -26,13 +26,13 @@ interface PeerDiscovery {
     /**
      * Starts discovering peers. A call while already running is ignored.
      *
-     * @param onVerified a peer the Go core verified, once per appearance.
+     * @param onVerified service name and the peer the Go core verified, once per appearance.
      * @param onRefused service name and reason, for logs; never shown as a peer.
      * @param onLost service name of a previously verified peer that went away.
      */
     fun start(
         rosterJson: String,
-        onVerified: (VerifiedPeer) -> Unit,
+        onVerified: (String, VerifiedPeer) -> Unit,
         onRefused: (String, String) -> Unit,
         onLost: (String) -> Unit,
     )

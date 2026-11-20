@@ -156,7 +156,7 @@ func (r *Reassembler) Push(f Frame, out [][]byte) [][]byte {
 	if f.IsKeepalive() {
 		return out
 	}
-	if !r.remember(f.Seq) {
+	if _, dup := r.seen[f.Seq]; dup {
 		r.Stats.DuplicatesDropped++
 		return out
 	}
@@ -212,6 +212,9 @@ func (r *Reassembler) Push(f Frame, out [][]byte) [][]byte {
 		return out
 	}
 	r.misanchoredStreak = 0
+	// Recorded only once the frame has passed the plausibility checks, so a
+	// peer sending junk sequences cannot evict real entries from the ring.
+	r.remember(f.Seq)
 
 	// Copy: Payload aliases the read buffer, which the caller reuses for the
 	// next datagram. This is the one place a copy is unavoidable, and only

@@ -158,7 +158,7 @@ public actor PeerDiscoveryService {
             }
             if verified[peer.name] != verifiedPeer {
                 verified[peer.name] = verifiedPeer
-                eventContinuation.yield(.discovered(verifiedPeer))
+                eventContinuation.yield(.discovered(verifiedPeer, serviceName: peer.name))
             }
         }
     }

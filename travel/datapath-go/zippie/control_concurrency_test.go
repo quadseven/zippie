@@ -8,6 +8,28 @@ import (
 	"time"
 )
 
+func TestAddLinkRejectsSocketOpenedDuringShutdown(t *testing.T) {
+	tr := newTestTransport(t)
+	ep := LinkEndpoint{PathID: 1, Remote: mustSink(t), Weight: 1}
+	conn, err := dial(ep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close(); tr.wg.Wait() })
+	real := dialFn
+	t.Cleanup(func() { dialFn = real })
+	dialFn = func(LinkEndpoint) (*net.UDPConn, error) { tr.Close(); return conn, nil }
+	if err := tr.AddLink(ep); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("AddLink during shutdown = %v, want net.ErrClosed", err)
+	}
+	if err := conn.SetReadDeadline(time.Time{}); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("socket after rejected AddLink = %v, want net.ErrClosed", err)
+	}
+	if got := tr.StatsSnapshot()["links"]; got != 0 {
+		t.Errorf("links after rejected AddLink = %v, want 0", got)
+	}
+}
+
 // Regressions for three defects found in review of the control interface.
 
 // The agent reconnects whenever IT restarts, and the server handles each

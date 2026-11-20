@@ -41,7 +41,7 @@ class PeerDiscoveryLifecycleTest {
         observer = PeerDiscoveryLifecycle(
             discovery,
             rosterJson = { NsdPeerDiscoveryTest.ROSTER },
-            onVerified = { verified.add(it) },
+            onVerified = { _, peer -> verified.add(peer) },
             onRefused = { _, _ -> },
             onLost = { lost.add(it) },
         )

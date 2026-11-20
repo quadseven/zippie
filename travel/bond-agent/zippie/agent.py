@@ -24,6 +24,7 @@ from zippie import (
     shaper,
     status_doc,
     telemetry,
+    tunnel,
     wifi,
     # Re-exported: tests patch station_info as agent.wifi_uci, and the roster's
     # real host adapter reads that same module at call time.
@@ -607,6 +608,15 @@ class BondAgent:
             self.config.policy.resolver_kick_service,
             min_interval_s=self.config.policy.resolver_kick_min_interval_s,
         )
+        # Local resolver watchdog (#132). Runs on the control loop cadence but
+        # only checks every 30s; a stopped nextdns or a silent port 53 for two
+        # consecutive checks restarts it through _resolver above.
+        self._resolver_watchdog = net.ResolverWatchdog(
+            self._resolver,
+            interval_s=30.0,
+            query_timeout_s=2.0,
+            cooldown_s=300.0,
+        )
         # A bond with one dying leg beats an idle healthy WAN, and takes the
         # LAN with it (#124). See BondStanddown and _install_default_route.
         self._standdown = BondStanddown(self.config.policy)
@@ -626,6 +636,19 @@ class BondAgent:
         if roster is None:
             roster = self.__dict__["_leg_roster"] = LegRoster(leg_store=None)
         return roster
+
+    @property
+    def resolver_watchdog(self):
+        """The local resolver watchdog. Lazily created so an agent built with
+        object.__new__ (common in predicate tests) does not AttributeError."""
+        wd = self.__dict__.get("_resolver_watchdog")
+        if wd is None:
+            wd = self.__dict__["_resolver_watchdog"] = net.ResolverWatchdog(None)
+        return wd
+
+    @resolver_watchdog.setter
+    def resolver_watchdog(self, value):
+        self.__dict__["_resolver_watchdog"] = value
 
     # The roster's state under the names the console seam, the status document
     # and the tests already use. Assigning one replaces the roster's.
@@ -957,12 +980,12 @@ class BondAgent:
             table="off",
             fwmark=None,
         )
-        if not net.dry_run() and not self._tunnel_is_live(PACKET_IFACE):
-            try:
-                net.wg_quick_up(str(conf), PACKET_IFACE, address=addr, mtu=mtu)
-            except net.NetError as exc:
-                log.error("packet-mode tunnel %s failed to come up: %s", PACKET_IFACE, exc)
-                raise
+        try:
+            started = tunnel.bring_up_if_needed(conf, PACKET_IFACE, address=addr, mtu=mtu)
+        except net.NetError as exc:
+            log.error("packet-mode tunnel %s failed to come up: %s", PACKET_IFACE, exc)
+            raise
+        if started:
             # Only here, and only after the interface was actually created:
             # the shaper is attached to the link, so a new link has no shaper
             # no matter what uci says. Never raises - the bond coming up
@@ -1374,16 +1397,14 @@ class BondAgent:
         it is not AND the reason is already recorded on the path, so the caller
         only has to skip it.
         """
-        if net.dry_run() or self._tunnel_is_live(path.wg_iface):
-            return True
         try:
             # address/mtu passed explicitly: the native path (OpenWrt, no
             # wg-quick) applies them with `ip`, since `wg setconf` cannot. The
             # address is the LEG'S OWN, never the home fallback the conf may
             # have used - applying a borrowed one would put a second peer's
             # inner source on this interface, which home silently drops.
-            net.wg_quick_up(
-                str(conf),
+            tunnel.bring_up_if_needed(
+                conf,
                 path.wg_iface,
                 address=path.config.address_cidr or None,
                 mtu=path.config.mtu,
@@ -1394,17 +1415,6 @@ class BondAgent:
             log.error("wg up failed for %s: %s", path.name, exc)
             return False
         return True
-
-    @staticmethod
-    def _tunnel_is_live(iface: str) -> bool:
-        """Existing AND up, not merely existing.
-
-        A bring-up that died halfway (setconf timeout, 2026-08-02) leaves the
-        interface present but DOWN, and an existence-only check reads that
-        wreck as a live tunnel on every later pass - the leg stays DEGRADED
-        until a human restarts the agent. Not-up means rebuild.
-        """
-        return Path(f"/sys/class/net/{iface}").exists() and net.link_is_up(iface)
 
     def _fwmark_for(self, idx: int) -> int:
         return self.config.fwmark_base + idx
@@ -3009,6 +3019,31 @@ class BondAgent:
                 addr_monitor_alive=self.addr_monitor.alive,
                 addr_monitor_restarts=self.addr_monitor.restarts,
                 resolver_kicks=self._resolver.kicks,
+                resolver_watchdog_last_check=(
+                    self.resolver_watchdog.last_check
+                    if getattr(self, "resolver_watchdog", None) is not None
+                    else None
+                ),
+                resolver_watchdog_restarts=(
+                    self.resolver_watchdog.restarts
+                    if getattr(self, "resolver_watchdog", None) is not None
+                    else 0
+                ),
+                resolver_watchdog_consecutive_failures=(
+                    self.resolver_watchdog.consecutive_failures
+                    if getattr(self, "resolver_watchdog", None) is not None
+                    else 0
+                ),
+                resolver_watchdog_last_result=(
+                    self.resolver_watchdog.last_result
+                    if getattr(self, "resolver_watchdog", None) is not None
+                    else None
+                ),
+                resolver_watchdog_last_failure=(
+                    self.resolver_watchdog.last_failure
+                    if getattr(self, "resolver_watchdog", None) is not None
+                    else None
+                ),
                 standdown=self._standdown.standing_down,
                 standdowns=self._standdown.standdowns,
                 standdown_recoveries=self._standdown.recoveries,
@@ -3629,6 +3664,34 @@ class BondAgent:
             log.warning("could not persist console token: %s", exc)
         return token
 
+    def discovery_roster(self) -> list[dict[str, Any]]:
+        """Return the discovery roster for peer verification.
+
+        Each entry has client_id and key_hex (the discovery key derived from
+        the pairing key). All dynamic legs share the same pairing key (the
+        console token), so they share the same discovery key. Client IDs are
+        assigned sequentially based on dynamic leg names.
+        """
+        token = self.console_token()
+        # Derive discovery key from pairing key (console token).
+        # PeerDiscoveryKey in Go: HMAC-SHA256(pairing_key, "zippie/peer-proof/v1")
+        import hashlib
+        import hmac
+
+        pairing_key = token.encode("utf-8")
+        peer_domain = b"zippie/peer-proof/v1"
+        discovery_key = hmac.new(pairing_key, peer_domain, hashlib.sha256).digest()
+        discovery_key_hex = discovery_key.hex()
+
+        # Assign client IDs to dynamic legs sequentially by name.
+        roster = []
+        dynamic_legs = []
+        with self.dynamic._lock:
+            dynamic_legs = sorted(self.dynamic._legs.values(), key=lambda leg: leg.name)
+        for idx, _ in enumerate(dynamic_legs, start=1):
+            roster.append({"client_id": idx, "key_hex": discovery_key_hex})
+        return roster
+
     def set_leg_fields(self, name: str, fields: dict[str, Any]) -> dict[str, Any]:
         """Apply an operator edit and make it take effect immediately.
 
@@ -3664,7 +3727,9 @@ class BondAgent:
     def start_dashboard(self) -> None:
         # The console reaches the agent only through console.ConsoleSeam, which
         # this class satisfies as it stands (#374).
-        _install_dashboard_listeners(self, console.make_handler(self))
+        _install_dashboard_listeners(
+            self, console.make_handler(self, device_records=self.config.dashboard_device_records)
+        )
 
     def stop_dashboard(self) -> None:
         for server in (self._https, self._http):
@@ -3754,6 +3819,13 @@ class BondAgent:
         # same as no signal at all. Cached behind a TTL, so this is a dict
         # lookup on all but one tick in five minutes.
         self._resolve_home_ip()
+        wd = getattr(self, "_resolver_watchdog", None)
+        if wd is not None:
+            try:
+                if wd.run_once(force=False):
+                    self.telemetry.emit_count("resolver_watchdog_restart", 1, [])
+            except Exception:  # noqa: BLE001
+                log.exception("resolver watchdog tick failed")
         self.write_status_file()
         self.telemetry.emit_status(self.status_dict())
 

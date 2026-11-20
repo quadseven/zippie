@@ -182,7 +182,11 @@ func BenchmarkEndToEnd(b *testing.B) {
 func TestPacedLoopbackSurvivesSlowTravelReader(t *testing.T) {
 	src, sink, travel, home, cleanup := loopbackPair(t, 1263)
 	defer cleanup()
-	if err := travel.local.SetReadBuffer(1024); err != nil {
+	// Small, but larger than one framed 1263-byte payload. Linux doubles the
+	// value and enforces a floor, so 1024 still held a datagram there; macOS
+	// takes 1024 as the hard limit and drops every datagram, which made this
+	// test fail on every macOS run (#423).
+	if err := travel.local.SetReadBuffer(4096); err != nil {
 		t.Fatalf("travel receive buffer: %v", err)
 	}
 	travel.mu.Lock()

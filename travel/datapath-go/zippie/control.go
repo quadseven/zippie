@@ -42,7 +42,7 @@ type LinkSpec struct {
 	// it", which on a bond is almost always wrong - see LinkEndpoint.Device.
 	Device  string `json:"device"`
 	Remote  string `json:"remote"` // host:port
-	Weight  int    `json:"weight"`
+	Weight  int    `json:"weight"` // at least 1
 	Healthy bool   `json:"healthy"`
 	// MaxKbps is the leg's deliberate throughput ceiling, the agent's
 	// PathConfig.max_kbps. Zero or absent means uncapped; see ratelimit.go.
@@ -106,6 +106,9 @@ func (t *Transport) SyncLinks(specs []LinkSpec) (SyncResult, error) {
 		id := uint8(s.PathID)
 		if _, dup := desired[id]; dup {
 			return res, fmt.Errorf("path_id %d appears twice; one leg would shadow the other", id)
+		}
+		if s.Weight < 1 {
+			return res, fmt.Errorf("link %q: weight %d must be positive", s.Name, s.Weight)
 		}
 		if s.MaxKbps < 0 {
 			// Zero already means uncapped. A negative ceiling means the agent

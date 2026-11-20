@@ -13,6 +13,7 @@ import ast
 import json
 import re
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -121,13 +122,31 @@ class _NullSelector:
         pass
 
 
-def _python_datapath() -> PythonDatapath:
+def _python_datapath(**kwargs) -> PythonDatapath:
     return make_datapath(
         "python",
         ("127.0.0.1", 0),
         socket_factory=lambda *_a: _NullSocket(),
         selector_factory=_NullSelector,
+        **kwargs,
     )
+
+
+def test_a_go_retransmit_delivers_payload_without_crediting_its_leg(monkeypatch):
+    (vector,) = [v for v in _VECTORS["auth"] if v.get("retransmit")]
+    identity = new_bond_identity(vector["peer_id"], bytes.fromhex(vector["secret_hex"]))
+    dp = _python_datapath(identity=identity, auth_level=AuthLevel.REQUIRE)
+    resolve = Mock(wraps=dp.transport.nacks.resolve)
+    monkeypatch.setattr(dp.transport.nacks, "resolve", resolve)
+
+    try:
+        # The Go vector suite generates these same signed bytes with PackAuth.
+        assert dp.transport._on_link_data(bytes.fromhex(vector["wire_hex"])) == [
+            bytes.fromhex(vector["payload_hex"])
+        ]
+        resolve.assert_called_once_with(vector["seq"], None)
+    finally:
+        dp.close()
 
 
 @pytest.mark.parametrize("v", _VECTORS["weights"], ids=_ids("weights"))

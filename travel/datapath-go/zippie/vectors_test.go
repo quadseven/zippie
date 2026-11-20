@@ -32,9 +32,10 @@ type frameVector struct {
 
 type authVector struct {
 	frameVector
-	Level     string `json:"level"`
-	PeerID    uint32 `json:"peer_id"`
-	SecretHex string `json:"secret_hex"`
+	Level      string `json:"level"`
+	PeerID     uint32 `json:"peer_id"`
+	SecretHex  string `json:"secret_hex"`
+	Retransmit bool   `json:"retransmit"`
 }
 
 type pathVector struct {
@@ -148,8 +149,12 @@ func TestVectorsAuthRungs(t *testing.T) {
 			if got != v.WireHex {
 				t.Fatalf("Go packs %s, Python packs %s", got, v.WireHex)
 			}
-			if _, _, err := UnpackAuth(mustHex(t, v.WireHex), id, level); err != nil {
+			back, authenticated, err := UnpackAuth(mustHex(t, v.WireHex), id, level)
+			if err != nil {
 				t.Fatalf("Go refuses the Python bytes at %s: %v", level, err)
+			}
+			if back.IsRetransmit() != v.Retransmit || authenticated != level.Signs() {
+				t.Fatalf("decoded retransmit=%t authenticated=%t", back.IsRetransmit(), authenticated)
 			}
 		})
 	}

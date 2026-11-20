@@ -190,6 +190,9 @@ class FakeSeam:
         self.series_since.append(since)
         return {"points": [], "count": 0}
 
+    def discovery_roster(self) -> list[dict[str, Any]]:
+        return []
+
 
 @pytest.fixture
 def fake():
@@ -204,7 +207,15 @@ def fake():
 
 def test_bond_agent_satisfies_the_seam(tmp_path):
     agent = _agent(tmp_path)
-    for member in ("dynamic", "pairing", "console_token", "status_dict", "set_leg_fields"):
+    for member in (
+        "dynamic",
+        "pairing",
+        "console_token",
+        "status_dict",
+        "set_leg_fields",
+        "discovery_roster",
+        "series_payload",
+    ):
         assert hasattr(agent, member), member
     assert agent.series_payload(None)["count"] == 0
 
@@ -219,6 +230,13 @@ def test_fake_series_passes_since_through(fake):
     assert _call(base, "GET", "/api/series?since=123")[0] == 200
     assert _call(base, "GET", "/api/series?since=junk")[0] == 200
     assert seam.series_since == [123, None]
+
+
+def test_fake_discovery_roster_read_needs_no_token(fake):
+    seam, base = fake
+    status, body = _call(base, "GET", "/api/discovery/roster")
+    assert status == 200
+    assert isinstance(body, list)
 
 
 def test_fake_wrong_token_is_refused_on_every_write_route(fake):

@@ -154,6 +154,11 @@ class StatusSnapshot:
     shaper_applied_kbit: tuple[int, int] | None
     pid: int
     config_meta: dict[str, Any] = field(default_factory=dict)
+    resolver_watchdog_last_check: bool | None = None
+    resolver_watchdog_restarts: int = 0
+    resolver_watchdog_consecutive_failures: int = 0
+    resolver_watchdog_last_result: str | None = None
+    resolver_watchdog_last_failure: str | None = None
 
 
 def path_status(leg: LegFacts) -> dict[str, Any]:
@@ -386,6 +391,14 @@ def build(snap: StatusSnapshot) -> dict[str, Any]:
         # at zero on a box that HAS flipped means the kick is not
         # firing, which is invisible from anywhere else.
         "resolver_kicks": snap.resolver_kicks,
+        "resolver_watchdog_last_check": snap.resolver_watchdog_last_check,
+        "resolver_watchdog": {
+            "last_check": snap.resolver_watchdog_last_check,
+            "last_result": snap.resolver_watchdog_last_result,
+            "last_failure": snap.resolver_watchdog_last_failure,
+            "consecutive_failures": snap.resolver_watchdog_consecutive_failures,
+            "restarts": snap.resolver_watchdog_restarts,
+        },
         # A bond with one dying leg beats an idle healthy WAN (#124).
         # True means zippie's own route is deliberately withdrawn
         # right now because the carrying set is worse than the idle

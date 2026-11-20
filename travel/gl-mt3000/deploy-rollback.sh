@@ -11,8 +11,7 @@
 # So this exists to be fired BY CRON, by the router, with nobody connected.
 #
 # IN /etc/zippie (overlayfs), NOT /tmp. A reboot mid-deploy must not wipe the
-# thing whose job is to rescue the deploy - the same reason failsafe-rollback.sh
-# lives here.
+# thing whose job is to rescue the deploy.
 #
 # IT DISARMS ITSELF FIRST. A slow restore must not be started twice by the next
 # minute's cron tick.
@@ -73,7 +72,16 @@ echo "disarmed"
 
 ROOT=/opt/zippie-agent
 if [ -d "${ROOT}/zippie.deploy-rollback" ]; then
-  rm -rf "${ROOT}/zippie"
+  # MOVE ASIDE, NEVER DELETE FIRST. The old order removed the package and
+  # then copied the backup, so a copy that failed part way (the overlay
+  # has about 8 MB free) left no package at all for the restart below:
+  # the rescuer stranded the router it was armed to rescue. A move costs
+  # no extra space, keeps a restorable copy, and keeps the evidence of
+  # what was installed when the deploy went wrong.
+  if [ -d "${ROOT}/zippie" ]; then
+    mv "${ROOT}/zippie" "${ROOT}/zippie.failed.$$"
+    echo "moved the installed package aside to ${ROOT}/zippie.failed.$$"
+  fi
   cp -a "${ROOT}/zippie.deploy-rollback" "${ROOT}/zippie"
   echo "restored package from ${ROOT}/zippie.deploy-rollback"
   logger -t "${TAG}" "restored package from ${ROOT}/zippie.deploy-rollback"
