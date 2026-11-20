@@ -98,6 +98,8 @@ The agent reads `/etc/zippie/zippie.toml`. Start from
 [configs/examples/zippie.toml](configs/examples/zippie.toml). Set the home
 endpoint, its UDP ports and one `[[paths]]` entry per link.
 `dashboard_host` must be set under `[agent]`; at top level it is ignored.
+For home-issued phone certificates, see the
+[console authorization setup](docs/architecture.md#router-console-device-authorization).
 
 Nothing ships with the repo: bring a router, a home exit with inbound UDP, and
 USB-C power for phones ([why](docs/hardware.md#powering-phone-legs)).
