@@ -26,10 +26,6 @@
     <string name="mc_listen_port_desc">UDP port the router dials on this phone. 1-65535; anything else is ignored, because binding 0 takes a random port and the router would dial one nothing is on.</string>
     <string name="mc_autostart_title">Start relaying automatically</string>
     <string name="mc_autostart_desc">Begin relaying without anyone opening the app. Absent means no - a phone must never start relaying because a key was missing.</string>
-    <string name="mc_dd_token_title">Datadog client token</string>
-    <string name="mc_dd_token_desc">Lets this phone report its own relay decisions over cellular, which is the only channel that survives the router being unreachable. Blank disables telemetry.</string>
-    <string name="mc_dd_site_title">Datadog site</string>
-    <string name="mc_dd_site_desc">Intake host, e.g. datadoghq.com. Leave blank for US1.</string>
     <string name="mc_home_screen_title">Use this phone as a home screen</string>
     <!-- The widget picker label and the long-press description (#244). The
          description is the operator's one chance to find out what the tile
