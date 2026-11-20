@@ -42,7 +42,7 @@ public enum ProbeVerdict: Equatable, Sendable {
         return false
     }
 
-    /// One line for the harness UI and for the log line shipped to Datadog.
+    /// One line for the harness UI.
     public var summary: String {
         switch self {
         case let .proven(wifi, cellular):
