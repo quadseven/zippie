@@ -91,8 +91,7 @@ def test_every_pr_job_is_covered_or_has_a_reason():
         if not known:
             unexplained.append(key)
     assert not unexplained, (
-        "pull request jobs with no lane counterpart and no NOT_IN_LANE reason: "
-        f"{unexplained}"
+        f"pull request jobs with no lane counterpart and no NOT_IN_LANE reason: {unexplained}"
     )
 
 
