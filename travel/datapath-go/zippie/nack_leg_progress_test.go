@@ -402,3 +402,148 @@ func TestAnAnsweredNackCarriesFlagRetransmitOnTheWire(t *testing.T) {
 			"which is the one distinction a receiving Go end needs", got.Flags)
 	}
 }
+
+// reanchorTestPair builds a reassembler and tracker on one fake clock, sized
+// like the leg-progress tests above: a 60ms NACK delay and a 150ms ceiling.
+func reanchorTestPair() (*Reassembler, *NackTracker, func(time.Duration)) {
+	now := time.Unix(0, 0)
+	clock := func() time.Time { return now }
+	r := NewReassembler(150 * time.Millisecond)
+	r.now = clock
+	n := NewNackTracker(60*time.Millisecond, 150*time.Millisecond)
+	n.now = clock
+	return r, n, func(d time.Duration) { now = now.Add(d) }
+}
+
+// reanchorBelow drives a re-anchor the way the wire does: a sustained streak of
+// frames far below the anchor, fed through the same shared path Transport and
+// MultiClientHome use. It returns the stream's nextSeq afterwards: the frame
+// that completes the streak becomes the anchor and is delivered at once.
+func reanchorBelow(t *testing.T, r *Reassembler, n *NackTracker, base uint64) uint64 {
+	t.Helper()
+	before := r.Stats.Reanchors
+	for i := uint64(0); i < maxMisanchoredStreak; i++ {
+		pushAndTrack(r, n, Frame{Seq: base + i, PathID: fastLeg, Payload: []byte("x")}, nil)
+	}
+	if r.Stats.Reanchors != before+1 {
+		t.Fatalf("Reanchors = %d, want %d: the streak did not re-anchor", r.Stats.Reanchors, before+1)
+	}
+	if want := base + maxMisanchoredStreak; r.nextSeq != want {
+		t.Fatalf("nextSeq = %d after re-anchor, want %d", r.nextSeq, want)
+	}
+	return r.nextSeq
+}
+
+// A re-anchor moves nextSeq DOWN. The tracker's forgottenBelow is still the old,
+// larger anchor, and ForgetBefore used to return early on any seq at or below
+// it, so gaps noted in the old space sat in pending and asked forever. This
+// opens real gaps, NACKs them, re-anchors, and asserts none of it survives.
+func TestReanchorWithPendingNacksClearsTracker(t *testing.T) {
+	r, n, advance := reanchorTestPair()
+
+	const highStart = 100000
+	gaps := map[uint64]bool{highStart + 50: true, highStart + 55: true}
+	for seq := uint64(highStart); seq < highStart+60; seq++ {
+		if gaps[seq] {
+			continue
+		}
+		pushAndTrack(r, n, Frame{Seq: seq, PathID: fastLeg, Payload: []byte("x")}, nil)
+	}
+	if n.Pending() != len(gaps) {
+		t.Fatalf("precondition: Pending = %d before re-anchor, want %d", n.Pending(), len(gaps))
+	}
+	advance(200 * time.Millisecond)
+	if due := n.Due(nil); len(due) != len(gaps) {
+		t.Fatalf("precondition: Due = %v before re-anchor, want both old gaps asked", due)
+	}
+
+	next := reanchorBelow(t, r, n, 10)
+
+	if n.Pending() != 0 {
+		t.Fatalf("Pending = %d after re-anchor, want 0: old-space gaps survived", n.Pending())
+	}
+	if len(n.asked) != 0 {
+		t.Fatalf("asked holds %d entries after re-anchor, want 0", len(n.asked))
+	}
+	advance(200 * time.Millisecond)
+	if due := n.Due(nil); len(due) != 0 {
+		t.Fatalf("Due = %v after re-anchor, want nothing from the old space", due)
+	}
+	for leg, seq := range n.legSeq {
+		if seq > next {
+			t.Fatalf("legSeq[%d] = %d after re-anchor at nextSeq %d: an old-space mark leaked", leg, seq, next)
+		}
+	}
+}
+
+// After a re-anchor the leg-progress gate must judge gaps against marks from
+// the NEW space. Old-space marks sit far above every new sequence, so left in
+// place they read as "every leg already passed this gap" and a NACK goes out at
+// the bare delay with no leg evidence, the storm the gate exists to stop (#108).
+func TestReanchorLegProgressGateWaitsForNewSpace(t *testing.T) {
+	r, n, advance := reanchorTestPair()
+
+	// Both legs deliver in the old space.
+	const highStart = 100000
+	for i := uint64(0); i < 100; i++ {
+		leg := fastLeg
+		if i%2 == 1 {
+			leg = slowLeg
+		}
+		pushAndTrack(r, n, Frame{Seq: highStart + i, PathID: leg, Payload: []byte("x")}, nil)
+	}
+
+	next := reanchorBelow(t, r, n, 10)
+
+	// Only fastLeg delivers in the new space, and it skips one sequence.
+	gap := next + 10
+	for seq := next; seq <= gap+1; seq++ {
+		if seq == gap {
+			continue
+		}
+		pushAndTrack(r, n, Frame{Seq: seq, PathID: fastLeg, Payload: []byte("x")}, nil)
+	}
+	if n.Pending() != 1 {
+		t.Fatalf("precondition: Pending = %d, want the one gap at %d", n.Pending(), gap)
+	}
+
+	// Past the delay, inside the ceiling: slowLeg has proven nothing here yet.
+	advance(70 * time.Millisecond)
+	if due := n.Due(nil); len(due) != 0 {
+		t.Fatalf("Due = %v with slowLeg silent in the new space, want the gap held", due)
+	}
+
+	// slowLeg now delivers past the gap, so every leg has moved beyond it.
+	pushAndTrack(r, n, Frame{Seq: gap + 2, PathID: slowLeg, Payload: []byte("x")}, nil)
+	advance(10 * time.Millisecond)
+	if due := n.Due(nil); len(due) != 1 || due[0] != gap {
+		t.Fatalf("Due = %v, want [%d] once slowLeg proves progress in the new space", due, gap)
+	}
+}
+
+// MultiClientHome feeds each phone's stream through clientState.push, which
+// must reach the same re-anchor handling as Transport.
+func TestClientStatePushClearsTrackerOnReanchor(t *testing.T) {
+	now := time.Unix(0, 0)
+	cs := newClientState(150*time.Millisecond, func() time.Time { return now })
+
+	const highStart = 100000
+	for seq := uint64(highStart); seq < highStart+20; seq++ {
+		if seq == highStart+10 {
+			continue
+		}
+		cs.push(Frame{Seq: seq, PathID: fastLeg, Payload: []byte("x")}, nil)
+	}
+	if cs.nacks.Pending() != 1 {
+		t.Fatalf("precondition: Pending = %d, want 1", cs.nacks.Pending())
+	}
+	for i := uint64(0); i < maxMisanchoredStreak; i++ {
+		cs.push(Frame{Seq: 10 + i, PathID: fastLeg, Payload: []byte("x")}, nil)
+	}
+	if cs.reassembler.Stats.Reanchors != 1 {
+		t.Fatalf("Reanchors = %d, want 1", cs.reassembler.Stats.Reanchors)
+	}
+	if cs.nacks.Pending() != 0 {
+		t.Fatalf("Pending = %d after re-anchor, want 0", cs.nacks.Pending())
+	}
+}
