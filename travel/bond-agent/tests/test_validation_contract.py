@@ -66,6 +66,5 @@ def test_validation_contract_runs_android_unit_tests_for_android_changes():
     assert "reports zero tests" in affected
     # Documented in the contract header like the other jobs.
     assert any(
-        line.startswith("# affected: .github/workflows/check.android.yml ::")
-        for line in lines
+        line.startswith("# affected: .github/workflows/check.android.yml ::") for line in lines
     )
