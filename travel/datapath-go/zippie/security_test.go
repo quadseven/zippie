@@ -244,3 +244,21 @@ func TestSequenceCounterCannotWrap(t *testing.T) {
 		t.Fatalf("GapDepth %d exceeds the cap after a wrap attempt", d)
 	}
 }
+
+// A frame rejected as implausible must not be written into the dedupe ring,
+// or junk sequences could evict real entries and let replays through.
+func TestRejectedFramesDoNotEvictTheDedupeRing(t *testing.T) {
+	r := NewReassembler(time.Second)
+	var out [][]byte
+	out = r.Push(Frame{Seq: 0, Payload: []byte("a")}, out)
+	before := len(r.seenRing)
+	for i := uint64(0); i < 100; i++ {
+		r.Push(Frame{Seq: r.nextSeq + MaxForwardJump + 1 + i, Payload: []byte("x")}, nil)
+	}
+	if len(r.seenRing) != before {
+		t.Fatalf("seen ring grew from %d to %d on implausible frames", before, len(r.seenRing))
+	}
+	if _, ok := r.seen[0]; !ok {
+		t.Fatal("real entry was evicted by junk")
+	}
+}

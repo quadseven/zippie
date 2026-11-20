@@ -87,6 +87,57 @@ func TestHomeAlsoGetsItsOwnEpoch(t *testing.T) {
 	}
 }
 
+func TestHomeProbesOnlyAfterLearningPeer(t *testing.T) {
+	cfg := DefaultHomeConfig()
+	cfg.Listen = &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}
+	cfg.Local = &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}
+	cfg.Epoch = 7
+	home, err := NewHome(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer home.Close()
+
+	home.SendKeepalives()
+	if sent, failed := home.Stats.Sent.Load(), home.Stats.SendErrors.Load(); sent != 0 || failed != 0 {
+		t.Fatalf("before learning a peer: sends = %d, errors = %d, want neither", sent, failed)
+	}
+
+	peer := freeUDP(t)
+	defer peer.Close()
+	listener := home.links[0].conn.LocalAddr().(*net.UDPAddr)
+	send := func(seq uint64, flags uint8) {
+		t.Helper()
+		frame := Frame{Seq: seq, Epoch: testPeerEpoch, Flags: flags}
+		if _, err := peer.WriteToUDP(frame.Pack(), listener); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func() Frame {
+		t.Helper()
+		frame, err := Unpack(readWith(t, peer, time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return frame
+	}
+
+	send(42, FlagKeepalive)
+	if reply := read(); !reply.IsKeepaliveReply() || reply.Seq != 42 {
+		t.Fatalf("first inbound probe got %+v, want a reply to probe 42", reply)
+	}
+	home.SetLinkHealth(0, false)
+	home.SendKeepalives()
+	probe := read()
+	if !probe.IsKeepalive() || probe.IsKeepaliveReply() {
+		t.Fatalf("unhealthy link got %+v, want a keepalive request", probe)
+	}
+	send(probe.Seq, FlagKeepalive|FlagKeepaliveReply)
+	waitFor(t, "home link to recover", func() bool {
+		return home.StatsSnapshot()["healthy"] == 1
+	})
+}
+
 // A pinned epoch must survive untouched, or the loopback and golden-vector
 // tests that pin one would silently exercise a different wire than they claim.
 func TestAnExplicitEpochIsHonoured(t *testing.T) {

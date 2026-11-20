@@ -176,8 +176,13 @@ the other implementation's source:
 | 0x04 | NACK (a request for a missing sequence)         |
 | 0x08 | keepalive reply, set alongside 0x02             |
 | 0x10 | forward-error-correction parity frame           |
-| 0x20 | retransmit hint / encrypted frame               |
-| 0x40 | retransmit hint on the second implementation    |
+| 0x20 | sealed client-mode frame (Go)                   |
+| 0x40 | retransmit hint                                 |
+
+Python bond receivers still recognize the legacy Python retransmit hint
+(`0x20`) during rolling upgrades. An older Python receiver can deliver a
+frame marked `0x40`, but may count it as leg progress. Upgrade both Python
+ends before mixing them with Go.
 
 Control frames ride the same socket as data, distinguished by a flag rather
 than a separate port. One fewer socket per leg, and a NACK follows exactly the
@@ -478,8 +483,10 @@ otherwise. A phone on two networks cannot know which of its addresses this
 router can route to; the router does not have to guess, because the packet
 demonstrably arrived from somewhere.
 
-Announcing needs the console write token. A phone plugged in by ethernet that
-does not have it yet can ask for it (`zippie/pairing.py`):
+Announcing accepts the legacy console write token or a home-authorized
+certificate over HTTPS. See the [console authorization setup](docs/architecture.md#router-console-device-authorization).
+The legacy flow in `zippie/pairing.py` lets a phone plugged in by ethernet
+request a token.
 
 ```
   phone     --POST /api/legs/pair {name, link: ethernet}------->  console

@@ -41,7 +41,7 @@ def _open_http(
     return urllib.request.urlopen(request, context=context, timeout=5)  # noqa: S310
 
 
-def _agent(tmp_path, *, tls: bool) -> BondAgent:
+def _agent(tmp_path, *, tls: bool, **settings) -> BondAgent:
     agent = {
         "private_key": "cGtleQ==",
         "state_dir": str(tmp_path),
@@ -57,6 +57,7 @@ def _agent(tmp_path, *, tls: bool) -> BondAgent:
                 "dashboard_tls_key": str(FIXTURES / "console-test.key"),
             }
         )
+    agent.update(settings)
     return BondAgent(
         parse_config(
             {
@@ -95,22 +96,31 @@ def _get_json(url: str, context: ssl.SSLContext | None = None):
         return response.status, json.loads(response.read())
 
 
-def _announce(url: str, *, token: str | None, context: ssl.SSLContext | None = None):
+def _write(url, path, body, *, token=None, context=None, method="POST"):
     headers = {"Content-Type": "application/json"}
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
-    url = url + "/api/legs/announce"
     try:
         with _open_http(
-            url,
+            url + path,
             context=context,
-            data=json.dumps({"name": "phone", "host": "10.99.0.2", "port": 51999}).encode(),
+            data=json.dumps(body).encode(),
             headers=headers,
-            method="POST",
+            method=method,
         ) as response:
             return response.status
     except urllib.error.HTTPError as error:
         return error.code
+
+
+def _announce(url, *, token=None, context=None, name="phone"):
+    return _write(
+        url,
+        "/api/legs/announce",
+        {"name": name, "host": "10.99.0.2", "port": 51999},  # leak-guard-allow
+        token=token,
+        context=context,
+    )
 
 
 def test_http_helpers_reject_non_http_schemes():
@@ -174,6 +184,238 @@ def test_bearer_protection_is_identical_on_both_listeners(served):
     assert _announce(https, token=None, context=context) == 401
     assert _announce(http, token=agent.console_token()) == 200
     assert _announce(https, token=agent.console_token(), context=context) == 200
+
+
+def _openssl(*args):
+    subprocess.run(["openssl", *args], check=True, capture_output=True)
+
+
+def _test_ca(directory):
+    directory.mkdir()
+    _openssl(
+        "req",
+        "-x509",
+        "-newkey",
+        "ec",
+        "-pkeyopt",
+        "ec_paramgen_curve:prime256v1",
+        "-nodes",
+        "-keyout",
+        directory / "ca.key",
+        "-out",
+        directory / "ca.crt",
+        "-days",
+        "1",
+        "-subj",
+        "/CN=Test phone CA",
+        "-addext",
+        "basicConstraints=critical,CA:TRUE",
+    )
+    (directory / "client.cnf").write_text("extendedKeyUsage=clientAuth\n", encoding="ascii")
+    return directory / "ca.crt"
+
+
+def _client(ca, name):
+    directory = ca.parent
+    key, csr, cert = (directory / f"{name}.{ext}" for ext in ("key", "csr", "crt"))
+    _openssl(
+        "req",
+        "-new",
+        "-newkey",
+        "ec",
+        "-pkeyopt",
+        "ec_paramgen_curve:prime256v1",
+        "-nodes",
+        "-keyout",
+        key,
+        "-out",
+        csr,
+        "-subj",
+        f"/CN={name}",
+    )
+    _openssl(
+        "x509",
+        "-req",
+        "-in",
+        csr,
+        "-CA",
+        ca,
+        "-CAkey",
+        directory / "ca.key",
+        "-CAcreateserial",
+        "-out",
+        cert,
+        "-days",
+        "1",
+        "-extfile",
+        directory / "client.cnf",
+    )
+    return cert, key
+
+
+def _client_context(client=None):
+    # Same server leaf as the existing listener tests. The router verifies clients.
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    if client is not None:
+        context.load_cert_chain(*client)
+    return context
+
+
+def _record(client, device_id, *, status="active", migration_status="migrated"):
+    der = ssl.PEM_cert_to_DER_cert(client[0].read_text(encoding="ascii"))
+    return {
+        "device_id": device_id,
+        "fingerprint_sha256": hashlib.sha256(der).hexdigest(),
+        "status": status,
+        "migration_status": migration_status,
+    }
+
+
+def _publish_records(path, *devices):
+    staged = path.with_suffix(".new")
+    staged.write_text(json.dumps({"version": 1, "devices": devices}), encoding="ascii")
+    staged.replace(path)
+
+
+def _device_agent(tmp_path, ca, records):
+    return _agent(
+        tmp_path,
+        tls=True,
+        dashboard_client_ca=str(ca),
+        dashboard_device_records=str(records),
+    )
+
+
+def test_console_authorizes_only_active_home_certificates(tmp_path):
+    ca = _test_ca(tmp_path / "home")
+    active = _client(ca, "active")
+    revoked = _client(ca, "revoked")
+    unknown = _client(ca, "unknown")
+    records = tmp_path / "authorized-devices.json"
+    foreign = _client(_test_ca(tmp_path / "foreign"), "foreign")
+    _publish_records(
+        records,
+        _record(active, "phone-a"),
+        _record(revoked, "phone-b", status="revoked"),
+        _record(foreign, "phone-c"),
+    )
+    agent = _device_agent(tmp_path, ca, records)
+    agent.start_dashboard()
+    try:
+        https = f"https://127.0.0.1:{agent._https.server_address[1]}"
+        http = f"http://127.0.0.1:{agent._http.server_address[1]}"
+        no_cert = _client_context()
+        bearer = agent.console_token()
+
+        assert _get_json(https + "/api/status", no_cert)[0] == 200
+        assert _get_json(http + "/api/status")[0] == 200
+        assert _announce(https, token=None, context=no_cert) == 401
+        for refused in (unknown, revoked):
+            context = _client_context(refused)
+            assert _announce(https, context=context) == 403
+            outcome = _announce(https, token=bearer, context=context)
+            assert outcome == 403
+        with pytest.raises((ssl.SSLError, urllib.error.URLError)) as error:
+            _announce(https, context=_client_context(foreign))
+        reason = getattr(error.value, "reason", error.value)
+        assert isinstance(reason, (str, ssl.SSLError)) and "alert" in str(reason).lower()
+        assert _announce(https, token=None, context=_client_context(active)) == 200
+        https_bearer = _announce(https, token=bearer, context=no_cert)
+        http_bearer = _announce(http, token=bearer)
+        assert https_bearer == http_bearer == 200
+    finally:
+        agent.stop_dashboard()
+
+
+def test_device_write_attribution_survives_restarts_and_revocation(tmp_path, caplog):
+    ca = _test_ca(tmp_path / "home")
+    first = _client(ca, "first")
+    second = _client(ca, "second")
+    records = tmp_path / "authorized-devices.json"
+    first_record = _record(first, "phone-a")
+    second_record = _record(second, "phone-b", migration_status="not_migrated")
+    _publish_records(records, first_record, second_record)
+    first_tls, second_tls = _client_context(first), _client_context(second)
+    caplog.set_level("INFO", logger="zippie.agent")
+
+    agent = _device_agent(tmp_path, ca, records)
+    agent.start_dashboard()
+    try:
+        https = f"https://127.0.0.1:{agent._https.server_address[1]}"
+        assert _announce(https, context=first_tls, name="shared-leg") == 200
+        assert _announce(https, context=second_tls, name="shared-leg") == 200
+        new_host = "10.99.0.3"  # leak-guard-allow
+        assert (
+            _write(
+                https,
+                "/api/legs/announce",
+                {"name": "renamed-leg", "host": new_host, "port": 51998},
+                context=first_tls,
+            )
+            == 200
+        )
+        announcements = [
+            message for message in caplog.messages if message.startswith("leg announced")
+        ]
+        assert [message.rsplit(" by=", 1)[-1] for message in announcements] == [
+            "device:phone-a",
+            "device:phone-b",
+            "device:phone-a",
+        ]
+        assert "name=renamed-leg" in announcements[-1]
+        assert f"endpoint={new_host}:51998" in announcements[-1]
+        assert _write(https, "/api/legs/att", {"tier": 2}, context=second_tls, method="PUT") == 200
+        assert "leg fields updated name='att' by=device:phone-b" in caplog.messages
+        assert (
+            _write(https, "/api/legs/withdraw", {"name": "renamed-leg"}, context=first_tls) == 200
+        )
+
+        # Reload the home snapshot for each write, including a revocation while running.
+        first_record["status"] = "revoked"
+        _publish_records(records, first_record, second_record)
+        assert _announce(https, context=first_tls) == 403
+        assert _write(https, "/api/legs/att", {"tier": 1}, context=first_tls, method="PUT") == 403
+        assert _announce(https, context=second_tls) == 200
+    finally:
+        agent.stop_dashboard()
+
+    restarted = _device_agent(tmp_path, ca, records)
+    restarted.start_dashboard()
+    try:
+        https = f"https://127.0.0.1:{restarted._https.server_address[1]}"
+        assert _announce(https, context=first_tls) == 403
+        assert _announce(https, context=second_tls) == 200
+        assert json.loads(records.read_text(encoding="ascii"))["devices"] == [
+            first_record,
+            second_record,
+        ]
+    finally:
+        restarted.stop_dashboard()
+
+
+def test_console_fails_closed_when_device_records_are_ambiguous_or_missing(tmp_path):
+    ca = _test_ca(tmp_path / "home")
+    client = _client(ca, "client")
+    records = tmp_path / "authorized-devices.json"
+    active = _record(client, "phone-a")
+    agent = _device_agent(tmp_path, ca, records)
+    agent.start_dashboard()
+    try:
+        https = f"https://127.0.0.1:{agent._https.server_address[1]}"
+        context = _client_context(client)
+        assert _announce(https, context=context) == 403
+        _publish_records(records, active, dict(active, status="revoked"))
+        assert _announce(https, context=context) == 403
+        _publish_records(records, active, dict(active, fingerprint_sha256="0" * 64))
+        assert _announce(https, context=context) == 403
+        _publish_records(records, dict(active, migration_status="invalid"))
+        assert _announce(https, context=context) == 403
+        _publish_records(records, active)
+        assert _announce(https, context=context) == 200
+    finally:
+        agent.stop_dashboard()
 
 
 def test_tls_is_absent_when_it_is_not_configured(tmp_path):

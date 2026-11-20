@@ -95,6 +95,17 @@ CLIENT_STALE_S = 120.0
 # same failure arriving slowly. It was masked only by pod restarts clearing the
 # in-memory registry, which is an accident rather than a policy.
 CLIENT_RETAIN_S = 86400.0
+# A report name longer than this is refused, and so is a new name once this many
+# distinct clients are retained. Without both, one token holder could grow the
+# registry by name alone (#392). A household's phones number in single digits.
+CLIENT_NAME_MAX = 64
+CLIENT_MAX = 256
+# An unauthenticated request that makes the hub fetch from the router (/api/series,
+# or /api/status?live=1) is let through at most once per this many seconds, hub
+# wide. Each one spends the bond's data (a bare series is about 366 KB), and the
+# dashboard and both apps read these paths without a token, so the answer cannot
+# be a login. A caller holding the report token is not limited (#392).
+LIVE_MIN_INTERVAL_S = 2.0
 # Largest /api/report body the hub will read. A ceiling rather than a guess: a
 # real report is a few hundred bytes, and Content-Length is attacker-controlled,
 # so the bound is what stops one request from tying up a thread and the memory
@@ -1045,6 +1056,17 @@ class Registry:
         self._routers = {r["name"]: r for r in routers}
         self._router_state: dict[str, dict] = {}
         self._clients: dict[str, dict] = {}
+        self._live_at = float("-inf")
+
+    def live_wait_s(self) -> float:
+        """Seconds to wait for a live fetch; 0 means go, and the slot is claimed."""
+        with self._lock:
+            now = time.monotonic()
+            wait = self._live_at + LIVE_MIN_INTERVAL_S - now
+            if wait <= 0:
+                self._live_at = now
+                return 0.0
+            return wait
 
     def note_router(
         self,
@@ -1105,9 +1127,16 @@ class Registry:
             seen.get("config_error"),
         )
 
-    def note_client(self, name: str, payload: dict) -> None:
+    def note_client(self, name: str, payload: dict) -> bool:
+        """Record a report. False when a new name would exceed CLIENT_MAX."""
+        now = time.time()
         with self._lock:
-            self._clients[name] = {"status": payload, "at": time.time()}
+            if name not in self._clients and len(self._clients) >= CLIENT_MAX:
+                self._evict_forgotten_clients(now)
+                if len(self._clients) >= CLIENT_MAX:
+                    return False
+            self._clients[name] = {"status": payload, "at": now}
+            return True
 
     def _evict_forgotten_clients(self, now: float) -> None:
         """Drop clients nobody has heard from in CLIENT_RETAIN_S. Lock held.
@@ -1685,6 +1714,15 @@ def serve_primary(
     # not collect series, so there is no snapshot to answer from. `?live=1` on
     # /api/status lands here too, which is the deliberate escape hatch for a
     # caller that needs a read taken now rather than one that says how old it is.
+    if not report_authorised(handler):
+        wait = reg.live_wait_s()
+        if wait > 0:
+            return handler._send(
+                429,
+                b'{"error":"live reads are rate limited"}',
+                "application/json",
+                {"Retry-After": str(int(wait) + 1)},
+            )
     return proxy_to_router(handler, primary, path)
 
 
@@ -1765,12 +1803,17 @@ def handle_report(handler: BaseHTTPRequestHandler, reg: Registry) -> None:
         )
     try:
         payload = json.loads(handler.rfile.read(length))
+        if not isinstance(payload, dict):
+            raise ValueError("client report must be a JSON object")
         name = str(payload["name"])
     except (ValueError, KeyError, OSError):
         return handler._send(
             400, b'{"error":"body must be JSON with a name"}', "application/json"
         )
-    reg.note_client(name, payload)
+    if not 1 <= len(name) <= CLIENT_NAME_MAX:
+        return handler._send(400, b'{"error":"bad name length"}', "application/json")
+    if not reg.note_client(name, payload):
+        return handler._send(400, b'{"error":"too many clients"}', "application/json")
     return handler._send(200, b'{"ok":true}', "application/json")
 
 

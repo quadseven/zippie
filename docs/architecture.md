@@ -185,7 +185,67 @@ See [../travel/unifi-utr/README.md](../travel/unifi-utr/README.md).
 - Dashboard binds to `127.0.0.1` in code and in the example config, which
   explicitly warns against `0.0.0.0`. The live travel router does bind
   `0.0.0.0`, behind a reverse proxy on the travel LAN - never a public WAN
-- Console reads are open; writes require the token in `state_dir/console_token`
+- Console reads are open. Writes accept a home-authorized client certificate
+  on the HTTPS listener or the legacy token in `state_dir/console_token` from
+  clients that omit a certificate.
+
+### Router console device authorization
+
+Home issues the phone certificates and owns the authorization records. Use an
+authenticated router administration channel, such as SSH with the router host
+key verified, to install the home CA's PEM bundle and the records on the router.
+Keep both on persistent storage in directories writable only by the operator
+or root. On OpenWrt, `/etc/zippie` survives reboots. The router needs the CA
+bundle and the records. Each phone keeps its own private key.
+
+Enable the HTTPS listener and set `dashboard_client_ca` and
+`dashboard_device_records` under `[agent]`. The example config shows the five
+settings. Restart the agent after changing the settings or the CA bundle.
+Clients using certificates must connect directly to the agent's HTTPS listener
+or through TLS passthrough so the agent verifies the client itself.
+
+Home supplies a versioned JSON snapshot of its phone records.
+
+```json
+{
+  "version": 1,
+  "devices": [
+    {
+      "device_id": "example-phone",
+      "fingerprint_sha256": "<lowercase SHA-256 of the DER client certificate>",
+      "status": "active",
+      "migration_status": "not_migrated"
+    }
+  ]
+}
+```
+
+Use a unique stable `device_id` of 1-128 ASCII letters, digits, dots, underscores,
+or hyphens, starting with a letter or digit. Use `active` or `revoked` for
+`status` and `not_migrated` or `migrated` for `migration_status`. A phone awaiting
+a certificate can have a record without a fingerprint. Compute the fingerprint
+with `openssl x509 -in phone.crt -outform DER | openssl dgst -sha256` and use just
+the lowercase digest. For certificate replacement, keep the device ID and
+update its fingerprint. Publish updates by staging the complete snapshot in the
+same directory, then renaming it over the configured file. The agent reads the
+current snapshot on each certificate-backed write, so updates take effect
+without restarting it. A presented certificate must pass TLS verification and
+match exactly one active record with a unique device ID. An unauthorized
+certificate cannot fall back to a bearer token on that request.
+
+Before completing #344, verify the expected fingerprint and ID on the router.
+With the phone's certificate and no bearer header, send a test write over HTTPS
+and confirm success and `by=device:<device_id>` in the agent log. Change the test
+record to `revoked` in the home snapshot and install the update. Confirm a write
+with that certificate gets HTTP 403, a second active certificate still gets
+HTTP 200, and `/api/status` returns HTTP 200 with no certificate. Repeat after
+an agent restart. Home can mark a verified phone `migrated`; migration status
+tracks rollout progress independently of the authorization status.
+
+The shared bearer path, including plain HTTP, stays available to clients that
+omit a certificate. Revocation blocks writes that present the revoked phone's
+certificate. Anyone who still has the shared bearer can use the legacy path.
+The local bearer rollback and its field verification are tracked by #344.
 
 ## Failure modes
 

@@ -161,6 +161,19 @@
    "flags": 2,
    "payload_hex": "",
    "wire_hex": "50420302000000000000000009a1b2c3d40000000791826d7a7f2654e0"
+  },
+  {
+   "why": "signed bond retransmit",
+   "level": "require",
+   "peer_id": 7,
+   "secret_hex": "766563746f722d7365637265742d6e6f742d612d7265616c2d6b65792d303030",
+   "seq": 0,
+   "path_id": 1,
+   "epoch": 2712847316,
+   "flags": 64,
+   "retransmit": true,
+   "payload_hex": "7265636f7665726564",
+   "wire_hex": "50420340010000000000000000a1b2c3d400000007b202df0b18fdec9d7265636f7665726564"
   }
  ],
  "build": [

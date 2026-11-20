@@ -392,29 +392,9 @@ class TestTheHoldIsBounded:
 class TestTheNewFlagBitIsActuallyFree:
     """THE FLAGS BYTE IS SHARED WITH THE GO PORT, and it is one byte.
 
-    0x10 looked free from inside Python - nothing here uses it - and it is the
-    Go port's FEC parity bit. A Python end emitting it would have every
-    retransmit read as parity by a Go end: not a silent no-op, a misread that
-    puts traffic on the wire. So the check reads the OTHER implementation's
-    registry rather than a list somebody remembered to update.
-
-    THIS IS WHERE THE COLLISION IS CAUGHT, in both directions - and it caught a
-    real one. This guard used to read only frame.go, on the assumption that is
-    where every Go flag constant lives. It is not: seal.go defines
-    FlagEncrypted = 0x20 (client-mode confidentiality, quadseven/zippie#31),
-    the same bit this file's own FLAG_RETRANSMIT already shipped on
-    (quadseven/zippie#116) - undetected, because the regex below never looked
-    at that file. The two do not actually collide on the wire TODAY:
-    FlagEncrypted is read only by UnpackAs, which refuses anything that is not
-    wire v3, and Python speaks v2 only. But the Go port's own doc comment for
-    FlagRetransmit invited exactly the mistake this would have been - "if that
-    port ever adopts the same bit for the same meaning" - and someone taking
-    it literally would have handed a live retransmit to AES-GCM as if it were
-    ciphertext the moment sealing was on. So the scan now covers both files,
-    and Go's FlagRetransmit lives at 0x40, not 0x20: see frame.go's comment on
-    FlagRetransmit for the full account. The two bits do not need to match -
-    Python never reads Go's hint or vice versa - they only need to not collide
-    with anything real, which the loop below still checks either way.
+    Shared flag meanings must use the same bits. Go also defines FEC parity
+    in frame.go and encryption in seal.go, so the check reads both files to
+    catch overlaps with either feature.
     """
 
     GO_FLAG_FILES = (
@@ -444,6 +424,7 @@ class TestTheNewFlagBitIsActuallyFree:
             "FlagKeepalive",
             "FlagNack",
             "FlagKeepaliveReply",
+            "FlagRetransmit",
             "FlagParity",
             "FlagEncrypted",
         } - set(flags)
@@ -460,41 +441,13 @@ class TestTheNewFlagBitIsActuallyFree:
     # at all. Listing rather than matching on spelling so that a Go rename
     # shows up as an overlap failure here instead of quietly turning into
     # "these are different flags now".
-    #
-    # FLAG_RETRANSMIT IS DELIBERATELY NOT HERE. It cannot be: Go's
-    # FlagEncrypted already owns 0x20 in the same byte (seal.go), so the Go
-    # port's FlagRetransmit lives at 0x40 instead - see frame.go's comment on
-    # FlagRetransmit. They do not need to agree, because neither side ever
-    # reads the other's hint: this file's FLAG_RETRANSMIT is read only by this
-    # implementation's own NackTracker, and Go's FlagRetransmit only by its
-    # own. The overlap check below still runs for it, unpaired, which is what
-    # would have caught the FlagEncrypted collision that predated this comment.
     SAME_FLAG = {
         "FLAG_DUPLICATE": "FlagDuplicate",
         "FLAG_KEEPALIVE": "FlagKeepalive",
         "FLAG_NACK": "FlagNack",
         "FLAG_KEEPALIVE_REPLY": "FlagKeepaliveReply",
+        "FLAG_RETRANSMIT": "FlagRetransmit",
     }
-
-    # The ONE exception to "no bit may overlap", and it exists because it is
-    # already true rather than because it is convenient. FlagEncrypted only
-    # ever appears on a Go WIRE V3 frame - AppendAs sets it, UnpackAs is the
-    # only reader (seal.go / identity.go). A v2 reader like this Python
-    # implementation never reaches it: Frame.unpack here (datapath.py) raises
-    # DatapathError on any version byte other than 2, before flags are looked
-    # at. So the two implementations partition the meaning of byte 3 by the
-    # version byte one offset earlier, and a v3-only flag sharing a bit with a
-    # v2 flag is safe BY CONSTRUCTION - the same physical byte value is never
-    # interpreted both ways on any one datagram.
-    #
-    # This is the collision this guard's own blind spot let ship: FLAG_RETRANSMIT
-    # (0x20, quadseven/zippie#116, live on the travel router since 2026-08-11) already shares
-    # this bit with FlagEncrypted, and nobody noticed because the guard read
-    # only frame.go, not seal.go. Excluded here rather than "fixed" by moving
-    # FLAG_RETRANSMIT - changing an already-shipped wire value on code carrying
-    # the household's only internet is a materially bigger risk than pinning a
-    # documented, verified-safe overlap.
-    VERSION_GATED_GO_FLAGS = {"FlagEncrypted"}
 
     def test_the_retransmit_bit_collides_with_nothing_on_either_side(self):
         ours = {
@@ -509,8 +462,6 @@ class TestTheNewFlagBitIsActuallyFree:
         assert len(set(ours.values())) == len(ours), f"two names, one bit: {ours}"
 
         for go_name, go_bit in self._go_flags().items():
-            if go_name in self.VERSION_GATED_GO_FLAGS:
-                continue
             for name, bit in ours.items():
                 if self.SAME_FLAG.get(name) == go_name:
                     assert bit == go_bit, (
@@ -556,7 +507,8 @@ class TestARetransmitSaysSoOnTheWire:
         )
         assert not resend.flags & FLAG_NACK, "it is data, not a request"
 
-    def test_a_marked_frame_does_not_prove_its_leg_moved_on(self):
+    @pytest.mark.parametrize("flag", [FLAG_RETRANSMIT, 0x20], ids=["shared", "legacy-python"])
+    def test_a_marked_frame_does_not_prove_its_leg_moved_on(self, flag):
         """The other half of the same wire, and the half that is easy to build
         and never connect."""
         r = Receiver(reorder_deadline_ms=250, nack_delay_ms=60)
@@ -570,9 +522,7 @@ class TestARetransmitSaysSoOnTheWire:
             r.step()
         # An answer to a NACK turns up on SLOW carrying seq 79 - twenty
         # sequences beyond anything SLOW's own traffic has reached.
-        r.link.deliver(
-            Frame(seq=79, path_id=SLOW, payload=PAYLOAD, flags=FLAG_RETRANSMIT, epoch=EPOCH).pack()
-        )
+        r.link.deliver(Frame(seq=79, path_id=SLOW, payload=PAYLOAD, flags=flag, epoch=EPOCH).pack())
         for i in range(45, 120):
             r.arrive(2 * i, FAST)
             r.step()
