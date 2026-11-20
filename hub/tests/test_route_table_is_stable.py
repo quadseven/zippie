@@ -215,3 +215,38 @@ def test_post_report_rejects_json_scalars_and_arrays(hub_at, monkeypatch, payloa
     assert headers["Content-Type"] == "application/json"
     assert json.loads(body) == {"error": "body must be JSON with a name"}
     assert json.loads(_req(at, "GET", "/api/nodes")[2]) == {"nodes": []}
+
+
+def _report(at, name):
+    return _req(
+        at,
+        "POST",
+        "/api/report",
+        body=json.dumps({"name": name}),
+        headers={
+            "Authorization": "Bearer test-report-token",
+            "Content-Type": "application/json",
+        },
+    )
+
+
+def test_post_report_rejects_an_over_long_name(hub_at, monkeypatch):
+    monkeypatch.setenv("ZIPPIE_HUB_TOKEN", "test-report-token")
+    at = hub_at()
+    assert _report(at, "x" * 65)[0] == 400
+    assert _report(at, "")[0] == 400
+    assert _report(at, "x" * 64)[0] == 200
+
+
+def test_post_report_refuses_a_new_client_past_the_cap(hub_at, monkeypatch):
+    import hub as hub_mod
+
+    monkeypatch.setenv("ZIPPIE_HUB_TOKEN", "test-report-token")
+    monkeypatch.setattr(hub_mod, "CLIENT_MAX", 2)
+    at = hub_at()
+    assert _report(at, "a")[0] == 200
+    assert _report(at, "b")[0] == 200
+    code, _, body = _report(at, "c")
+    assert code == 400
+    assert json.loads(body) == {"error": "too many clients"}
+    assert _report(at, "a")[0] == 200
