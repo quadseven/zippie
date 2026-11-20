@@ -440,3 +440,27 @@ func TestAStaleSocketFileIsReclaimedButALiveOneIsNot(t *testing.T) {
 		t.Error("a second server bound over a LIVE socket; two datapaths would fight over the legs")
 	}
 }
+
+func TestSyncRejectsNonpositiveWeightWithoutChangingLinks(t *testing.T) {
+	tr := newTestTransport(t)
+	good := specFor(t, 0, "ethernet", 100)
+	if _, err := tr.SyncLinks([]LinkSpec{good}); err != nil {
+		t.Fatalf("first sync: %v", err)
+	}
+	for _, weight := range []int{0, -1} {
+		bad := specFor(t, 1, "hotspot", weight)
+		if _, err := tr.SyncLinks([]LinkSpec{bad}); err == nil {
+			t.Fatalf("weight %d was accepted", weight)
+		}
+		tr.mu.Lock()
+		path, hasOriginal := tr.scheduler.Path(0)
+		_, hasInvalid := tr.scheduler.Path(1)
+		tr.mu.Unlock()
+		if !hasOriginal || path.Weight != good.Weight {
+			t.Fatalf("rejected sync changed the original path: %+v, found=%t", path, hasOriginal)
+		}
+		if hasInvalid {
+			t.Fatal("rejected sync added the invalid path")
+		}
+	}
+}

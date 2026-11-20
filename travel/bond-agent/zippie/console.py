@@ -1,4 +1,4 @@
-"""The console: listeners, TLS, the write token check, and the request routes.
+"""The console: listeners, TLS, write authorization, and the request routes.
 
 Moved out of BondAgent.start_dashboard (#374), where the handler was a class
 defined inside the method and closed over the whole agent. Nothing here reaches
@@ -8,14 +8,16 @@ fake in a test without building a BondAgent.
 READS ARE OPEN AND WRITES ARE NOT. The status page is what people look at, and
 gating it would mean pasting a token into a phone before you could see whether
 your internet works. Announce, withdraw, pairing approval and leg edits change
-what the router dials, so they need the bearer token.
+what the router dials, so they require a trusted device or the legacy bearer token.
 """
 
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import logging
+import re
 import secrets
 import ssl
 import threading
@@ -96,12 +98,47 @@ def _dashboard_tls_context(config: AgentConfig) -> ssl.SSLContext | None:
         config.dashboard_tls_port,
         config.dashboard_tls_cert,
         config.dashboard_tls_key,
+        client_ca=config.dashboard_client_ca,
+        device_records=config.dashboard_device_records,
     ):
         return None
 
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(config.dashboard_tls_cert, config.dashboard_tls_key)
+    if config.dashboard_client_ca:
+        context.load_verify_locations(cafile=config.dashboard_client_ca)
+        context.verify_mode = ssl.CERT_OPTIONAL
     return context
+
+
+def _device_id(records_path: str, certificate: bytes) -> str | None:
+    """Look up the verified TLS leaf in the current home-provisioned snapshot."""
+    try:
+        snapshot = json.loads(Path(records_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
+        log.warning("console could not read device authorization records")
+        return None
+    if not isinstance(snapshot, dict) or snapshot.get("version") != 1:
+        return None
+    devices = snapshot.get("devices")
+    if not isinstance(devices, list):
+        return None
+    fingerprint = hashlib.sha256(certificate).hexdigest()
+    records = [device for device in devices if isinstance(device, dict)]
+    matches = [device for device in records if device.get("fingerprint_sha256") == fingerprint]
+    if len(matches) != 1:
+        return None
+    record = matches[0]
+    identity = record.get("device_id")
+    if (
+        record.get("status") != "active"
+        or record.get("migration_status") not in ("migrated", "not_migrated")
+        or not isinstance(identity, str)
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", identity)
+        or any(other is not record and other.get("device_id") == identity for other in records)
+    ):
+        return None
+    return identity
 
 
 # A TLS handshake must not run in the accept loop. Wrapping the LISTENING
@@ -230,7 +267,7 @@ def _announce_host_for(body: dict, source: str, warned: dict, name: str) -> str:
         if warned.get(name) != claimed:
             warned[name] = claimed
             log.warning(
-                "leg %s announced host %s but reached us from %s - dialling %s, "
+                "leg %r announced host %r but reached us from %s - dialing %s, "
                 "the address that demonstrably works (#252). A phone on two "
                 "networks offers the wrong one.",
                 name or "<unnamed>",
@@ -276,6 +313,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     """The console's routes. make_handler binds a seam to a subclass of it."""
 
     seam: ConsoleSeam
+    device_records: str
     # Which host each leg last CLAIMED, when that differed from where its
     # announce came from (#252). Only for de-duplicating the warning: a
     # phone renews every 15s and one line per renewal would bury it. Set per
@@ -301,7 +339,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         # file sits on a router whose filesystem is readable by
         # anything that gets a shell.
         log.warning(
-            "console refused %s %s from %s: %d %s",
+            "console refused %s %s from %s: %d %r",
             self.command,
             self.path,
             self.client_address[0],
@@ -315,8 +353,21 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _authed(self) -> bool:
-        return _token_matches(self.headers.get("Authorization"), self.seam.console_token())
+    def _write_actor(self, *, legacy_pairing: bool = False) -> str | None:
+        if self.device_records and isinstance(self.connection, ssl.SSLSocket):
+            certificate = self.connection.getpeercert(binary_form=True)
+            if certificate:
+                identity = _device_id(self.device_records, certificate)
+                if identity is not None:
+                    return f"device:{identity}"
+                self._reject(403, "client certificate is not authorized")
+                return None
+        if legacy_pairing or _token_matches(
+            self.headers.get("Authorization"), self.seam.console_token()
+        ):
+            return self.client_address[0]
+        self._reject(401, "bad or missing bearer token")
+        return None
 
     def _json_body(self) -> dict | None:
         try:
@@ -334,7 +385,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if parsed.path == "/api/legs/pair":
-            self._pair_ask()
+            actor = self._write_actor(legacy_pairing=True)
+            if actor is not None:
+                self._pair_ask(actor)
             return
         if parsed.path not in (
             "/api/legs/announce",
@@ -346,8 +399,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         # AUTHENTICATED, because an announcement adds a leg the router
         # will DIAL. Unauthenticated, anything on this wifi could point
         # the bond at an address it chose.
-        if not self._authed():
-            self._reject(401, "bad or missing bearer token")
+        actor = self._write_actor()
+        if actor is None:
             return
         body = self._json_body()
         if body is None:
@@ -355,25 +408,25 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/legs/pair/approve":
-            self._pair_approve(body)
+            self._pair_approve(body, actor)
             return
 
         if parsed.path.endswith("withdraw"):
             name = str(body.get("name") or "")
             gone = self.seam.dynamic.withdraw(name)
             log.info(
-                "leg withdrawn name=%s existed=%s by=%s",
+                "leg withdrawn name=%r existed=%s by=%s",
                 name or "<unnamed>",
                 gone,
-                self.client_address[0],
+                actor,
             )
             payload = json.dumps({"leg": name, "withdrawn": gone}).encode()
             self._ok(payload)
             return
 
-        self._announce(body)
+        self._announce(body, actor)
 
-    def _announce(self, body: dict) -> None:
+    def _announce(self, body: dict, actor: str) -> None:
         name = str(body.get("name") or "")
         host = _announce_host_for(body, self.client_address[0], self.claimed_hosts, name)
 
@@ -403,9 +456,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         # that never announced at all.
         log.info(
             "leg announced name=%s endpoint=%s by=%s",
-            leg.name,
+            leg.name.rstrip("\n"),
             leg.relay_endpoint,
-            self.client_address[0],
+            actor,
         )
         self._ok(
             json.dumps(
@@ -417,13 +470,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             ).encode()
         )
 
-    def _pair_ask(self) -> None:
+    def _pair_ask(self, actor: str) -> None:
         """The phone's half of the handshake, asked until approved.
 
-        UNAUTHENTICATED, because the phone has nothing to authenticate
-        with yet; zippie/pairing.py says what protects it instead. The
-        source address, not anything in the body, is what the request
-        is bound to: the token is only ever released back to it.
+        Legacy clients may ask before they have a credential. The pairing
+        flow binds the request and token collection to the source address.
         """
         body = self._json_body()
         if body is None:
@@ -431,7 +482,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return
         host = self.client_address[0]
         if self.seam.pairing.collect(host, str(body.get("code") or "")):
-            log.info("pairing complete by=%s", host)
+            log.info("pairing complete by=%s", actor)
             reply = {"pairing": "approved", "token": self.seam.console_token()}
             self._ok(json.dumps(reply).encode())
             return
@@ -448,7 +499,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return
         # Once per request, not once per poll. Never the code.
         if not known:
-            log.info("pairing requested name=%s link=ethernet by=%s", req.name, host)
+            log.info("pairing requested name=%r link=ethernet by=%s", req.name, actor)
         reply = {
             "pairing": "pending",
             "code": req.code,
@@ -456,17 +507,17 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         }
         self._ok(json.dumps(reply).encode())
 
-    def _pair_approve(self, body: dict) -> None:
+    def _pair_approve(self, body: dict, actor: str) -> None:
         """The operator's half: the code read off the phone's screen."""
         req = self.seam.pairing.approve(str(body.get("code") or ""))
         if req is None:
             self._reject(403, "no pending pairing with that code")
             return
         log.info(
-            "pairing approved name=%s host=%s by=%s",
+            "pairing approved name=%r host=%s by=%s",
             req.name,
             req.host,
-            self.client_address[0],
+            actor,
         )
         self._ok(json.dumps({"leg": req.name, "approved": True}).encode())
 
@@ -484,8 +535,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self._reject(404, "not found")
             return
 
-        if not self._authed():
-            self._reject(401, "bad or missing bearer token")
+        actor = self._write_actor()
+        if actor is None:
             return
 
         try:
@@ -517,6 +568,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self._reject(400, str(exc))
             return
 
+        log.info("leg fields updated name=%r by=%s", name, actor)
         self._ok(json.dumps({"leg": name, "applied": entry}).encode("utf-8"))
 
     def do_GET(self) -> None:  # noqa: N802
@@ -565,6 +617,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def make_handler(seam: ConsoleSeam) -> type[BaseHTTPRequestHandler]:
+def make_handler(seam: ConsoleSeam, *, device_records: str = "") -> type[BaseHTTPRequestHandler]:
     """A request handler class bound to `seam`, shared by every listener."""
-    return type("Handler", (ConsoleHandler,), {"seam": seam, "claimed_hosts": {}})
+    return type(
+        "Handler",
+        (ConsoleHandler,),
+        {"seam": seam, "claimed_hosts": {}, "device_records": device_records},
+    )

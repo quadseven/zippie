@@ -24,6 +24,7 @@ from zippie import (
     shaper,
     status_doc,
     telemetry,
+    tunnel,
     wifi,
     # Re-exported: tests patch station_info as agent.wifi_uci, and the roster's
     # real host adapter reads that same module at call time.
@@ -979,12 +980,12 @@ class BondAgent:
             table="off",
             fwmark=None,
         )
-        if not net.dry_run() and not self._tunnel_is_live(PACKET_IFACE):
-            try:
-                net.wg_quick_up(str(conf), PACKET_IFACE, address=addr, mtu=mtu)
-            except net.NetError as exc:
-                log.error("packet-mode tunnel %s failed to come up: %s", PACKET_IFACE, exc)
-                raise
+        try:
+            started = tunnel.bring_up_if_needed(conf, PACKET_IFACE, address=addr, mtu=mtu)
+        except net.NetError as exc:
+            log.error("packet-mode tunnel %s failed to come up: %s", PACKET_IFACE, exc)
+            raise
+        if started:
             # Only here, and only after the interface was actually created:
             # the shaper is attached to the link, so a new link has no shaper
             # no matter what uci says. Never raises - the bond coming up
@@ -1396,16 +1397,14 @@ class BondAgent:
         it is not AND the reason is already recorded on the path, so the caller
         only has to skip it.
         """
-        if net.dry_run() or self._tunnel_is_live(path.wg_iface):
-            return True
         try:
             # address/mtu passed explicitly: the native path (OpenWrt, no
             # wg-quick) applies them with `ip`, since `wg setconf` cannot. The
             # address is the LEG'S OWN, never the home fallback the conf may
             # have used - applying a borrowed one would put a second peer's
             # inner source on this interface, which home silently drops.
-            net.wg_quick_up(
-                str(conf),
+            tunnel.bring_up_if_needed(
+                conf,
                 path.wg_iface,
                 address=path.config.address_cidr or None,
                 mtu=path.config.mtu,
@@ -1416,17 +1415,6 @@ class BondAgent:
             log.error("wg up failed for %s: %s", path.name, exc)
             return False
         return True
-
-    @staticmethod
-    def _tunnel_is_live(iface: str) -> bool:
-        """Existing AND up, not merely existing.
-
-        A bring-up that died halfway (setconf timeout, 2026-08-02) leaves the
-        interface present but DOWN, and an existence-only check reads that
-        wreck as a live tunnel on every later pass - the leg stays DEGRADED
-        until a human restarts the agent. Not-up means rebuild.
-        """
-        return Path(f"/sys/class/net/{iface}").exists() and net.link_is_up(iface)
 
     def _fwmark_for(self, idx: int) -> int:
         return self.config.fwmark_base + idx
@@ -3739,7 +3727,9 @@ class BondAgent:
     def start_dashboard(self) -> None:
         # The console reaches the agent only through console.ConsoleSeam, which
         # this class satisfies as it stands (#374).
-        _install_dashboard_listeners(self, console.make_handler(self))
+        _install_dashboard_listeners(
+            self, console.make_handler(self, device_records=self.config.dashboard_device_records)
+        )
 
     def stop_dashboard(self) -> None:
         for server in (self._https, self._http):

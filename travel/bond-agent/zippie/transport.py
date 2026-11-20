@@ -76,23 +76,17 @@ log = logging.getLogger("zippie.transport")
 # datapath.py's; these two are the transport's own. Listed together because the
 # byte is shared and a collision would be a silent misread on the wire.
 #
-# AND THE BYTE IS SHARED WITH THE GO PORT, which already owns 0x10 for its FEC
-# parity frames (travel/datapath-go/zippie/frame.go). A Python end emitting
-# 0x10 would have its retransmits read as parity by a Go end - not a no-op, a
-# misread that puts traffic on the wire. tests/test_nack_waits_for_leg_progress
-# reads that file and fails on any overlap, so the next bit taken on either
-# side cannot collide quietly.
+# The Go port reserves 0x10 for FEC parity and 0x20 for sealed client frames.
+# tests/test_nack_waits_for_leg_progress checks both Go flag definitions.
 FLAG_NACK = 0x04
 # THIS FRAME IS AN ANSWER TO A NACK, not the original arriving late (#108).
 #
-# Advisory, and safe in both directions of a version skew. An end that does not
-# know the bit treats the frame as ordinary data, which is what it is; an end
-# that does know it declines to read the frame as evidence that its leg has
-# made forward progress. See Transport._on_link_data: a resend deliberately
-# goes out on a leg OTHER than the one that lost the packet, so it can carry a
-# sequence far ahead of everything else that leg is holding, and counting it as
-# progress would unblock every gap behind it.
-FLAG_RETRANSMIT = 0x20
+# A resend travels on a different leg when possible. It can carry a sequence
+# far ahead of that leg's own traffic. The receiver still delivers the data,
+# but uses this hint to leave the leg's progress unchanged.
+FLAG_RETRANSMIT = 0x40
+# Recognize the legacy Python hint on receive during rolling upgrades.
+_LEGACY_PYTHON_RETRANSMIT = 0x20
 
 _RECV_MAX = 65535
 
@@ -1320,7 +1314,7 @@ class Transport:
         # FLAG_RETRANSMIT.
         self.nacks.resolve(
             frame.seq,
-            None if frame.flags & FLAG_RETRANSMIT else frame.path_id,
+            None if frame.flags & (FLAG_RETRANSMIT | _LEGACY_PYTHON_RETRANSMIT) else frame.path_id,
         )
         delivered = self.reassembler.push(frame)
         self._note_gaps(frame.seq)

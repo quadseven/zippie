@@ -661,6 +661,8 @@ class AgentConfig:
     dashboard_tls_port: int | None = None
     dashboard_tls_cert: str = ""
     dashboard_tls_key: str = ""
+    dashboard_client_ca: str = ""
+    dashboard_device_records: str = ""
     table_base: int = 100
     fwmark_base: int = 0x6400
     interface_prefix: str = "pb"
