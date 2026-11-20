@@ -1289,8 +1289,14 @@ def router_config_error(status_url: str) -> str | None:
     expanded, env_error = expand_env_refs(status_url)
     if env_error:
         return env_error
-    if not urlsplit(expanded).hostname:
+    try:
+        parsed = urlsplit(expanded)
+    except ValueError:
+        return "status_url is not a valid URL"
+    if not parsed.hostname:
         return f"status_url has no host: {status_url!r}"
+    if parsed.scheme not in {"http", "https"}:
+        return "status_url must use HTTP or HTTPS"
     if _RESERVED_HOST.search(expanded):
         return f"status_url is reserved for documentation and can never resolve: {expanded!r}"
     return None
@@ -1581,7 +1587,13 @@ def proxy_to_router(handler: BaseHTTPRequestHandler, primary: dict, path: str) -
     method here is a method that makes an existing problem (#58) worse. `self`
     becomes an explicit `handler` argument and nothing else moves.
     """
-    target = primary["status_url"].rsplit("/api/", 1)[0] + path
+    status_url = primary.get("status_url", "")
+    if router_config_error(status_url):
+        return handler._send(
+            503, b'{"error":"invalid router configuration"}', "application/json"
+        )
+    resolved, _ = expand_env_refs(status_url)
+    target = resolved.rsplit("/api/", 1)[0] + path
     if handler.path.count("?"):
         # THE QUERY STRING RIDES ALONG, and `since` is the reason. A caller
         # holding a cursor gets a few dozen bytes back; dropping it would
