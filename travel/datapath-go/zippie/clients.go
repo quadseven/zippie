@@ -444,17 +444,6 @@ func (h *MultiClientHome) AllClientStats() map[uint32]ClientStats {
 	return out
 }
 
-// LastSeen is how a supervisor notices a client that went quiet without
-// saying so - the failure that looks identical to an idle phone.
-func (h *MultiClientHome) LastSeen(clientID uint32) (time.Time, bool) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if cs := h.clients[clientID]; cs != nil && !cs.lastSeen.IsZero() {
-		return cs.lastSeen, true
-	}
-	return time.Time{}, false
-}
-
 func (h *MultiClientHome) ClientCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()

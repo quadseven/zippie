@@ -238,8 +238,6 @@ func (n *NackTracker) ResetStream() {
 	n.legWatch = make(map[uint8]legMark, 4)
 }
 
-func (n *NackTracker) Pending() int { return len(n.pending) }
-
 // RetransmitStats mirrors the Python counters.
 type RetransmitStats struct {
 	Resent       uint64

@@ -24,8 +24,7 @@ import (
 // spelled out here. It comes from <netinet/in.h> and is stable ABI: changing it
 // would break every binary Apple has ever shipped.
 const (
-	ipBoundIF   = 25  // IPPROTO_IP level
-	ipv6BoundIF = 125 // IPPROTO_IPV6 level
+	ipBoundIF = 25 // IPPROTO_IP level
 )
 
 func dial(ep LinkEndpoint) (*net.UDPConn, error) {
