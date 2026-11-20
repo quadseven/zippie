@@ -45,6 +45,8 @@ mode = "aggregate"
 # Packet datapath (#2112). All legs spray to ONE home port; 51902 is the
 # public port redirected to the home transport on 51931.
 datapath = "packet"
+# Enable after upgrading the home relay to accept the weighted probe format.
+# advertise_downstream_weight = false
 transport_port = 51830
 home_port = 51902
 probe_interval_ms = 1000
@@ -118,6 +120,10 @@ standdown_enter_after_s = 20
 # router). eth0 is this platform WAN port name.
 [[paths]]
 name = "ethernet"
+# Optional CAKE floors, in kbit/s, based on end-to-end capacity measurements.
+# Only applied while this path is carrying traffic. Zero leaves the estimator in control.
+# shaper_download_floor_kbit = 0
+# shaper_upload_floor_kbit = 0
 label = "Ethernet WAN"
 tier = 1
 priority = 10

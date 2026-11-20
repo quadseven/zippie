@@ -131,6 +131,9 @@ class ShaperRateController:
         self,
         carrying: dict[str, tuple[float | None, float | None]],
         now: float | None = None,
+        *,
+        download_floor_kbit: int = 0,
+        upload_floor_kbit: int = 0,
     ) -> tuple[float, float] | None:
         now = time.monotonic() if now is None else now
         names = frozenset(carrying)
@@ -146,8 +149,14 @@ class ShaperRateController:
             total_up_bps += est.upload_bps
 
         # kbit, matching sqm's own uci units (and cake's `bandwidth` param).
-        target_down = max(self.min_download_kbit, total_down_bps * self.capacity_fraction / 1000.0)
-        target_up = max(self.min_upload_kbit, total_up_bps * self.capacity_fraction / 1000.0)
+        target_down = max(
+            self.min_download_kbit,
+            download_floor_kbit,
+            total_down_bps * self.capacity_fraction / 1000.0,
+        )
+        target_up = max(
+            self.min_upload_kbit, upload_floor_kbit, total_up_bps * self.capacity_fraction / 1000.0
+        )
 
         if self._last_applied is None or membership_changed:
             self._last_applied = (target_down, target_up)

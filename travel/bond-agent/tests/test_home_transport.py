@@ -263,6 +263,61 @@ def test_home_splits_downstream_packets_across_learned_legs():
         home.close()
 
 
+def test_reported_weights_prefer_the_wired_leg_and_keep_the_other_leg_usable():
+    home, sockets = _fake_home()
+    sources = {3: ("192.0.2.1", 40003), 7: ("192.0.2.1", 40007)}
+    travel = Transport(
+        ("127.0.0.1", 0),
+        advertise_downstream_weight=True,
+        socket_factory=lambda *_: _RecordingSocket(),
+        selector_factory=_FakeSelector,
+    )
+    try:
+        for path_id, weight in ((3, 90), (7, 10)):
+            travel.add_link(
+                LinkEndpoint(path_id, f"leg{path_id}", None, ("192.0.2.2", 51901), weight)
+            )
+            travel._link_rtt[path_id] = 25
+        travel.send_keepalives()
+        for path_id, source in sources.items():
+            probe, _ = travel._socks[path_id].sent[-1]
+            home._on_link_data(probe, path_id=0, addr=source)
+
+        sockets[1].sent.clear()
+        for _ in range(100):
+            assert home.send_payload(bytes(400)) == 1
+        targets = [addr for _data, addr in sockets[1].sent]
+        assert targets.count(sources[3]) == 90
+        assert targets.count(sources[7]) == 10
+
+        travel.set_link_weight(3, 0)
+        travel.send_keepalives()
+        probe, _ = travel._socks[3].sent[-1]
+        home._on_link_data(probe, path_id=0, addr=sources[3])
+        assert sockets[1].sent[-1][1] == sources[3]  # The held path still answers probes.
+        _assert_downstream_targets(home, sockets[1].sent, {sources[7]})
+    finally:
+        travel.close()
+        home.close()
+
+
+def test_default_keepalive_payload_remains_legacy_rtt():
+    travel = Transport(
+        ("127.0.0.1", 0),
+        socket_factory=lambda *_: _RecordingSocket(),
+        selector_factory=_FakeSelector,
+    )
+    try:
+        path_id = 3
+        travel.add_link(LinkEndpoint(path_id, "wired", None, ("192.0.2.2", 51901), 90))
+        travel._link_rtt[path_id] = 25
+        travel.send_keepalives()
+        probe, _ = travel._socks[path_id].sent[-1]
+        assert Frame.unpack(probe).payload == struct.pack("!H", 25)
+    finally:
+        travel.close()
+
+
 def _assert_downstream_targets(home, sent, expected):
     sent.clear()
     for _ in range(40):
