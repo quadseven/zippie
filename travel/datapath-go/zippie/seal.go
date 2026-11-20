@@ -45,7 +45,6 @@ const (
 )
 
 var (
-	ErrNotEncrypted  = errors.New("frame is not encrypted")
 	ErrShortSealed   = errors.New("sealed payload too short")
 	ErrDecryptFailed = errors.New("decrypt failed")
 )

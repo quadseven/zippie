@@ -9,12 +9,12 @@ const (
 	// ModeSingle sends one copy on the heaviest healthy path. Same shape as
 	// weighted-ECMP behaviour; kept so a metered path can be spared.
 	ModeSingle SendMode = iota
-	// ModeSpray sends one copy, path chosen by weighted round-robin. Aggregate
-	// bandwidth, at the cost of occasional reordering.
-	ModeDuplicate
 	// ModeDuplicate sends a copy on EVERY healthy path. Costs bandwidth equal
 	// to the path count and buys immunity to loss on any one of them, which is
 	// what keeps a call up through a 3-second obstruction.
+	ModeDuplicate
+	// ModeSpray sends one copy, path chosen by weighted round-robin. Aggregate
+	// bandwidth, at the cost of occasional reordering.
 	ModeSpray
 )
 

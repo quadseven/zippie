@@ -346,12 +346,6 @@ func (t *Transport) SetLinkHealth(id uint8, healthy bool) {
 	t.mu.Unlock()
 }
 
-func (t *Transport) SetLinkWeight(id uint8, w int) {
-	t.mu.Lock()
-	t.scheduler.SetWeight(id, w)
-	t.mu.Unlock()
-}
-
 // Run starts the local reader and the periodic tick. Blocks until Close.
 // LocalAddr is the loopback socket callers send plaintext to. Needed because
 // a port of 0 means "pick one", and the caller cannot otherwise learn which.
