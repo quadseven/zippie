@@ -266,7 +266,7 @@ def test_the_answer_names_reachable_stale_and_fetched_at_explicitly(router, hub_
     """#17: a consumer used to have to derive freshness by comparing two
     millisecond counts, and had no way at all to learn whether the router had
     ever actually answered - that fact was computed in fetch_router_status and
-    thrown away before it reached anything but Datadog. Named, typed fields
+    thrown away before it reached anything but the health log. Named, typed fields
     now carry both, alongside the numeric ones existing readers already use.
     """
     hostport, reg = hub_at([router.config])

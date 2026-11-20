@@ -89,20 +89,13 @@ spec:
     matchLabels: {app: zippie-home}
   template:
     metadata:
-      # LABELS, NOT ANNOTATIONS. These were annotations, and unified service
-      # tagging only reads pod LABELS - so the agent had no service name for
-      # this pod and fell back to the image, which is why every log line from
-      # it landed as `service:alpine` (quadseven/infra#2265). Nothing errored
-      # and nothing warned; the tags were simply never read. Same shape as
-      # pasto-api and digital-ledger-web, which have always had them as labels.
-      #
       # The Deployment selector is {app: zippie-home} and stays that way -
       # extra template labels do not affect matching, and the selector is
-      # immutable anyway.
+      # immutable anyway. (This template used to also carry tags.* service
+      # labels, read by the retired Datadog agent; #406 removed them -
+      # Datadog is off.)
       labels:
         app: zippie-home
-        tags.datadoghq.com/env: prod
-        tags.datadoghq.com/service: zippie-home
     spec:
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
