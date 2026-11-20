@@ -83,13 +83,11 @@ func NewHome(cfg HomeConfig) (*Transport, error) {
 		return nil, err
 	}
 	// ONE link, bound to the public listen port, roaming to the travel source.
-	// The initial remote is a placeholder the first inbound frame corrects; it
-	// is never used to send before then, because replies only follow inbound.
+	// The first accepted inbound frame supplies the remote for outgoing frames.
 	if err := t.AddLink(LinkEndpoint{
 		PathID: 0,
 		Name:   "wan",
 		Device: cfg.WANDevice,
-		Remote: cfg.Listen,
 		Weight: 100,
 		Listen: cfg.Listen,
 	}); err != nil {

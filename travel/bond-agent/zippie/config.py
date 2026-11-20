@@ -125,23 +125,20 @@ def _lan_endpoints(raw: list) -> list[LanEndpoint]:
     return out
 
 
-def validate_dashboard_tls(port: int | None, cert: str, key: str) -> bool:
+def validate_dashboard_tls(
+    port: int | None, cert: str, key: str, *, client_ca: str = "", device_records: str = ""
+) -> bool:
     """Return whether console TLS is enabled, rejecting partial configuration."""
     parts = (port is not None, bool(cert), bool(key))
     if any(parts) and not all(parts):
         raise ValueError(
             "dashboard_tls_port, dashboard_tls_cert, and dashboard_tls_key must be set together"
         )
+    if bool(client_ca) != bool(device_records):
+        raise ValueError("dashboard_client_ca and dashboard_device_records must be set together")
+    if client_ca and port is None:
+        raise ValueError("dashboard_client_ca requires the HTTPS listener")
     return all(parts)
-
-
-def _dashboard_tls_config(raw: dict[str, Any]) -> tuple[int | None, str, str]:
-    port_raw = raw.get("dashboard_tls_port")
-    cert = str(raw.get("dashboard_tls_cert") or "")
-    key = str(raw.get("dashboard_tls_key") or "")
-    port = int(port_raw) if port_raw is not None else None
-    validate_dashboard_tls(port, cert, key)
-    return port, cert, key
 
 
 def _positive_int(raw: Any, key: str) -> int:
@@ -337,7 +334,19 @@ def parse_config(
         )
 
     agent_raw = data.get("agent") or {}
-    dashboard_tls_port, dashboard_tls_cert, dashboard_tls_key = _dashboard_tls_config(agent_raw)
+    port_raw = agent_raw.get("dashboard_tls_port")
+    dashboard_tls_port = int(port_raw) if port_raw is not None else None
+    dashboard_tls_cert = str(agent_raw.get("dashboard_tls_cert") or "")
+    dashboard_tls_key = str(agent_raw.get("dashboard_tls_key") or "")
+    dashboard_client_ca = str(agent_raw.get("dashboard_client_ca") or "")
+    dashboard_device_records = str(agent_raw.get("dashboard_device_records") or "")
+    validate_dashboard_tls(
+        dashboard_tls_port,
+        dashboard_tls_cert,
+        dashboard_tls_key,
+        client_ca=dashboard_client_ca,
+        device_records=dashboard_device_records,
+    )
 
     return AgentConfig(
         home=home,
@@ -352,6 +361,8 @@ def parse_config(
         dashboard_tls_port=dashboard_tls_port,
         dashboard_tls_cert=dashboard_tls_cert,
         dashboard_tls_key=dashboard_tls_key,
+        dashboard_client_ca=dashboard_client_ca,
+        dashboard_device_records=dashboard_device_records,
         table_base=int(agent_raw.get("table_base", 100)),
         fwmark_base=int(agent_raw.get("fwmark_base", 0x6400)),
         interface_prefix=str(agent_raw.get("interface_prefix", "pb")),

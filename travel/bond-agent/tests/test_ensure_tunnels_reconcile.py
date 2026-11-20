@@ -376,3 +376,34 @@ def test_a_failed_bring_up_downs_only_that_leg_and_skips_its_route(tmp_path, mon
         "a leg whose tunnel never came up still got a route pin"
     )
     assert [u[0] for u in world.ups] == ["pb1"], "the pass stopped at the failure"
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_packet_shaper_runs_only_on_a_real_tunnel_start(tmp_path, monkeypatch, dry_run):
+    world = _World()
+    agent = _agent(tmp_path, monkeypatch, world, datapath="packet", dry_run=dry_run)
+    monkeypatch.setattr(net, "run_or_dry", lambda *args, **kwargs: None)
+    shaped = []
+    monkeypatch.setattr(
+        agent,
+        "_ensure_bond_shaped",
+        lambda: shaped.append(tuple(iface for iface, _, _ in world.ups)),
+    )
+
+    agent.ensure_tunnels()
+    agent.ensure_tunnels()
+
+    expected = [] if dry_run else [PACKET_IFACE]
+    assert [iface for iface, _, _ in world.ups] == expected
+    assert shaped == ([] if dry_run else [(PACKET_IFACE,)])
+
+
+def test_packet_start_failure_does_not_install_the_shaper(tmp_path, monkeypatch):
+    world = _World()
+    world.up_raises[PACKET_IFACE] = net.NetError("bring-up refused")
+    agent = _agent(tmp_path, monkeypatch, world, datapath="packet")
+    monkeypatch.setattr(net, "run_or_dry", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent, "_ensure_bond_shaped", lambda: pytest.fail("shaped a failed tunnel"))
+
+    with pytest.raises(net.NetError, match="bring-up refused"):
+        agent.ensure_tunnels()
