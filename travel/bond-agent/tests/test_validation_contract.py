@@ -49,3 +49,22 @@ def test_validation_contract_lists_ci_checks_in_order():
         "test-cmd: \"uv run --with 'pytest>=8.0' --with tomli --python 3.9 python -m pytest -q"
         in agent_workflow
     )
+
+
+def test_validation_contract_runs_android_unit_tests_for_android_changes():
+    """The CI job `gradle unit tests + debug assemble` has a lane step (#419)."""
+    lines = CONTRACT.read_text(encoding="ascii").splitlines()
+    affected = next(line for line in lines if line.startswith("affected: "))
+    assert "./gradlew --no-daemon testDebugUnitTest" in affected
+    # Same path filter as the workflow, so the lane runs it exactly when CI does.
+    workflow = (ROOT / ".github/workflows/check.android.yml").read_text()
+    assert "- 'companion-android/**'" in workflow
+    assert "companion-android/|" in affected
+    assert r"check\.android\.yml$" in affected
+    # The zero-tests guard CI carries must not be dropped from the lane command.
+    assert "no test result XML produced" in affected
+    assert "reports zero tests" in affected
+    # Documented in the contract header like the other jobs.
+    assert any(
+        line.startswith("# affected: .github/workflows/check.android.yml ::") for line in lines
+    )
