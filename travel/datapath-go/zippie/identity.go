@@ -60,6 +60,9 @@ var (
 type Identity struct {
 	ClientID uint32
 	key      []byte
+	// previousKey is a retired key this identity still ACCEPTS on receive
+	// during a rotation (#389, #13). Never used to sign. Nil in steady state.
+	previousKey []byte
 	// sealer is set only for CLIENT-MODE identities. Nil means this identity
 	// carries payloads that are already ciphertext (the travel router's
 	// WireGuard frames), where a second layer buys nothing. See seal.go.
@@ -70,6 +73,18 @@ func NewIdentity(clientID uint32, key []byte) *Identity {
 	k := make([]byte, len(key))
 	copy(k, key)
 	return &Identity{ClientID: clientID, key: k}
+}
+
+// WithPreviousKey returns the identity after setting a retired key that
+// UnpackAs still accepts. Signing always uses the current key only. An empty
+// key clears the overlap.
+func (i *Identity) WithPreviousKey(key []byte) *Identity {
+	if len(key) == 0 {
+		i.previousKey = nil
+		return i
+	}
+	i.previousKey = append([]byte(nil), key...)
+	return i
 }
 
 // NewSealedIdentity is an identity whose payloads are ENCRYPTED as well as
@@ -194,7 +209,13 @@ func UnpackAs(raw []byte, id *Identity) (Frame, error) {
 	want := computeMAC(id.key, signed[:], payload)
 	// Constant time: a byte-at-a-time comparison leaks the MAC one byte per
 	// forgery attempt, which is a practical attack on an open UDP port.
-	if !hmac.Equal(want[:macLen], raw[HeaderLenV3-macLen:HeaderLenV3]) {
+	got := raw[HeaderLenV3-macLen : HeaderLenV3]
+	ok := hmac.Equal(want[:macLen], got)
+	if !ok && id.previousKey != nil {
+		old := computeMAC(id.previousKey, signed[:], payload)
+		ok = hmac.Equal(old[:macLen], got)
+	}
+	if !ok {
 		return Frame{}, ErrUnauthenticated
 	}
 
