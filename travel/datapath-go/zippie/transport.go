@@ -485,6 +485,13 @@ func (t *Transport) readLink(l *link) {
 		t.Stats.Received.Add(1)
 
 		t.mu.Lock()
+		// A frame that was mid-flight when RemoveLink (or a replacing
+		// AddLink) ran belongs to a link that is no longer registered. Do not
+		// let it re-create linkRX or mark a removed path healthy (#389).
+		if t.links[l.ep.PathID] != l {
+			t.mu.Unlock()
+			continue
+		}
 
 		// NOTHING BELOW THIS POINT IS AUTHENTICATED AT THE OFF AND OBSERVE
 		// RUNGS, so be careful what a stranger's packet is allowed to do. At
