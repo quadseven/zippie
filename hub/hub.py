@@ -1714,6 +1714,22 @@ def serve_primary(
     # not collect series, so there is no snapshot to answer from. `?live=1` on
     # /api/status lands here too, which is the deliberate escape hatch for a
     # caller that needs a read taken now rather than one that says how old it is.
+    # A CONFIG ERROR ANSWERS AS ONE, NOT AS A DEAD ROUTER (#392). poll_routers
+    # leaves an unusable status_url unexpanded, so dialling it would report
+    # "router not answering" for a literal template. Checked before the rate
+    # limit: nothing is dialled, so nothing is spent.
+    config_error = router_config_error(primary.get("status_url", ""))
+    if config_error:
+        return handler._send(
+            500,
+            json.dumps(
+                {
+                    "error": "hub is not configured to reach this router",
+                    "config_error": config_error,
+                }
+            ).encode(),
+            "application/json",
+        )
     if not report_authorised(handler):
         wait = reg.live_wait_s()
         if wait > 0:

@@ -8,6 +8,7 @@ before it reaches the router.
 
 from __future__ import annotations
 
+import json
 import time
 
 import pytest
@@ -70,3 +71,16 @@ def test_the_cached_status_is_never_limited(router, hub_at):  # noqa: F811
 
     assert codes == [200] * 4
     assert router.hits == []
+
+
+@pytest.mark.parametrize("path", ["/api/series", "/api/status?live=1"])
+def test_the_live_proxy_answers_with_the_config_error(hub_at, path):  # noqa: F811
+    bad = {"name": "primary", "status_url": "http://192.0.2.30:8787/api/status"}
+    hostport, _ = hub_at([bad])
+
+    code, _, body = _get(hostport, path)
+
+    assert code == 500
+    payload = json.loads(body)
+    assert payload["error"] == "hub is not configured to reach this router"
+    assert "reserved for documentation" in payload["config_error"]
