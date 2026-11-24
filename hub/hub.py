@@ -37,6 +37,8 @@ see THE OUTSIDE OBSERVER below.
 from __future__ import annotations
 
 import errno
+import gzip
+import hashlib
 import http.client
 import json
 import logging
@@ -51,6 +53,8 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import zlib
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, unquote, urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1341,6 +1345,8 @@ def fetch_router_status(name: str, url: str) -> tuple[dict | None, bool]:
     probed for it: the poll that already happens carries the answer.
     """
     try:
+        # Request gzip so the status payload crosses the tailnet compressed.
+        req = urllib.request.Request(url, headers={"Accept-Encoding": "gzip"})  # noqa: S310
         # noqa justified, not waved through: `url` is not attacker-reachable.
         # It is `status_url` from the hub's own config file - a ConfigMap the
         # operator writes - so the scheme is fixed at deploy time and no
@@ -1348,8 +1354,16 @@ def fetch_router_status(name: str, url: str) -> tuple[dict | None, bool]:
         # because #272 moved this call into its own function, which makes it a
         # changed line to the ratchet; the identical call has been on main
         # unflagged since the poller was written.
-        with urllib.request.urlopen(url, timeout=ROUTER_POLL_TIMEOUT_S) as resp:  # noqa: S310
-            status = json.load(resp)
+        with urllib.request.urlopen(req, timeout=ROUTER_POLL_TIMEOUT_S) as resp:  # noqa: S310
+            encoding = (resp.headers.get("Content-Encoding") or "").strip().lower()
+            if encoding == "gzip":
+                try:
+                    with gzip.GzipFile(fileobj=resp) as gz:
+                        status = json.load(gz)
+                except (gzip.BadGzipFile, EOFError, zlib.error) as exc:
+                    raise ValueError(f"corrupt gzip status body: {exc}") from exc
+            else:
+                status = json.load(resp)
         if not isinstance(status, dict):
             # A JSON array, string or number is not a status document. Both
             # readers of this value call .get() on it, so storing one would
@@ -1360,6 +1374,43 @@ def fetch_router_status(name: str, url: str) -> tuple[dict | None, bool]:
     except (urllib.error.URLError, OSError, ValueError) as exc:
         log.debug("router %s: %s", name, exc)
         return None, host_answered(exc)
+
+
+def _poll_one_router(
+    reg: Registry,
+    router: dict,
+    error: str | None,
+    metrics: Metrics,
+) -> None:
+    name = router["name"]
+    if error is not None:
+        reg.note_router(name, None, reachable=False, config_error=error)
+        metrics.observe_router(name, None, False, config_error=True)
+        return
+    status, reachable = fetch_router_status(name, router["status_url"])
+    # A failed fetch is recorded as unreachable rather than left at its
+    # last good value. See the module docstring.
+    reg.note_router(name, status, reachable=reachable)
+    metrics.observe_router(name, status, reachable)
+
+
+def _run_poll_cycle(
+    reg: Registry,
+    routers: list[dict],
+    config_errors: dict[str, str | None],
+    metrics: Metrics,
+    pool: ThreadPoolExecutor | None,
+) -> None:
+    if pool is None:
+        for r in routers:
+            _poll_one_router(reg, r, config_errors[r["name"]], metrics)
+        return
+    futures = [
+        pool.submit(_poll_one_router, reg, r, config_errors[r["name"]], metrics)
+        for r in routers
+    ]
+    for fut in futures:
+        fut.result()
 
 
 def poll_routers(
@@ -1410,19 +1461,21 @@ def poll_routers(
                 r["name"],
                 error,
             )
-    while not stop.is_set():
-        for r in routers:
-            error = config_errors[r["name"]]
-            if error is not None:
-                reg.note_router(r["name"], None, reachable=False, config_error=error)
-                metrics.observe_router(r["name"], None, False, config_error=True)
-                continue
-            status, reachable = fetch_router_status(r["name"], r["status_url"])
-            # A failed fetch is recorded as unreachable rather than left at its
-            # last good value. See the module docstring.
-            reg.note_router(r["name"], status, reachable=reachable)
-            metrics.observe_router(r["name"], status, reachable)
-        stop.wait(POLL_INTERVAL_S)
+    pool = (
+        ThreadPoolExecutor(
+            max_workers=min(len(routers), 8),
+            thread_name_prefix="zippie-poll",
+        )
+        if len(routers) > 1
+        else None
+    )
+    try:
+        while not stop.is_set():
+            _run_poll_cycle(reg, routers, config_errors, metrics, pool)
+            stop.wait(POLL_INTERVAL_S)
+    finally:
+        if pool is not None:
+            pool.shutdown(wait=True)
 
 
 def status_max_age_s(router_count: int) -> float:
@@ -1676,6 +1729,96 @@ def proxy_to_router(handler: BaseHTTPRequestHandler, primary: dict, path: str) -
 # state that its name does not admit to.
 
 
+GZIP_MIN_BYTES = 1024
+_STATIC_CACHE_MAX = 64
+_STATIC_CACHE_LOCK = threading.Lock()
+_STATIC_CACHE: dict[str, tuple[tuple[int, int], bytes, bytes | None, str]] = {}
+
+
+def _accepts_gzip(header: str | None) -> bool:
+    return bool(header and "gzip" in header.lower())
+
+
+def encode_body(raw: bytes, accept_encoding: str | None) -> tuple[bytes, str | None]:
+    """Gzip `raw` when the client accepts it and the body is large enough."""
+    if not _accepts_gzip(accept_encoding) or len(raw) < GZIP_MIN_BYTES:
+        return raw, None
+    return gzip.compress(raw, mtime=0), "gzip"
+
+
+def _etag_matches(header: str | None, etag: str) -> bool:
+    """True when an If-None-Match header matches `etag`."""
+    if not header:
+        return False
+    target = etag.strip()
+    for part in header.split(","):
+        tag = part.strip()
+        if tag == "*":
+            return True
+        if tag.startswith("W/"):
+            tag = tag[2:].strip()
+        if tag == target:
+            return True
+    return False
+
+
+def _load_static(name: str) -> tuple[str, bytes, bytes | None, str] | None:
+    """Resolve `name` under STATIC, then read, hash and pre-compress it.
+
+    Returns (resolved path, raw, gzip bytes or None, etag), or None when the
+    name does not resolve to a regular file inside STATIC.
+
+    THE CONTAINMENT CHECK LIVES HERE, right before the stat and the read, and
+    not in the caller. The reads are only safe on the path that was checked,
+    and CodeQL (py/path-injection) only accepts a realpath followed by a
+    startswith on the same value as a guard. A check in serve_static that hands
+    a Path down here leaves the reads looking unguarded. The comparison is
+    against root + os.sep, so "/app-evil" does not pass for "/app".
+
+    Cached by (mtime_ns, size), so a hit costs one stat and no read.
+    """
+    root = os.path.realpath(STATIC)
+    full = os.path.realpath(os.path.join(root, name))
+    if not full.startswith(root + os.sep):
+        return None
+    # isfile() stats the path, and a name longer than NAME_MAX makes that
+    # stat fail. isfile() swallows the OSError and answers False, so a long
+    # GET gets a 404 rather than an exception out of the handler.
+    if not os.path.isfile(full):
+        return None
+    st = os.stat(full)
+    key = (st.st_mtime_ns, st.st_size)
+    with _STATIC_CACHE_LOCK:
+        cached = _STATIC_CACHE.get(full)
+        if cached is not None and cached[0] == key:
+            return full, cached[1], cached[2], cached[3]
+    raw = Path(full).read_bytes()
+    etag = f'"{hashlib.sha256(raw).hexdigest()[:16]}"'
+    gz, enc = encode_body(raw, "gzip")
+    gz_bytes = gz if enc == "gzip" else None
+    with _STATIC_CACHE_LOCK:
+        if len(_STATIC_CACHE) >= _STATIC_CACHE_MAX:
+            _STATIC_CACHE.clear()
+        _STATIC_CACHE[full] = (key, raw, gz_bytes, etag)
+    return full, raw, gz_bytes, etag
+
+
+def send_encoded(
+    handler: BaseHTTPRequestHandler,
+    code: int,
+    raw: bytes,
+    ctype: str,
+    extra: dict[str, str] | None = None,
+) -> None:
+    """Send `raw`, gzipping when the client accepts it and the body is big enough."""
+    body, encoding = encode_body(raw, handler.headers.get("Accept-Encoding"))
+    headers = dict(extra) if extra else {}
+    if encoding:
+        headers["Content-Encoding"] = encoding
+        headers["Vary"] = "Accept-Encoding"
+    handler._send(code, body, ctype, headers or None)
+
+
 def serve_primary(
     handler: BaseHTTPRequestHandler, reg: Registry, routers: list[dict], path: str
 ) -> None:
@@ -1709,7 +1852,7 @@ def serve_primary(
     # component named in the error was not the component that failed.
     if path == "/api/status" and not wants_live_read(handler.path):
         code, body = cached_status(reg, primary["name"], status_max_age_s(len(routers)))
-        return handler._send(code, body, "application/json")
+        return send_encoded(handler, code, body, "application/json")
     # /api/series IS STILL PROXIED, and that is not an oversight: the poller does
     # not collect series, so there is no snapshot to answer from. `?live=1` on
     # /api/status lands here too, which is the deliberate escape hatch for a
@@ -1729,15 +1872,15 @@ def serve_primary(
 def serve_static(handler: BaseHTTPRequestHandler, path: str) -> None:
     """The console's own files. Everything not claimed by an API route.
 
-    CONFINED WITH is_relative_to, NOT startswith. A prefix comparison is the
-    classic broken form of this check: "/app-evil" startswith "/app" is true, so
-    a sibling directory escapes it. Flagged by review on the first version of
-    this file.
+    CONFINED IN _load_static, against root + os.sep. A bare prefix comparison
+    is the classic broken form of this check: "/app-evil" startswith "/app" is
+    true, so a sibling directory escapes it. Flagged by review on the first
+    version of this file; the separator suffix closes it.
 
     unquote first, or %2e%2e%2f walks straight past a check that only sees the
-    encoded form. resolve() then collapses any remaining traversal before the
-    comparison, so the decision is made on the real path rather than on the
-    string that was asked for.
+    encoded form. realpath() then collapses any remaining traversal and every
+    symlink before the comparison, so the decision is made on the real path
+    rather than on the string that was asked for.
     """
     name = "index.html" if path in ("/", "") else path.lstrip("/")
     # Block TESTKEY APKs. Decoded BEFORE the extension check, or ".ap%6b"
@@ -1745,27 +1888,30 @@ def serve_static(handler: BaseHTTPRequestHandler, path: str) -> None:
     decoded_name = unquote(name).lower()
     if decoded_name.endswith(".apk") and "testkey" in decoded_name:
         return handler._send(403, b"TESTKEY builds are not servable", "text/plain")
-    root = STATIC.resolve()
     try:
-        target = (root / unquote(name)).resolve()
-        # is_file() IS INSIDE THE try, and that is not tidiness. It stats the
-        # path, so a filename longer than NAME_MAX raises ENAMETOOLONG - and
-        # with the call outside, that escaped the handler and the caller got a
-        # connection reset instead of a 404. Any client could do it with one long
-        # GET, against the process whose whole job is to keep answering. Found by
-        # the APM tests added in quadseven/infra#2265, which asked for a 400-byte
-        # path to check resource-name truncation.
-        usable = target.is_relative_to(root) and target.is_file()
+        loaded = _load_static(unquote(name))
     except (OSError, ValueError):
+        # ValueError: an embedded NUL byte. OSError: the file vanished or
+        # turned unreadable between the isfile() check and the read.
         return handler._send(404, b"not found", "text/plain")
-    if not usable:
+    if loaded is None:
         return handler._send(404, b"not found", "text/plain")
+    full, raw, gz_bytes, etag = loaded
     ctype = {
         "html": "text/html; charset=utf-8",
         "css": "text/css",
         "js": "text/javascript",
-    }.get(target.suffix.lstrip("."), "text/plain")
-    return handler._send(200, target.read_bytes(), ctype)
+    }.get(os.path.splitext(full)[1].lstrip("."), "text/plain")
+    req_headers = getattr(handler, "headers", None)
+    if req_headers is None:
+        return handler._send(200, raw, ctype)
+    if _etag_matches(req_headers.get("If-None-Match"), etag):
+        return handler._send(304, b"", "", {"ETag": etag, "Vary": "Accept-Encoding"})
+    extra = {"ETag": etag, "Vary": "Accept-Encoding"}
+    if gz_bytes is not None and _accepts_gzip(req_headers.get("Accept-Encoding")):
+        extra["Content-Encoding"] = "gzip"
+        return handler._send(200, gz_bytes, ctype, extra)
+    return handler._send(200, raw, ctype, extra)
 
 
 def report_authorised(handler: BaseHTTPRequestHandler) -> bool:
@@ -1838,12 +1984,15 @@ def make_handler(reg: Registry, routers: list[dict], tracer: Tracer | None = Non
             # receives still reports the status the hub chose.
             self._status = code
             self.send_response(code)
-            self.send_header("Content-Type", ctype)
+            if ctype:
+                self.send_header("Content-Type", ctype)
             for key, value in extra.items():
                 self.send_header(key, value)
-            self.send_header("Content-Length", str(len(body)))
+            if code != 304:
+                self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            if code != 304 and body:
+                self.wfile.write(body)
 
         def do_GET(self):  # noqa: N802
             traced_request(tracer, self, "GET", self._handle_get)
@@ -1860,7 +2009,7 @@ def make_handler(reg: Registry, routers: list[dict], tracer: Tracer | None = Non
             path = self.path.split("?", 1)[0]
             if path == "/api/nodes":
                 body = json.dumps({"nodes": reg.snapshot()}).encode()
-                return self._send(200, body, "application/json")
+                return send_encoded(self, 200, body, "application/json")
             if path in ("/api/status", "/api/series"):
                 return serve_primary(self, reg, routers, path)
             if path in ("/livez", "/readyz"):
