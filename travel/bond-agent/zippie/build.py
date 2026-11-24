@@ -21,9 +21,15 @@ Two questions, deliberately separated:
   False means someone changed the running copy by hand since.
 
 `/etc/zippie/build.json` is written by `scripts/deploy-openwrt.sh` and is the
-only part a deploy can lie about; the fingerprint is recomputed from the files
-every time it is asked for, so a stale or forged stamp shows up as a mismatch
-rather than as agreement.
+only part a deploy can lie about; the fingerprint is computed from the files,
+so a stale or forged stamp shows up as a mismatch rather than as agreement.
+
+The digest is cached, keyed on the sorted `(name, st_mtime_ns, st_size)` of
+every module in the package. Each call stats the files and rehashes them only
+when that signature changes, so adding, removing, rewriting or resizing a module
+is seen on the next call. An edit that keeps both the size and the mtime, such as
+one followed by `touch -r` or a copy made with `cp -p`, leaves the signature
+unchanged and is not seen until the process restarts and the cache starts empty.
 """
 
 from __future__ import annotations

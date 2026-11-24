@@ -368,11 +368,6 @@ def _dashboard_asset() -> tuple[bytes, bytes | None, str]:
     return raw, gz_bytes, etag
 
 
-def _dashboard_html() -> str:
-    raw, _, _ = _dashboard_asset()
-    return raw.decode("utf-8")
-
-
 class ConsoleHandler(BaseHTTPRequestHandler):
     """The console's routes. make_handler binds a seam to a subclass of it."""
 

@@ -1732,7 +1732,7 @@ def proxy_to_router(handler: BaseHTTPRequestHandler, primary: dict, path: str) -
 GZIP_MIN_BYTES = 1024
 _STATIC_CACHE_MAX = 64
 _STATIC_CACHE_LOCK = threading.Lock()
-_STATIC_CACHE: dict[Path, tuple[tuple[int, int], bytes, bytes | None, str]] = {}
+_STATIC_CACHE: dict[str, tuple[tuple[int, int], bytes, bytes | None, str]] = {}
 
 
 def _accepts_gzip(header: str | None) -> bool:
@@ -1762,23 +1762,45 @@ def _etag_matches(header: str | None, etag: str) -> bool:
     return False
 
 
-def _load_static(target: Path) -> tuple[bytes, bytes | None, str]:
-    """Read, hash, and optionally pre-compress a static file, keyed by stat."""
-    st = target.stat()
+def _load_static(name: str) -> tuple[str, bytes, bytes | None, str] | None:
+    """Resolve `name` under STATIC, then read, hash and pre-compress it.
+
+    Returns (resolved path, raw, gzip bytes or None, etag), or None when the
+    name does not resolve to a regular file inside STATIC.
+
+    THE CONTAINMENT CHECK LIVES HERE, right before the stat and the read, and
+    not in the caller. The reads are only safe on the path that was checked,
+    and CodeQL (py/path-injection) only accepts a realpath followed by a
+    startswith on the same value as a guard. A check in serve_static that hands
+    a Path down here leaves the reads looking unguarded. The comparison is
+    against root + os.sep, so "/app-evil" does not pass for "/app".
+
+    Cached by (mtime_ns, size), so a hit costs one stat and no read.
+    """
+    root = os.path.realpath(STATIC)
+    full = os.path.realpath(os.path.join(root, name))
+    if not full.startswith(root + os.sep):
+        return None
+    # isfile() stats the path, and a name longer than NAME_MAX makes that
+    # stat fail. isfile() swallows the OSError and answers False, so a long
+    # GET gets a 404 rather than an exception out of the handler.
+    if not os.path.isfile(full):
+        return None
+    st = os.stat(full)
     key = (st.st_mtime_ns, st.st_size)
     with _STATIC_CACHE_LOCK:
-        cached = _STATIC_CACHE.get(target)
+        cached = _STATIC_CACHE.get(full)
         if cached is not None and cached[0] == key:
-            return cached[1], cached[2], cached[3]
-    raw = target.read_bytes()
+            return full, cached[1], cached[2], cached[3]
+    raw = Path(full).read_bytes()
     etag = f'"{hashlib.sha256(raw).hexdigest()[:16]}"'
     gz, enc = encode_body(raw, "gzip")
     gz_bytes = gz if enc == "gzip" else None
     with _STATIC_CACHE_LOCK:
         if len(_STATIC_CACHE) >= _STATIC_CACHE_MAX:
             _STATIC_CACHE.clear()
-        _STATIC_CACHE[target] = (key, raw, gz_bytes, etag)
-    return raw, gz_bytes, etag
+        _STATIC_CACHE[full] = (key, raw, gz_bytes, etag)
+    return full, raw, gz_bytes, etag
 
 
 def send_encoded(
@@ -1850,15 +1872,15 @@ def serve_primary(
 def serve_static(handler: BaseHTTPRequestHandler, path: str) -> None:
     """The console's own files. Everything not claimed by an API route.
 
-    CONFINED WITH is_relative_to, NOT startswith. A prefix comparison is the
-    classic broken form of this check: "/app-evil" startswith "/app" is true, so
-    a sibling directory escapes it. Flagged by review on the first version of
-    this file.
+    CONFINED IN _load_static, against root + os.sep. A bare prefix comparison
+    is the classic broken form of this check: "/app-evil" startswith "/app" is
+    true, so a sibling directory escapes it. Flagged by review on the first
+    version of this file; the separator suffix closes it.
 
     unquote first, or %2e%2e%2f walks straight past a check that only sees the
-    encoded form. resolve() then collapses any remaining traversal before the
-    comparison, so the decision is made on the real path rather than on the
-    string that was asked for.
+    encoded form. realpath() then collapses any remaining traversal and every
+    symlink before the comparison, so the decision is made on the real path
+    rather than on the string that was asked for.
     """
     name = "index.html" if path in ("/", "") else path.lstrip("/")
     # Block TESTKEY APKs. Decoded BEFORE the extension check, or ".ap%6b"
@@ -1866,26 +1888,20 @@ def serve_static(handler: BaseHTTPRequestHandler, path: str) -> None:
     decoded_name = unquote(name).lower()
     if decoded_name.endswith(".apk") and "testkey" in decoded_name:
         return handler._send(403, b"TESTKEY builds are not servable", "text/plain")
-    root = STATIC.resolve()
     try:
-        target = (root / unquote(name)).resolve()
-        # is_file() IS INSIDE THE try, and that is not tidiness. It stats the
-        # path, so a filename longer than NAME_MAX raises ENAMETOOLONG - and
-        # with the call outside, that escaped the handler and the caller got a
-        # connection reset instead of a 404. Any client could do it with one long
-        # GET, against the process whose whole job is to keep answering. Found by
-        # the APM tests added in quadseven/infra#2265, which asked for a 400-byte
-        # path to check resource-name truncation.
-        if not (target.is_relative_to(root) and target.is_file()):
-            return handler._send(404, b"not found", "text/plain")
-        raw, gz_bytes, etag = _load_static(target)
+        loaded = _load_static(unquote(name))
     except (OSError, ValueError):
+        # ValueError: an embedded NUL byte. OSError: the file vanished or
+        # turned unreadable between the isfile() check and the read.
         return handler._send(404, b"not found", "text/plain")
+    if loaded is None:
+        return handler._send(404, b"not found", "text/plain")
+    full, raw, gz_bytes, etag = loaded
     ctype = {
         "html": "text/html; charset=utf-8",
         "css": "text/css",
         "js": "text/javascript",
-    }.get(target.suffix.lstrip("."), "text/plain")
+    }.get(os.path.splitext(full)[1].lstrip("."), "text/plain")
     req_headers = getattr(handler, "headers", None)
     if req_headers is None:
         return handler._send(200, raw, ctype)
