@@ -37,6 +37,8 @@ see THE OUTSIDE OBSERVER below.
 from __future__ import annotations
 
 import errno
+import gzip
+import hashlib
 import http.client
 import json
 import logging
@@ -51,6 +53,8 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import zlib
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, unquote, urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1341,6 +1345,8 @@ def fetch_router_status(name: str, url: str) -> tuple[dict | None, bool]:
     probed for it: the poll that already happens carries the answer.
     """
     try:
+        # Request gzip so the status payload crosses the tailnet compressed.
+        req = urllib.request.Request(url, headers={"Accept-Encoding": "gzip"})  # noqa: S310
         # noqa justified, not waved through: `url` is not attacker-reachable.
         # It is `status_url` from the hub's own config file - a ConfigMap the
         # operator writes - so the scheme is fixed at deploy time and no
@@ -1348,8 +1354,16 @@ def fetch_router_status(name: str, url: str) -> tuple[dict | None, bool]:
         # because #272 moved this call into its own function, which makes it a
         # changed line to the ratchet; the identical call has been on main
         # unflagged since the poller was written.
-        with urllib.request.urlopen(url, timeout=ROUTER_POLL_TIMEOUT_S) as resp:  # noqa: S310
-            status = json.load(resp)
+        with urllib.request.urlopen(req, timeout=ROUTER_POLL_TIMEOUT_S) as resp:  # noqa: S310
+            encoding = (resp.headers.get("Content-Encoding") or "").strip().lower()
+            if encoding == "gzip":
+                try:
+                    with gzip.GzipFile(fileobj=resp) as gz:
+                        status = json.load(gz)
+                except (gzip.BadGzipFile, EOFError, zlib.error) as exc:
+                    raise ValueError(f"corrupt gzip status body: {exc}") from exc
+            else:
+                status = json.load(resp)
         if not isinstance(status, dict):
             # A JSON array, string or number is not a status document. Both
             # readers of this value call .get() on it, so storing one would
@@ -1360,6 +1374,43 @@ def fetch_router_status(name: str, url: str) -> tuple[dict | None, bool]:
     except (urllib.error.URLError, OSError, ValueError) as exc:
         log.debug("router %s: %s", name, exc)
         return None, host_answered(exc)
+
+
+def _poll_one_router(
+    reg: Registry,
+    router: dict,
+    error: str | None,
+    metrics: Metrics,
+) -> None:
+    name = router["name"]
+    if error is not None:
+        reg.note_router(name, None, reachable=False, config_error=error)
+        metrics.observe_router(name, None, False, config_error=True)
+        return
+    status, reachable = fetch_router_status(name, router["status_url"])
+    # A failed fetch is recorded as unreachable rather than left at its
+    # last good value. See the module docstring.
+    reg.note_router(name, status, reachable=reachable)
+    metrics.observe_router(name, status, reachable)
+
+
+def _run_poll_cycle(
+    reg: Registry,
+    routers: list[dict],
+    config_errors: dict[str, str | None],
+    metrics: Metrics,
+    pool: ThreadPoolExecutor | None,
+) -> None:
+    if pool is None:
+        for r in routers:
+            _poll_one_router(reg, r, config_errors[r["name"]], metrics)
+        return
+    futures = [
+        pool.submit(_poll_one_router, reg, r, config_errors[r["name"]], metrics)
+        for r in routers
+    ]
+    for fut in futures:
+        fut.result()
 
 
 def poll_routers(
@@ -1410,19 +1461,21 @@ def poll_routers(
                 r["name"],
                 error,
             )
-    while not stop.is_set():
-        for r in routers:
-            error = config_errors[r["name"]]
-            if error is not None:
-                reg.note_router(r["name"], None, reachable=False, config_error=error)
-                metrics.observe_router(r["name"], None, False, config_error=True)
-                continue
-            status, reachable = fetch_router_status(r["name"], r["status_url"])
-            # A failed fetch is recorded as unreachable rather than left at its
-            # last good value. See the module docstring.
-            reg.note_router(r["name"], status, reachable=reachable)
-            metrics.observe_router(r["name"], status, reachable)
-        stop.wait(POLL_INTERVAL_S)
+    pool = (
+        ThreadPoolExecutor(
+            max_workers=min(len(routers), 8),
+            thread_name_prefix="zippie-poll",
+        )
+        if len(routers) > 1
+        else None
+    )
+    try:
+        while not stop.is_set():
+            _run_poll_cycle(reg, routers, config_errors, metrics, pool)
+            stop.wait(POLL_INTERVAL_S)
+    finally:
+        if pool is not None:
+            pool.shutdown(wait=True)
 
 
 def status_max_age_s(router_count: int) -> float:
@@ -1676,6 +1729,74 @@ def proxy_to_router(handler: BaseHTTPRequestHandler, primary: dict, path: str) -
 # state that its name does not admit to.
 
 
+GZIP_MIN_BYTES = 1024
+_STATIC_CACHE_MAX = 64
+_STATIC_CACHE_LOCK = threading.Lock()
+_STATIC_CACHE: dict[Path, tuple[tuple[int, int], bytes, bytes | None, str]] = {}
+
+
+def _accepts_gzip(header: str | None) -> bool:
+    return bool(header and "gzip" in header.lower())
+
+
+def encode_body(raw: bytes, accept_encoding: str | None) -> tuple[bytes, str | None]:
+    """Gzip `raw` when the client accepts it and the body is large enough."""
+    if not _accepts_gzip(accept_encoding) or len(raw) < GZIP_MIN_BYTES:
+        return raw, None
+    return gzip.compress(raw, mtime=0), "gzip"
+
+
+def _etag_matches(header: str | None, etag: str) -> bool:
+    """True when an If-None-Match header matches `etag`."""
+    if not header:
+        return False
+    target = etag.strip()
+    for part in header.split(","):
+        tag = part.strip()
+        if tag == "*":
+            return True
+        if tag.startswith("W/"):
+            tag = tag[2:].strip()
+        if tag == target:
+            return True
+    return False
+
+
+def _load_static(target: Path) -> tuple[bytes, bytes | None, str]:
+    """Read, hash, and optionally pre-compress a static file, keyed by stat."""
+    st = target.stat()
+    key = (st.st_mtime_ns, st.st_size)
+    with _STATIC_CACHE_LOCK:
+        cached = _STATIC_CACHE.get(target)
+        if cached is not None and cached[0] == key:
+            return cached[1], cached[2], cached[3]
+    raw = target.read_bytes()
+    etag = f'"{hashlib.sha256(raw).hexdigest()[:16]}"'
+    gz, enc = encode_body(raw, "gzip")
+    gz_bytes = gz if enc == "gzip" else None
+    with _STATIC_CACHE_LOCK:
+        if len(_STATIC_CACHE) >= _STATIC_CACHE_MAX:
+            _STATIC_CACHE.clear()
+        _STATIC_CACHE[target] = (key, raw, gz_bytes, etag)
+    return raw, gz_bytes, etag
+
+
+def send_encoded(
+    handler: BaseHTTPRequestHandler,
+    code: int,
+    raw: bytes,
+    ctype: str,
+    extra: dict[str, str] | None = None,
+) -> None:
+    """Send `raw`, gzipping when the client accepts it and the body is big enough."""
+    body, encoding = encode_body(raw, handler.headers.get("Accept-Encoding"))
+    headers = dict(extra) if extra else {}
+    if encoding:
+        headers["Content-Encoding"] = encoding
+        headers["Vary"] = "Accept-Encoding"
+    handler._send(code, body, ctype, headers or None)
+
+
 def serve_primary(
     handler: BaseHTTPRequestHandler, reg: Registry, routers: list[dict], path: str
 ) -> None:
@@ -1709,7 +1830,7 @@ def serve_primary(
     # component named in the error was not the component that failed.
     if path == "/api/status" and not wants_live_read(handler.path):
         code, body = cached_status(reg, primary["name"], status_max_age_s(len(routers)))
-        return handler._send(code, body, "application/json")
+        return send_encoded(handler, code, body, "application/json")
     # /api/series IS STILL PROXIED, and that is not an oversight: the poller does
     # not collect series, so there is no snapshot to answer from. `?live=1` on
     # /api/status lands here too, which is the deliberate escape hatch for a
@@ -1755,17 +1876,26 @@ def serve_static(handler: BaseHTTPRequestHandler, path: str) -> None:
         # GET, against the process whose whole job is to keep answering. Found by
         # the APM tests added in quadseven/infra#2265, which asked for a 400-byte
         # path to check resource-name truncation.
-        usable = target.is_relative_to(root) and target.is_file()
+        if not (target.is_relative_to(root) and target.is_file()):
+            return handler._send(404, b"not found", "text/plain")
+        raw, gz_bytes, etag = _load_static(target)
     except (OSError, ValueError):
-        return handler._send(404, b"not found", "text/plain")
-    if not usable:
         return handler._send(404, b"not found", "text/plain")
     ctype = {
         "html": "text/html; charset=utf-8",
         "css": "text/css",
         "js": "text/javascript",
     }.get(target.suffix.lstrip("."), "text/plain")
-    return handler._send(200, target.read_bytes(), ctype)
+    req_headers = getattr(handler, "headers", None)
+    if req_headers is None:
+        return handler._send(200, raw, ctype)
+    if _etag_matches(req_headers.get("If-None-Match"), etag):
+        return handler._send(304, b"", "", {"ETag": etag, "Vary": "Accept-Encoding"})
+    extra = {"ETag": etag, "Vary": "Accept-Encoding"}
+    if gz_bytes is not None and _accepts_gzip(req_headers.get("Accept-Encoding")):
+        extra["Content-Encoding"] = "gzip"
+        return handler._send(200, gz_bytes, ctype, extra)
+    return handler._send(200, raw, ctype, extra)
 
 
 def report_authorised(handler: BaseHTTPRequestHandler) -> bool:
@@ -1838,12 +1968,15 @@ def make_handler(reg: Registry, routers: list[dict], tracer: Tracer | None = Non
             # receives still reports the status the hub chose.
             self._status = code
             self.send_response(code)
-            self.send_header("Content-Type", ctype)
+            if ctype:
+                self.send_header("Content-Type", ctype)
             for key, value in extra.items():
                 self.send_header(key, value)
-            self.send_header("Content-Length", str(len(body)))
+            if code != 304:
+                self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            if code != 304 and body:
+                self.wfile.write(body)
 
         def do_GET(self):  # noqa: N802
             traced_request(tracer, self, "GET", self._handle_get)
@@ -1860,7 +1993,7 @@ def make_handler(reg: Registry, routers: list[dict], tracer: Tracer | None = Non
             path = self.path.split("?", 1)[0]
             if path == "/api/nodes":
                 body = json.dumps({"nodes": reg.snapshot()}).encode()
-                return self._send(200, body, "application/json")
+                return send_encoded(self, 200, body, "application/json")
             if path in ("/api/status", "/api/series"):
                 return serve_primary(self, reg, routers, path)
             if path in ("/livez", "/readyz"):

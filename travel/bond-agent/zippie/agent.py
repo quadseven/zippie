@@ -2997,13 +2997,14 @@ class BondAgent:
         The transport's stats are read ONCE and shared by the `transport` and
         `economy` blocks, so the two cannot disagree within one document.
         """
+        build_data = build.build_info(config_sha256=self.config_meta.get("sha256"))
         with self._lock:
             transport = getattr(self, "_transport", None)
             stats = transport.stats_dict() if transport is not None else None
             totals = self._link_totals()
             return status_doc.StatusSnapshot(
                 version=__version__,
-                build=build.build_info(config_sha256=self.config_meta.get("sha256")),
+                build=build_data,
                 mode=self.config.policy.mode.value,
                 datapath=self.config.policy.datapath.value,
                 transport_stats=stats,

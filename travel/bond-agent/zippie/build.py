@@ -31,6 +31,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,11 @@ DEPLOY_STAMP = Path("/etc/zippie/build.json")
 # `fingerprint(full=True)` for anything that wants to compare exactly.
 SHORT_LEN = 16
 
+_MAX_CACHE_ENTRIES = 16
+_CACHE_LOCK = threading.Lock()
+_FINGERPRINT_CACHE: dict[Path, tuple[tuple[tuple[str, int, int], ...], str]] = {}
+_STAMP_CACHE: dict[Path, tuple[tuple[int, int], dict[str, Any]]] = {}
+
 
 def _package_dir() -> Path:
     """The directory this module lives in, i.e. the package as installed.
@@ -59,6 +65,40 @@ def _package_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
+def _package_stat_key(root: Path) -> tuple[tuple[str, int, int], ...]:
+    """Sorted `(name, st_mtime_ns, st_size)` signature for every `*.py` in `root`."""
+    entries: list[tuple[str, int, int]] = []
+    for path in sorted(root.glob("*.py"), key=lambda p: p.name):
+        st = path.stat()
+        entries.append((path.name, st.st_mtime_ns, st.st_size))
+    return tuple(entries)
+
+
+def _package_digest_and_count(root: Path) -> tuple[str, int]:
+    """Full SHA-256 hex digest and module count for `root`, stat-cached."""
+    stat_key = _package_stat_key(root)
+    with _CACHE_LOCK:
+        cached = _FINGERPRINT_CACHE.get(root)
+        if cached is not None and cached[0] == stat_key:
+            return cached[1], len(stat_key)
+
+    digest = hashlib.sha256()
+    for name, _, _ in stat_key:
+        data = (root / name).read_bytes()
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(str(len(data)).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(data)
+    hexdigest = digest.hexdigest()
+
+    with _CACHE_LOCK:
+        if len(_FINGERPRINT_CACHE) >= _MAX_CACHE_ENTRIES:
+            _FINGERPRINT_CACHE.clear()
+        _FINGERPRINT_CACHE[root] = (stat_key, hexdigest)
+    return hexdigest, len(stat_key)
+
+
 def fingerprint(package_dir: Path | None = None, full: bool = False) -> str:
     """SHA-256 over every `.py` in the package, in sorted filename order.
 
@@ -68,22 +108,14 @@ def fingerprint(package_dir: Path | None = None, full: bool = False) -> str:
     and a short write there is silent.
     """
     root = package_dir or _package_dir()
-    digest = hashlib.sha256()
-    for path in sorted(root.glob("*.py"), key=lambda p: p.name):
-        data = path.read_bytes()
-        digest.update(path.name.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(str(len(data)).encode("ascii"))
-        digest.update(b"\0")
-        digest.update(data)
-    hexdigest = digest.hexdigest()
+    hexdigest, _ = _package_digest_and_count(root)
     return hexdigest if full else hexdigest[:SHORT_LEN]
 
 
 def module_count(package_dir: Path | None = None) -> int:
     """How many modules went into the fingerprint."""
     root = package_dir or _package_dir()
-    return len(list(root.glob("*.py")))
+    return len(_package_stat_key(root))
 
 
 # [home] keys that are structurally unable to match between a real router and
@@ -142,10 +174,27 @@ def _read_stamp(stamp_path: Path) -> dict[str, Any]:
     would take the status endpoint down over a cosmetic file.
     """
     try:
+        st = stamp_path.stat()
+    except OSError:
+        with _CACHE_LOCK:
+            _STAMP_CACHE.pop(stamp_path, None)
+        return {}
+    key = (st.st_mtime_ns, st.st_size)
+    with _CACHE_LOCK:
+        cached = _STAMP_CACHE.get(stamp_path)
+        if cached is not None and cached[0] == key:
+            return dict(cached[1])
+    try:
         loaded = json.loads(stamp_path.read_text())
     except (OSError, ValueError):
-        return {}
-    return loaded if isinstance(loaded, dict) else {}
+        result: dict[str, Any] = {}
+    else:
+        result = loaded if isinstance(loaded, dict) else {}
+    with _CACHE_LOCK:
+        if len(_STAMP_CACHE) >= _MAX_CACHE_ENTRIES:
+            _STAMP_CACHE.clear()
+        _STAMP_CACHE[stamp_path] = (key, result)
+    return dict(result)
 
 
 def build_info(
@@ -177,7 +226,9 @@ def build_info(
     fingerprint has always had.
     """
     stamp = _read_stamp(stamp_path or DEPLOY_STAMP)
-    current = fingerprint(package_dir)
+    root = package_dir or _package_dir()
+    full_digest, count = _package_digest_and_count(root)
+    current = full_digest[:SHORT_LEN]
     deployed = stamp.get("fingerprint")
     code_matches = None if not deployed else deployed == current
 
@@ -196,7 +247,7 @@ def build_info(
 
     return {
         "fingerprint": current,
-        "modules": module_count(package_dir),
+        "modules": count,
         "commit": stamp.get("commit"),
         "deployed_at": stamp.get("deployed_at"),
         "matches_deploy": matches_deploy,
