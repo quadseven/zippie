@@ -23,6 +23,8 @@ COVERED = {
     "check.agent-tests.yml:pytest": "python -m pytest -q",
     "check.agent-tests.yml:gotest": "go test ./... -race -count=1",
     "app.companion-ios.ci.yml:kit": "swift test",
+    "check.design-tokens.yml:drift": "design/generate.py --check",
+    "check.operator-hosts.yml:hosts": "scripts/check-no-operator-hosts.sh",
 }
 
 # Jobs the contract does not run, each with the reason. Shrink this, never grow
@@ -39,8 +41,6 @@ NOT_IN_LANE = {
     "check.agent-tests.yml:deploytest": "deploy tooling pytest; not in lane yet",
     "check.agent-tests.yml:gomobile": "needs gomobile and the Android and iOS SDKs",
     "check.android-signing.yml:release-apk": "needs the Android SDK and a signing step",
-    "check.design-tokens.yml:drift": "design/generate.py --check; not in lane yet",
-    "check.operator-hosts.yml:hosts": "check-no-operator-hosts.sh; not in lane yet",
     "deploy.oke-manifests.yml:render": "needs kubectl and kustomize",
     "deploy.oke-manifests.yml:deploy": "needs the cluster; not run on a pull request",
     "build.clienthome-image.yml:build": "publishes an image; needs the registry",
