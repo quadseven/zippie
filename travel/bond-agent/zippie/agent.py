@@ -619,7 +619,9 @@ class BondAgent:
         # Some status and policy fixtures construct a partial agent.
         links = self.__dict__.get("_packet_links")
         if links is None:
-            links = self.__dict__["_packet_links"] = PacketLinks()
+            home = getattr(getattr(self, "config", None), "home", None)
+            keepalive = getattr(home, "persistent_keepalive", 0)
+            links = self.__dict__["_packet_links"] = PacketLinks(keepalive)
         return links
 
     @property

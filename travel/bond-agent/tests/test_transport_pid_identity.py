@@ -146,6 +146,19 @@ def _pids(agent: BondAgent) -> dict[str, int]:
     return {p.name: agent._transport_ids[p.name] for p in agent.paths}
 
 
+def test_lazy_packet_links_start_at_configured_active_keepalive():
+    agent = object.__new__(BondAgent)
+    agent.config = parse_config({"home": {"endpoint": "home.example", "persistent_keepalive": 17}})
+
+    assert agent.packet_links.keepalive_s == 17
+
+
+def test_lazy_packet_links_start_at_zero_without_config():
+    agent = object.__new__(BondAgent)
+
+    assert agent.packet_links.keepalive_s == 0
+
+
 def test_tick_releases_and_reuses_a_pid_before_probing_updated_links(tmp_path, monkeypatch):
     agent = _agent(tmp_path)
     monkeypatch.setattr(agent, "_resolve_home_ip", lambda: "203.0.113.7")
@@ -153,6 +166,7 @@ def test_tick_releases_and_reuses_a_pid_before_probing_updated_links(tmp_path, m
     pid = _pids(agent)["phone-before"]
     transport = agent._transport
     events = []
+    wifi_joins = []
 
     def trace(name, record):
         original = getattr(transport, name)
@@ -176,7 +190,10 @@ def test_tick_releases_and_reuses_a_pid_before_probing_updated_links(tmp_path, m
             path.state = PathState.UP
             path.effective_weight = 100
 
-    monkeypatch.setattr(wifi, "auto_join_configured", lambda *_: None)
+    def record_wifi_join(paths, secrets):
+        wifi_joins.append((paths, secrets))
+
+    monkeypatch.setattr(wifi, "auto_join_configured", record_wifi_join)
     monkeypatch.setattr(agent._isp_name_resolver, "update", lambda *_: {})
     monkeypatch.setattr(agent, "match_interfaces", bind)
     for method in (
@@ -198,6 +215,7 @@ def test_tick_releases_and_reuses_a_pid_before_probing_updated_links(tmp_path, m
 
     agent.loop_once()
 
+    assert wifi_joins == [(agent.config.paths, agent.wifi_secrets)]
     same_pid_or_stage = [
         entry for entry in events if entry[0] in {"policy", "shaper", "probe"} or entry[1] == pid
     ]
