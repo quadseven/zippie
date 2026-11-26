@@ -21,6 +21,7 @@ from zippie import net
 from zippie.agent import PACKET_IFACE, BondAgent
 from zippie.config import parse_config
 from zippie.models import PathState
+from zippie.route_tunnels import MemoryRouteTunnelHost
 
 
 def _cfg(
@@ -173,6 +174,61 @@ def test_the_resolved_address_is_dialled_never_the_hostname(tmp_path, monkeypatc
     assert world.pinned[0][0] == "203.0.113.7", "the pin must use the same host"
 
 
+def test_route_reconcile_writes_raises_pins_and_heals_in_order(tmp_path, monkeypatch):
+    world = _World()
+    agent = _agent(tmp_path, monkeypatch, world)
+    trace = []
+    clock = [1000.0]
+    write = net.write_wg_config
+    up = net.wg_quick_up
+
+    def write_conf(path, **settings):
+        trace.append(("conf", Path(path).stem))
+        write(path, **settings)
+
+    def bring_up(conf, iface, **settings):
+        trace.append(("up", iface))
+        up(conf, iface, **settings)
+
+    def pin_table(table, iface, gateway):
+        trace.append(("table", table, iface, gateway))
+        return gateway is not None
+
+    monkeypatch.setattr(agent, "_pin_endpoint_route", BondAgent._pin_endpoint_route.__get__(agent))
+    monkeypatch.setattr(agent, "_resolve_home_ip", lambda: "203.0.113.7")
+    monkeypatch.setattr(net, "write_wg_config", write_conf)
+    monkeypatch.setattr(net, "wg_quick_up", bring_up)
+    monkeypatch.setattr(net, "pin_link_table", pin_table)
+    monkeypatch.setattr(net, "link_gateway", lambda iface: None if iface == "eth0" else "192.0.2.1")
+    monkeypatch.setattr(
+        net, "ip_rule_ensure", lambda mark, table: trace.append(("rule", mark, table))
+    )
+    monkeypatch.setattr(net, "link_has_default", lambda iface: False)
+    monkeypatch.setattr(net, "netifd_renew", lambda iface: trace.append(("renew", iface)))
+    monkeypatch.setattr(net, "netifd_bounce", lambda iface: trace.append(("bounce", iface)))
+    monkeypatch.setattr("zippie.agent.time.monotonic", lambda: clock[0])
+
+    table, mark = agent.config.table_base, agent.config.fwmark_base
+    agent.ensure_tunnels()
+    assert trace == [
+        ("conf", "pb0"),
+        ("up", "pb0"),
+        ("table", table, "eth0", None),
+        ("renew", "eth0"),
+        ("conf", "pb1"),
+        ("up", "pb1"),
+        ("table", table + 1, "eth1", "192.0.2.1"),
+        ("rule", mark + 1, table + 1),
+    ]
+    trace.clear()
+    agent.ensure_tunnels()
+    assert not any(step[0] in {"up", "renew", "bounce"} for step in trace)
+    trace.clear()
+    clock[0] += 31
+    agent.ensure_tunnels()
+    assert trace[2] == ("bounce", "eth0")
+
+
 def test_the_hostname_is_used_only_when_resolution_has_never_succeeded(tmp_path, monkeypatch):
     """A first boot with DNS down loses nothing by handing wg the hostname; a
     tunnel that cannot be built at all is strictly worse than a slow one."""
@@ -180,6 +236,39 @@ def test_the_hostname_is_used_only_when_resolution_has_never_succeeded(tmp_path,
     a = _agent(tmp_path, monkeypatch, world, resolves=None)
     a.ensure_tunnels()
     assert world.confs["pb0"]["endpoint"].startswith("home.example:")
+
+
+def test_route_reconcile_can_run_with_only_the_memory_host(tmp_path, monkeypatch):
+    agent = BondAgent(_cfg(tmp_path))
+    for path in agent.paths:
+        path.interface = path.config.match.interface
+    host = MemoryRouteTunnelHost()
+    host.now = 1000.0
+    host.gateways["eth1"] = "192.0.2.1"
+    host.pinnable_links.add("eth1")
+    agent._route_tunnels.host = host
+    monkeypatch.setattr(agent, "_resolve_home_ip", lambda: "203.0.113.7")
+
+    def unexpected_host_call(*args, **kwargs):
+        pytest.fail("route reconcile bypassed the memory host")
+
+    for name in ("write_wg_config", "link_gateway", "pin_link_table", "netifd_renew"):
+        monkeypatch.setattr(net, name, unexpected_host_call)
+
+    agent.ensure_tunnels()
+
+    table, mark = agent.config.table_base, agent.config.fwmark_base
+    assert host.trace == [
+        ("conf", "pb0"),
+        ("up", "pb0"),
+        ("table", table, "eth0", None),
+        ("renew", "eth0"),
+        ("conf", "pb1"),
+        ("up", "pb1"),
+        ("table", table + 1, "eth1", "192.0.2.1"),
+        ("rule", mark + 1, table + 1),
+        ("resolve", "203.0.113.7"),
+    ]
 
 
 # ------------------------------------------------------- per-leg decisions --
