@@ -71,3 +71,52 @@ def test_a_set_endpoint_is_passed_to_init(tmp_path):
     result = _run(tmp_path, endpoint="home.some-house.net", initialised=False)
     assert result.returncode == 0, result.stderr
     assert "--public-endpoint home.some-house.net" in result.stdout
+
+
+def _value_from_fields(lines: list[str], env_name: str) -> dict[str, str]:
+    """Return direct key/value entries under `valueFrom:` for a named env var."""
+    target = f"- name: {env_name}"
+    env_idx = next(i for i, line in enumerate(lines) if line.strip() == target)
+    env_indent = len(lines[env_idx]) - len(lines[env_idx].lstrip())
+
+    vf_idx = None
+    vf_indent = 0
+    for i in range(env_idx + 1, len(lines)):
+        raw = lines[i]
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip())
+        if indent <= env_indent:
+            break
+        if stripped == "valueFrom:":
+            vf_idx = i
+            vf_indent = indent
+            break
+    assert vf_idx is not None, f"valueFrom not found for {env_name}"
+
+    fields: dict[str, str] = {}
+    child_indent: int | None = None
+    for raw in lines[vf_idx + 1 :]:
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip())
+        if indent <= vf_indent:
+            break
+        if child_indent is None:
+            child_indent = indent
+        if indent != child_indent:
+            continue
+        code = stripped.split("#", 1)[0].strip()
+        key, _, value = code.partition(":")
+        fields[key.strip()] = value.strip()
+    return fields
+
+
+def test_endpoint_env_clears_legacy_configmap_key_ref():
+    """Keep configMapKeyRef: null so client-side kubectl diff drops the pre-#416 ref."""
+    lines = MANIFEST.read_text(encoding="utf-8").splitlines()
+    fields = _value_from_fields(lines, "ZIPPIE_HOME_ENDPOINT")
+    assert fields.get("configMapKeyRef") == "null"
+    assert "secretKeyRef" in fields
