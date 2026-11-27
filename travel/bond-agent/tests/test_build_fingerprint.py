@@ -41,7 +41,7 @@ def test_edited_module_changes_the_fingerprint(pkg):
     original = module.stat()
     before = build.fingerprint(pkg)
     module.write_text("B = 3\n")
-    # A same-size rewrite can keep its mtime if both writes land in one clock tick.
+    # A same-size edit must advance mtime for the stat-keyed cache.
     os.utime(module, ns=(original.st_atime_ns, original.st_mtime_ns + 2_000_000_000))
     assert build.fingerprint(pkg) != before
 
