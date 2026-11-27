@@ -268,7 +268,31 @@ def test_router_toml_idle_floor_comment_matches_the_projection():
 
 
 _KEEPALIVE_PEER = "fixture-peer-identity"
-_KEEPALIVE_ARGS = ["wg", "set", "pbz0", "peer", _KEEPALIVE_PEER, "persistent-keepalive", "25"]
+_KEEPALIVE_INTERFACE = "pbz0"
+_KEEPALIVE_ARGS = [
+    "wg",
+    "set",
+    _KEEPALIVE_INTERFACE,
+    "peer",
+    _KEEPALIVE_PEER,
+    "persistent-keepalive",
+    "25",
+]
+
+
+def _assert_keepalive_log(caplog, *, dry_run: bool):
+    # AI-REVIEW 2026-11-27 [nemotron-3.5-super-vl] 4722187903/4722187914 (Elder, PR #466):
+    # A diagnostic can be reworded without exposing its peer or command arguments.
+    assert len(caplog.records) == 1
+    record = caplog.records[0]
+    message = record.getMessage().casefold()
+    assert "wireguard" in message and "keepalive" in message
+    assert ("dry-run" in message) is dry_run
+    if dry_run:
+        assert record.levelno >= logging.INFO
+    assert _KEEPALIVE_PEER not in message
+    assert _KEEPALIVE_INTERFACE not in message
+    assert "wg set" not in message
 
 
 def test_live_wireguard_keepalive_is_changed_without_rebuilding(monkeypatch, caplog):
@@ -277,7 +301,7 @@ def test_live_wireguard_keepalive_is_changed_without_rebuilding(monkeypatch, cap
     monkeypatch.setattr(net.subprocess, "run", run)
     caplog.set_level(logging.DEBUG, logger="zippie.net")
 
-    net.set_wg_persistent_keepalive("pbz0", _KEEPALIVE_PEER, 25)
+    net.set_wg_persistent_keepalive(_KEEPALIVE_INTERFACE, _KEEPALIVE_PEER, 25)
 
     run.assert_called_once_with(
         _KEEPALIVE_ARGS,
@@ -286,19 +310,19 @@ def test_live_wireguard_keepalive_is_changed_without_rebuilding(monkeypatch, cap
         stderr=subprocess.DEVNULL,
         timeout=30,
     )
-    assert caplog.messages == ["set WireGuard peer keepalive"]
+    _assert_keepalive_log(caplog, dry_run=False)
 
 
 def test_dry_run_wireguard_keepalive_logs_only_the_operation(monkeypatch, caplog):
     run = Mock()
     monkeypatch.setenv("ZIPPIE_DRY_RUN", "1")
     monkeypatch.setattr(net.subprocess, "run", run)
-    caplog.set_level(logging.INFO, logger="zippie.net")
+    caplog.set_level(logging.DEBUG, logger="zippie.net")
 
-    net.set_wg_persistent_keepalive("pbz0", _KEEPALIVE_PEER, 25)
+    net.set_wg_persistent_keepalive(_KEEPALIVE_INTERFACE, _KEEPALIVE_PEER, 25)
 
     run.assert_not_called()
-    assert caplog.messages == ["[dry-run] set WireGuard peer keepalive"]
+    _assert_keepalive_log(caplog, dry_run=True)
 
 
 @pytest.mark.parametrize(
