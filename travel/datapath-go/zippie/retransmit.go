@@ -211,8 +211,25 @@ func (n *NackTracker) Due(out []uint64) []uint64 {
 
 // ForgetBefore drops sequences the stream has moved past, so a path dying and
 // leaving a permanent hole cannot grow this without bound.
+//
+// If seq < forgottenBelow, the sequence space has moved backwards (a re-anchor).
+// Reset legSeq to the new baseline so legs must re-earn their marks in the new
+// space. Reset legWatch timestamps to now so the maxDelay timer starts fresh.
+// Stale gaps (pending/asked) are cleared because they belong to the old sequence
+// space.
 func (n *NackTracker) ForgetBefore(seq uint64) {
-	if seq <= n.forgottenBelow {
+	if seq < n.forgottenBelow {
+		n.pending = make(map[uint64]time.Time, 256)
+		n.asked = make(map[uint64]struct{}, 256)
+		now := n.now()
+		for pathID := range n.legSeq {
+			n.legSeq[pathID] = seq
+			n.legWatch[pathID] = legMark{seq: seq, since: now}
+		}
+		n.forgottenBelow = seq
+		return
+	}
+	if seq == n.forgottenBelow {
 		return
 	}
 	for s := range n.pending {
@@ -236,6 +253,23 @@ func (n *NackTracker) ResetStream() {
 	n.forgottenBelow = 0
 	n.legSeq = make(map[uint8]uint64, 4)
 	n.legWatch = make(map[uint8]legMark, 4)
+}
+
+func (n *NackTracker) Pending() int { return len(n.pending) }
+
+// pushAndTrack feeds one received data frame through r and keeps n in the same
+// sequence space. Transport and MultiClientHome both receive data through this
+// one path, so a re-anchor inside Push always reaches ForgetBefore, which reads
+// the lower nextSeq as a rewind and drops the old space's gaps and leg marks.
+func pushAndTrack(r *Reassembler, n *NackTracker, f Frame, out [][]byte) [][]byte {
+	// A resend proves nothing about the leg it arrived on; see Resolve.
+	n.Resolve(f.Seq, f.PathID, !f.IsRetransmit())
+	out = r.Push(f, out)
+	if missing := r.MissingSince(nil); len(missing) > 0 {
+		n.NoteGap(missing)
+	}
+	n.ForgetBefore(r.nextSeq)
+	return out
 }
 
 // RetransmitStats mirrors the Python counters.
