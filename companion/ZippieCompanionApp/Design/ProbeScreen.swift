@@ -15,9 +15,6 @@ import ZippieCompanionKit
 /// that matters (it read iCloud Private Relay exits as proof), so showing the
 /// working is not decoration.
 struct ProbeScreen: View {
-    /// #77: see `RelayScreen.rumViewName` for why this is named once, here.
-    private static let rumViewName = "Probe"
-
     @State private var running = false
     @State private var verdict: ProbeVerdict?
     @State private var baseline: String?
@@ -31,11 +28,6 @@ struct ProbeScreen: View {
             if baseline != nil || cellular != nil { evidence }
             method
         }
-        // #77: `Observability.probeCompleted` already ships the verdict as a
-        // log attribute, but the RUM session it happened in still had no view
-        // to attribute it to.
-        .onAppear { Observability.viewAppeared(Self.rumViewName) }
-        .onDisappear { Observability.viewDisappeared(Self.rumViewName) }
     }
 
     // MARK: - the finding
@@ -167,8 +159,7 @@ struct ProbeScreen: View {
                 elapsed = String(format: "%.1fs", secs)
                 running = false
                 if let v = verdict {
-                    Observability.probeCompleted(v, wifi: baseline ?? "-",
-                                                 cellular: cellular ?? "-", seconds: secs)
+                    Observability.probeCompleted(v, seconds: secs)
                 }
             }
         }
@@ -177,10 +168,7 @@ struct ProbeScreen: View {
     private func fetchRelayRanges() async -> PrivateRelayRanges? {
         guard let u = URL(string: "https://mask-api.icloud.com/egress-ip-ranges.csv") else { return nil }
         var req = URLRequest(url: u); req.timeoutInterval = 8
-        // Apple's range list is deliberately NOT a first-party host, so this
-        // appears as a RUM resource without our trace headers being injected
-        // into someone else's API.
-        guard let (d, _) = try? await Observability.tracedSession.data(for: req),
+        guard let (d, _) = try? await URLSession.shared.data(for: req),
               let csv = String(data: d, encoding: .utf8) else { return nil }
         return PrivateRelayRanges(csv: csv)
     }

@@ -499,9 +499,6 @@ public enum BondSeriesClient {
         return parts.url ?? base
     }
 
-    /// The session is injectable for the same reason BondStatus's is:
-    /// dd-sdk-ios only instruments a task whose delegate matches, and
-    /// URLSession.shared has none - so tracing against it is silently inert.
     public static func fetch(url: URL,
                              since: Int? = nil,
                              timeout: TimeInterval = 8,

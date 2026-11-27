@@ -18,11 +18,6 @@ options:
 packages:
   ZippieCompanionKit:
     path: ZippieCompanionKit
-  # Datadog on the APP target only. The Kit stays SDK-free so it still builds
-  # and tests on a bare toolchain with `swift test` - same split macchina uses.
-  Datadog:
-    url: https://github.com/DataDog/dd-sdk-ios
-    from: "2.18.0"
 
 targets:
   ZippieCompanion:
@@ -37,20 +32,6 @@ targets:
           - "*.entitlements"
     dependencies:
       - package: ZippieCompanionKit
-      - package: Datadog
-        product: DatadogCore
-      - package: Datadog
-        product: DatadogLogs
-      - package: Datadog
-        product: DatadogRUM
-      # APM. Logs answer "what happened", RUM answers "what did the phone do",
-      # and NEITHER answers "how long did the router take to reply, and did it
-      # reply at all" - the question this app is pointed at a travel router to
-      # ask. DatadogTrace also carries the URLSession instrumentation entry
-      # point, which lives in DatadogInternal and is re-exported from here, so
-      # without this product there is no way to instrument a request at all.
-      - package: Datadog
-        product: DatadogTrace
       # The Go datapath framework for peer verification (mobile.VerifyPeer).
       - framework: Frameworks/Zippie.xcframework
         embed: false
@@ -164,7 +145,7 @@ targets:
         CODE_SIGN_STYLE: Automatic
     # Release signing lives HERE, not on the xcodebuild command line. Passing
     # PROVISIONING_PROFILE_SPECIFIER as a CLI flag applies it to EVERY target
-    # in the build, including the Datadog SPM package targets - which fail with
+    # in the build, including SPM package targets - which fail with
     # "does not support provisioning profiles". Scoping it to this target's
     # Release config is the only way to sign the app without signing the
     # dependencies.
@@ -220,24 +201,6 @@ targets:
   # phone's traffic - see PacketTunnelProvider.inertNetworkSettings for exactly
   # how, and for the risk that carries.
   #
-  # DATADOG HERE TOO NOW (#73), but not the way the app links it. Network
-  # Extension providers are killed WITHOUT WARNING when they exceed an
-  # undocumented memory ceiling, reported around 50 MB for packet tunnels -
-  # see PacketTunnelProvider's own MEMORY comment. Before #73 that ceiling was
-  # answered by carrying NO Datadog product at all: the extension reported
-  # through the App Group only, and the app forwarded it to Datadog - except
-  # nothing forwarded the BACKGROUND relay's stats, because the app's one
-  # `Observability.relayStats` call site is the foreground toggle an operator
-  # rarely opens. So the relay that actually carries traffic never reached
-  # Datadog at all (2026-09-11).
-  #
-  # The fix links ONLY `DatadogCore` + `DatadogLogs` below - never `DatadogRUM`
-  # or `DatadogTrace`, both of which the app target links and neither of which
-  # this process has anything to spend them on: RUM tracks view hierarchies
-  # and swizzles URLSession in a provider with no UI and no user-facing
-  # requests, and Trace stands up a second feature registry and its own
-  # storage on top of that. See `TunnelObservability.swift` for the
-  # initialisation itself and why it is guarded to run once per process.
   ZippieCompanionTunnel:
     type: app-extension
     platform: iOS
@@ -263,12 +226,6 @@ targets:
       # router and a real radio; forking it so the extension could have its own
       # would mean two relays drifting apart, and only one of them tested.
       - package: ZippieCompanionKit
-      # ONLY these two products (#73) - see the target-level comment above for
-      # why RUM and Trace stay app-only.
-      - package: Datadog
-        product: DatadogCore
-      - package: Datadog
-        product: DatadogLogs
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.zippie.companion.tunnel
@@ -346,12 +303,6 @@ targets:
       # The same SPM package the app and the tunnel use - WidgetTimeline.build
       # and RelayStatusStore are exactly the two calls this extension makes.
       - package: ZippieCompanionKit
-      # NO Datadog, and even more deliberately than the tunnel's "no Datadog"
-      # (see that target's comment): a WidgetKit extension's memory ceiling is
-      # smaller than a packet-tunnel provider's, and it is created and torn
-      # down far more often - once per timeline refresh - so the SDK's
-      # startup cost is paid on a much tighter budget for no benefit; nothing
-      # here is worth instrumenting that the app does not already cover.
       # NO Zippie.xcframework either - this extension never touches the
       # datapath, only RelayStatusStore's UserDefaults read (confirmed by
       # grepping for "import Zippie" - only ClientTunnel.swift has it).

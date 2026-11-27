@@ -347,11 +347,7 @@ final class BondModel: ObservableObject {
             for url in urls {
                 group.addTask {
                     if case let .success(s) = await BondStatusClient.fetch(
-                        url: url, timeout: timeout,
-                        // Traced, not .shared: dd-sdk-ios cannot instrument a
-                        // session with no delegate, so tracing the shared one
-                        // is configured-but-inert.
-                        session: Observability.tracedSession) {
+                        url: url, timeout: timeout) {
                         return s
                     }
                     return nil
@@ -388,8 +384,7 @@ final class BondModel: ObservableObject {
             // window we pay for.
             let cursor = series.compactMap(\.t).max()
             if case let .success(s) = await BondSeriesClient.fetch(
-                url: url, since: cursor, timeout: 6,
-                session: Observability.tracedSession) {
+                url: url, since: cursor, timeout: 6) {
                 let fresh = s.points ?? []
                 // An empty incremental response means nothing new, NOT that the
                 // history vanished - replacing on empty would blank the chart
