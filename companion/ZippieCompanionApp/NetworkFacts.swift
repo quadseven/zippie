@@ -96,20 +96,4 @@ struct NetworkFacts {
             NEHotspotNetwork.fetchCurrent { cont.resume(returning: $0) }
         }
     }
-
-    /// Flattened for Datadog. Nils are dropped rather than sent as "unknown",
-    /// so a missing SSID reads as absent instead of as a network named unknown.
-    var attributes: [String: Encodable] {
-        var a: [String: Encodable] = [
-            "net.wifi_available": hasWifi,
-            "net.cellular_available": hasCellular,
-            "net.constrained": isConstrained,
-            "net.expensive": isExpensive,
-        ]
-        if let ssid { a["net.ssid"] = ssid }
-        if let bssid { a["net.bssid"] = bssid }
-        if let wifiSignal { a["net.wifi_signal"] = wifiSignal }
-        if let radioTech { a["net.radio"] = radioTech }
-        return a
-    }
 }

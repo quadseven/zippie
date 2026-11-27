@@ -28,9 +28,6 @@ enum BuildInfo {
     /// processing changed shape upstream) must still show something, rather
     /// than silently dropping the one piece of information this change exists
     /// to add.
-    ///
-    /// Wired into Observability.swift's Datadog attributes (`build_commit`,
-    /// alongside `platform`/`device`) - the TODO this file used to carry.
     static var commitLabel: String {
         (Bundle.main.infoDictionary?["ZippieGitCommit"] as? String).flatMap {
             $0.isEmpty ? nil : $0

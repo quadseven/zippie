@@ -54,7 +54,7 @@ public enum UnreachableReason: String, Sendable, Equatable {
     /// nothing answered.
     case notAnswering
 
-    /// The name logs and RUM carry, so the cause is readable without the phone.
+    /// The name the unified log carries, so the cause is readable without the phone.
     public var logName: String {
         switch self {
         case .noTailnetRoute: return "no_tailnet_route"
