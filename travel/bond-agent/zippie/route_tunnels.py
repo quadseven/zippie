@@ -74,66 +74,6 @@ class NetRouteTunnelHost:
         net.netifd_bounce(iface)
 
 
-class MemoryRouteTunnelHost:
-    """Drive a route tick with simulated host state and an ordered effect trace."""
-
-    def __init__(self, *, dry_run: bool = False) -> None:
-        self.is_dry_run = dry_run
-        self.now = 0.0
-        self.gateways: dict[str, str | None] = {}
-        self.pinnable_links: set[str] = set()
-        self.links_with_default: set[str] = set()
-        self.configs: set[Path] = set()
-        self.up_interfaces: set[str] = set()
-        self.trace: list[tuple] = []
-
-    def write_config(self, conf: Path, **settings: Any) -> None:
-        self.trace.append(("conf", conf.stem))
-        if not self.is_dry_run:
-            self.configs.add(conf)
-
-    def bring_up(self, conf: Path, iface: str, *, address: str | None, mtu: int) -> None:
-        if not self.is_dry_run and iface not in self.up_interfaces:
-            self.up_interfaces.add(iface)
-            self.trace.append(("up", iface))
-
-    def config_exists(self, conf: Path) -> bool:
-        return conf in self.configs
-
-    def dry_run(self) -> bool:
-        return self.is_dry_run
-
-    def bring_down(self, conf: Path, iface: str | None) -> None:
-        self.trace.append(("down", iface))
-        if not self.is_dry_run and iface is not None:
-            self.up_interfaces.discard(iface)
-
-    def gateway(self, iface: str) -> str | None:
-        return self.gateways.get(iface)
-
-    def pin_table(self, table: int, iface: str, gateway: str | None) -> bool:
-        self.trace.append(("table", table, iface, gateway))
-        return iface in self.pinnable_links
-
-    def ensure_rule(self, mark: int, table: int) -> None:
-        self.trace.append(("rule", mark, table))
-
-    def resolve_endpoint(self, endpoint: str) -> None:
-        self.trace.append(("resolve", endpoint))
-
-    def monotonic(self) -> float:
-        return self.now
-
-    def has_default(self, iface: str) -> bool:
-        return iface in self.links_with_default
-
-    def renew(self, iface: str) -> None:
-        self.trace.append(("renew", iface))
-
-    def bounce(self, iface: str) -> None:
-        self.trace.append(("bounce", iface))
-
-
 class RouteTunnels:
     """Own the route-mode tunnel lifecycle and the control tick's heal ladder."""
 
