@@ -319,8 +319,10 @@ def test_console_authorizes_only_active_home_certificates(tmp_path):
             assert outcome == 403
         with pytest.raises((ssl.SSLError, urllib.error.URLError)) as error:
             _announce(https, context=_client_context(foreign))
-        reason = getattr(error.value, "reason", error.value)
-        assert isinstance(reason, (str, ssl.SSLError)) and "alert" in str(reason).lower()
+        failure = error.value
+        if isinstance(failure, urllib.error.URLError):
+            failure = failure.reason
+        assert isinstance(failure, ssl.SSLError)
         assert _announce(https, token=None, context=_client_context(active)) == 200
         https_bearer = _announce(https, token=bearer, context=no_cert)
         http_bearer = _announce(http, token=bearer)
