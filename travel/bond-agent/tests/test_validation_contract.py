@@ -1,10 +1,21 @@
 """Keep the lane validation contract tied to pull request checks."""
 
+import os
+import subprocess
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[3]
 CONTRACT = ROOT / ".loom/validation.conf"
+
+
+def test_validation_commands_fit_the_loom_parser_limit():
+    for line in CONTRACT.read_text(encoding="ascii").splitlines():
+        key, _, value = line.partition(":")
+        if key in {"setup", "check", "affected", "autoformat"}:
+            command = value.lstrip()
+            assert len(command) <= 1000, f"{key}: {len(command)} characters"
+            assert all(" " <= char <= "~" for char in command), key
 
 
 def test_validation_contract_lists_ci_checks_in_order():
@@ -68,3 +79,30 @@ def test_validation_contract_runs_android_unit_tests_for_android_changes():
     assert any(
         line.startswith("# affected: .github/workflows/check.android.yml ::") for line in lines
     )
+
+
+def test_validation_contract_propagates_gradle_failure_with_positive_xml(tmp_path):
+    android = tmp_path / "companion-android"
+    reports = android / "app/build/test-results/testDebugUnitTest"
+    reports.mkdir(parents=True)
+    (reports / "test.xml").write_text('<testsuite tests="1"/>\n', encoding="ascii")
+    gradle = android / "gradlew"
+    gradle.write_text("#!/bin/bash\necho gradle-ran\nexit 42\n", encoding="ascii")
+    gradle.chmod(0o755)
+    affected = next(
+        line.removeprefix("affected: ")
+        for line in CONTRACT.read_text(encoding="ascii").splitlines()
+        if line.startswith("affected: ")
+    )
+
+    result = subprocess.run(
+        ["/bin/bash", "-c", affected],
+        cwd=tmp_path,
+        env={**os.environ, "LOOM_CHANGED_FILES": "companion-android/build.gradle.kts"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert "gradle-ran" in result.stdout
+    assert result.returncode == 42

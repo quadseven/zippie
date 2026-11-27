@@ -68,6 +68,23 @@ class ConsoleSeam(Protocol):
     def discovery_roster(self) -> list[dict[str, Any]]: ...
 
 
+def encode_body(raw: bytes, accept_encoding: str | None) -> tuple[bytes, str | None]:
+    """Gzip `raw` when the client accepts it and the body is large enough.
+
+    Returns (body, content_encoding) where content_encoding is None for plain
+    bytes - the caller only sets the header when there is one, because a
+    `Content-Encoding: identity` header is legal but pointless.
+    """
+    if not accept_encoding or "gzip" not in accept_encoding.lower():
+        return raw, None
+    if len(raw) < GZIP_MIN_BYTES:
+        return raw, None
+    # mtime=0: without it gzip stamps the current time into the header, so two
+    # identical payloads produce different bytes and nothing downstream can
+    # cache or compare them.
+    return gzip.compress(raw, mtime=0), "gzip"
+
+
 def encode_json_body(payload: Any, accept_encoding: str | None):
     """Serialise `payload`, gzipping it when the client said it could.
 
@@ -83,14 +100,7 @@ def encode_json_body(payload: Any, accept_encoding: str | None):
     s over the tailnet before this, against 0.74 s for /api/status (#43).
     """
     raw = json.dumps(payload).encode("utf-8")
-    if not accept_encoding or "gzip" not in accept_encoding.lower():
-        return raw, None
-    if len(raw) < GZIP_MIN_BYTES:
-        return raw, None
-    # mtime=0: without it gzip stamps the current time into the header, so two
-    # identical payloads produce different bytes and nothing downstream can
-    # cache or compare them.
-    return gzip.compress(raw, mtime=0), "gzip"
+    return encode_body(raw, accept_encoding)
 
 
 def _dashboard_tls_context(config: AgentConfig) -> ssl.SSLContext | None:
@@ -292,21 +302,70 @@ def _token_matches(authorization: str | None, token: str) -> bool:
     return secrets.compare_digest(offered, token)
 
 
-def _dashboard_html() -> str:
-    candidates = [
-        Path(__file__).resolve().parents[3] / "dashboard" / "static" / "index.html",
-        Path("/opt/zippie/dashboard/static/index.html"),
-        Path("/usr/share/zippie/index.html"),
-    ]
-    for here in candidates:
-        if here.is_file():
-            return here.read_text(encoding="utf-8")
-    return """<!doctype html><html><body><h1>Zippie</h1>
+_FALLBACK_HTML = """<!doctype html><html><body><h1>Zippie</h1>
 <pre id=o>loading</pre>
 <script>
 async function t(){const j=await (await fetch('/api/status')).json();
 o.textContent=JSON.stringify(j,null,2)} t(); setInterval(t,1000)
 </script></body></html>"""
+
+_DASHBOARD_CANDIDATES = (
+    Path(__file__).resolve().parents[3] / "dashboard" / "static" / "index.html",
+    Path("/opt/zippie/dashboard/static/index.html"),
+    Path("/usr/share/zippie/index.html"),
+)
+
+_DASHBOARD_CACHE_LOCK = threading.Lock()
+_DASHBOARD_CACHE: tuple[tuple[str, int, int], bytes, bytes | None, str] | None = None
+
+
+def _etag_matches(header: str | None, etag: str) -> bool:
+    """True when an If-None-Match header matches `etag`."""
+    if not header:
+        return False
+    target = etag.strip()
+    for part in header.split(","):
+        tag = part.strip()
+        if tag == "*":
+            return True
+        if tag.startswith("W/"):
+            tag = tag[2:].strip()
+        if tag == target:
+            return True
+    return False
+
+
+def _dashboard_asset() -> tuple[bytes, bytes | None, str]:
+    """Return `(raw_bytes, gzipped_bytes_or_none, etag)` for the dashboard HTML.
+
+    Cached by `(path, st_mtime_ns, st_size)` so repeated page loads avoid
+    re-reading and re-compressing index.html on the router.
+    """
+    global _DASHBOARD_CACHE
+    chosen: Path | None = None
+    key: tuple[str, int, int] = ("<fallback>", 0, len(_FALLBACK_HTML))
+    for here in _DASHBOARD_CANDIDATES:
+        try:
+            st = here.stat()
+        except OSError:
+            continue
+        if here.is_file():
+            chosen = here
+            key = (str(here), st.st_mtime_ns, st.st_size)
+            break
+
+    with _DASHBOARD_CACHE_LOCK:
+        if _DASHBOARD_CACHE is not None and _DASHBOARD_CACHE[0] == key:
+            return _DASHBOARD_CACHE[1], _DASHBOARD_CACHE[2], _DASHBOARD_CACHE[3]
+
+    raw = chosen.read_bytes() if chosen is not None else _FALLBACK_HTML.encode("utf-8")
+    etag = f'"{hashlib.sha256(raw).hexdigest()[:16]}"'
+    gz, enc = encode_body(raw, "gzip")
+    gz_bytes = gz if enc == "gzip" else None
+
+    with _DASHBOARD_CACHE_LOCK:
+        _DASHBOARD_CACHE = (key, raw, gz_bytes, etag)
+    return raw, gz_bytes, etag
 
 
 class ConsoleHandler(BaseHTTPRequestHandler):
@@ -521,12 +580,53 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         )
         self._ok(json.dumps({"leg": req.name, "approved": True}).encode())
 
-    def _ok(self, body: bytes, content_type: str = "application/json") -> None:
+    def _ok(
+        self,
+        body: bytes,
+        content_type: str = "application/json",
+        *,
+        encoding: str | None = None,
+        etag: str | None = None,
+        vary: bool = False,
+    ) -> None:
         self.send_response(200)
         self.send_header("Content-Type", content_type)
+        if encoding:
+            self.send_header("Content-Encoding", encoding)
+        if encoding or vary:
+            # Content-Encoding varies by request header, so a cache
+            # that stores one and serves it to the other hands a
+            # gzip stream to a client that asked for plain JSON.
+            self.send_header("Vary", "Accept-Encoding")
+        if etag:
+            self.send_header("ETag", etag)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _ok_json(self, payload: Any) -> None:
+        body, encoding = encode_json_body(payload, self.headers.get("Accept-Encoding"))
+        self._ok(body, "application/json", encoding=encoding)
+
+    def _serve_dashboard(self) -> None:
+        raw, gz_bytes, etag = _dashboard_asset()
+        if _etag_matches(self.headers.get("If-None-Match"), etag):
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            return
+        accept = self.headers.get("Accept-Encoding") or ""
+        if gz_bytes is not None and "gzip" in accept.lower():
+            self._ok(
+                gz_bytes,
+                "text/html; charset=utf-8",
+                encoding="gzip",
+                etag=etag,
+                vary=True,
+            )
+            return
+        self._ok(raw, "text/html; charset=utf-8", etag=etag, vary=True)
 
     def do_PUT(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
@@ -574,16 +674,20 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if parsed.path in {"/", "/index.html"}:
-            self._ok(_dashboard_html().encode("utf-8"), "text/html; charset=utf-8")
+            self._serve_dashboard()
             return
         if parsed.path == "/api/status":
-            self._ok(json.dumps(self.seam.status_dict()).encode("utf-8"))
+            self._ok_json(self.seam.status_dict())
             return
         if parsed.path == "/api/series":
             self._series(parsed.query)
             return
         if parsed.path == "/api/discovery/roster":
-            self._ok(json.dumps(self.seam.discovery_roster()).encode("utf-8"))
+            # The roster carries peer-proof keys, so it needs write authority:
+            # a paired device certificate or the console bearer token.
+            if self._write_actor() is None:
+                return
+            self._ok_json(self.seam.discovery_roster())
             return
         if parsed.path.lower().endswith(".apk"):
             self.send_error(403, "serving APKs from agent dashboard is forbidden")
@@ -602,19 +706,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             except ValueError:
                 # Junk query param must not 500 the console.
                 since = None
-        payload = self.seam.series_payload(since)
-        body, encoding = encode_json_body(payload, self.headers.get("Accept-Encoding"))
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        if encoding:
-            self.send_header("Content-Encoding", encoding)
-            # Content-Encoding varies by request header, so a cache
-            # that stores one and serves it to the other hands a
-            # gzip stream to a client that asked for plain JSON.
-            self.send_header("Vary", "Accept-Encoding")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self._ok_json(self.seam.series_payload(since))
 
 
 def make_handler(seam: ConsoleSeam, *, device_records: str = "") -> type[BaseHTTPRequestHandler]:

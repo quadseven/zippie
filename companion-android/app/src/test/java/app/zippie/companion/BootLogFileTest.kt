@@ -16,7 +16,7 @@ import java.io.File
  * earliest lines - which on a failed cold boot are the interesting ones.
  *
  * The Android half (device-protected storage) is one call and cannot be
- * exercised on the JVM, exactly as CellularLogShipperTest says of its POST.
+ * exercised on the JVM.
  */
 class BootLogFileTest {
 

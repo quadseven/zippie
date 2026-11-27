@@ -245,6 +245,7 @@ def test_only_the_genuinely_unreferenced_are_returned(capsys):
         [_cmobj("live"), _cmobj("rollback"), _cmobj("orphan")],
         live={"live"},
         rollback={"rollback"},
+        deployment_refs=set(),
     )
     assert unreferenced == ["orphan"]
     out = capsys.readouterr().out
@@ -255,7 +256,15 @@ def test_the_service_account_token_ca_is_ignored(capsys):
     """kube-root-ca.crt is injected by the control plane into every namespace
     and referenced by nothing this script can see. Listing it as unreferenced
     would put a "delete this" line under it."""
-    assert cm._report([_cmobj("kube-root-ca.crt")], live=set(), rollback=set()) == []
+    assert (
+        cm._report(
+            [_cmobj("kube-root-ca.crt")],
+            live=set(),
+            rollback=set(),
+            deployment_refs=set(),
+        )
+        == []
+    )
     assert "kube-root-ca.crt" not in capsys.readouterr().out
 
 
@@ -498,7 +507,7 @@ def test_prune_mode_takes_a_kubectl_delete_path(monkeypatch, capsys):
 
     monkeypatch.setattr(cm.subprocess, "run", record)
     monkeypatch.setattr("sys.argv", ["x", "--prune"])
-    monkeypatch.setattr(cm, "_report", lambda cms, live, rb: ["orphan"])
+    monkeypatch.setattr(cm, "_report", lambda cms, live, rb, dr: ["orphan"])
     monkeypatch.setattr(cm, "_print_delete_lines", lambda *a: None)
 
     assert cm.main() == 0
@@ -552,8 +561,8 @@ def test_prune_reports_failure(monkeypatch, capsys):
     monkeypatch.setattr(cm.subprocess, "run", record)
     monkeypatch.setattr("sys.argv", ["x", "--prune"])
 
-    def mock_report(cms, live, rb):
-        orphan_names = {c["metadata"]["name"] for c in cms} - live - rb
+    def mock_report(cms, live, rb, dr):
+        orphan_names = {c["metadata"]["name"] for c in cms} - live - rb - dr
         return list(orphan_names)
 
     monkeypatch.setattr(cm, "_report", mock_report)
@@ -626,3 +635,156 @@ def test_a_failed_read_shows_what_kubectl_said(monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["x"])
     assert cm.main() == 2
     assert 'context "k8s-oke" does not exist' in capsys.readouterr().err
+
+
+# ------------------------------------------------------- Deployment references
+# A Deployment's current pod template references ConfigMaps that the controller
+# will roll out. The prune step runs after apply but before the new ReplicaSet
+# exists, so Deployment refs close the window where a fresh ConfigMap looks
+# unreferenced.
+def _deploy(*, volumes=None, containers=None, init=None):
+    spec = {"template": {"spec": {}}}
+    if volumes is not None:
+        spec["template"]["spec"]["volumes"] = volumes
+    if containers is not None:
+        spec["template"]["spec"]["containers"] = containers
+    if init is not None:
+        spec["template"]["spec"]["initContainers"] = init
+    return {"kind": "Deployment", "metadata": {"name": "d"}, "spec": spec}
+
+
+def test_a_deployment_template_is_unwrapped():
+    """Deployments nest the pod spec under `spec.template.spec`, same as
+    ReplicaSets. Reading the wrong level finds nothing."""
+    dep = _deploy(volumes=[{"name": "v", "configMap": {"name": "from-deployment"}}])
+    assert cm._configmap_names(cm._pod_spec(dep)) == {"from-deployment"}
+
+
+def test_deployment_refs_are_reported_separately(capsys):
+    """_report shows 'deployment (current)' for ConfigMaps named only by a
+    Deployment's current spec."""
+    unreferenced = cm._report(
+        [_cmobj("live"), _cmobj("deploy-only"), _cmobj("orphan")],
+        live={"live"},
+        rollback=set(),
+        deployment_refs={"deploy-only"},
+    )
+    assert unreferenced == ["orphan"]
+    out = capsys.readouterr().out
+    assert "deployment (current)" in out
+    assert "deploy-only" in out
+
+
+def test_deployment_refs_prevent_pruning(monkeypatch, capsys):
+    """A ConfigMap named by a Deployment's current spec must NOT be listed as
+    unreferenced, even if no Pod or ReplicaSet references it yet."""
+    monkeypatch.setattr(
+        cm.subprocess,
+        "run",
+        lambda *a, **k: type(
+            "R",
+            (),
+            {
+                "stdout": json.dumps(
+                    {
+                        "items": [
+                            _cmobj("fresh"),
+                            _deploy(
+                                volumes=[{"name": "v", "configMap": {"name": "fresh"}}]
+                            ),
+                        ]
+                    }
+                )
+            },
+        )(),
+    )
+    monkeypatch.setattr("sys.argv", ["x"])
+    assert cm.main() == 0
+    out = capsys.readouterr().out
+    assert "fresh" in out
+    assert "deployment (current)" in out
+    assert "referenced by NOTHING    : 0" in out
+
+
+def test_refuses_when_only_deployments_exist(monkeypatch, capsys):
+    """A namespace with ConfigMaps and only Deployments (no pods, no RS) is
+    still readable - Deployments are workloads too."""
+    monkeypatch.setattr(
+        cm.subprocess,
+        "run",
+        lambda *a, **k: type(
+            "R",
+            (),
+            {
+                "stdout": json.dumps(
+                    {
+                        "items": [
+                            _cmobj("from-deploy"),
+                            _deploy(
+                                volumes=[
+                                    {"name": "v", "configMap": {"name": "from-deploy"}}
+                                ]
+                            ),
+                        ]
+                    }
+                )
+            },
+        )(),
+    )
+    monkeypatch.setattr("sys.argv", ["x"])
+    assert cm.main() == 0
+    out = capsys.readouterr().out
+    assert "referenced by NOTHING    : 0" in out
+
+
+def test_deployment_refs_included_in_prune_decision(monkeypatch, capsys):
+    """Prune mode must not delete a ConfigMap that a Deployment currently references."""
+    seen = []
+
+    def record(cmd, *a, **k):
+        seen.append(cmd)
+        if "get" in cmd:
+            return type(
+                "R",
+                (),
+                {
+                    "stdout": json.dumps(
+                        {
+                            "items": [
+                                {"kind": "ConfigMap", "metadata": {"name": "orphan"}},
+                                {
+                                    "kind": "ConfigMap",
+                                    "metadata": {"name": "from-deploy"},
+                                },
+                                _deploy(
+                                    volumes=[
+                                        {
+                                            "name": "v",
+                                            "configMap": {"name": "from-deploy"},
+                                        }
+                                    ]
+                                ),
+                                _pod(
+                                    volumes=[
+                                        {"name": "v", "configMap": {"name": "other"}}
+                                    ]
+                                ),
+                            ]
+                        }
+                    ),
+                    "returncode": 0,
+                },
+            )()
+        else:  # delete
+            return type("R", (), {"stdout": "", "returncode": 0})()
+
+    monkeypatch.setattr(cm.subprocess, "run", record)
+    monkeypatch.setattr("sys.argv", ["x", "--prune"])
+    # Only "orphan" should be deleted; "from-deploy" is referenced by Deployment
+    monkeypatch.setattr(cm, "_report", lambda cms, live, rb, dr: ["orphan"])
+    monkeypatch.setattr(cm, "_print_delete_lines", lambda *a: None)
+
+    assert cm.main() == 0
+    assert len(seen) == 2, f"expected two kubectl calls (get + one delete), got {seen}"
+    assert "get" in seen[0] and "delete" not in seen[0], seen[0]
+    assert "delete" in seen[1] and "cm" in seen[1] and "orphan" in seen[1], seen[1]

@@ -9,6 +9,7 @@ deployed telemetry.py was three days stale, and `/api/status` said `"version":
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -36,8 +37,12 @@ def test_fingerprint_is_stable_for_identical_content(pkg, tmp_path):
 
 def test_edited_module_changes_the_fingerprint(pkg):
     """THE case that mattered: telemetry.py stale by three days on the router."""
+    module = pkg / "telemetry.py"
+    original = module.stat()
     before = build.fingerprint(pkg)
-    (pkg / "telemetry.py").write_text("B = 3\n")
+    module.write_text("B = 3\n")
+    # A same-size edit must advance mtime for the stat-keyed cache.
+    os.utime(module, ns=(original.st_atime_ns, original.st_mtime_ns + 2_000_000_000))
     assert build.fingerprint(pkg) != before
 
 
@@ -334,3 +339,108 @@ def test_a_config_with_no_home_table_does_not_crash(tmp_path):
     change) must still produce a digest, not an AttributeError on .pop()."""
     p = _toml(tmp_path, text="[paths]\n", name="no-home.toml")
     assert build.normalized_config_fingerprint(p)
+
+
+# ------------------------------------------------------------ stat-keyed cache
+def test_fingerprint_caches_until_file_stat_changes(pkg, monkeypatch):
+    """Unchanged package files are not re-read on every status poll."""
+    from pathlib import Path
+
+    real_read_bytes = Path.read_bytes
+    reads = 0
+
+    def counting_read_bytes(self):
+        nonlocal reads
+        reads += 1
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", counting_read_bytes)
+
+    first = build.fingerprint(pkg)
+    assert reads == 2
+    second = build.fingerprint(pkg)
+    assert second == first
+    assert reads == 2
+
+    (pkg / "agent.py").write_text("A = 12345\n")
+    third = build.fingerprint(pkg)
+    assert third != first
+    assert reads == 4
+
+
+def test_read_stamp_caches_until_stamp_stat_changes(tmp_path, monkeypatch):
+    """Unchanged deploy stamps are not re-parsed on every status poll."""
+    from pathlib import Path
+
+    stamp = tmp_path / "build.json"
+    stamp.write_text(json.dumps({"commit": "aaa1111"}))
+
+    real_read_text = Path.read_text
+    reads = 0
+
+    def counting_read_text(self, *args, **kwargs):
+        nonlocal reads
+        reads += 1
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counting_read_text)
+
+    first = build._read_stamp(stamp)
+    assert first == {"commit": "aaa1111"}
+    assert reads == 1
+    first["commit"] = "mutated-by-caller"
+
+    second = build._read_stamp(stamp)
+    assert second == {"commit": "aaa1111"}
+    assert reads == 1
+
+    stamp.write_text(json.dumps({"commit": "bbb2222333"}))
+    third = build._read_stamp(stamp)
+    assert third == {"commit": "bbb2222333"}
+    assert reads == 2
+
+    stamp.unlink()
+    assert build._read_stamp(stamp) == {}
+
+
+def test_status_snapshot_calls_build_info_outside_agent_lock(tmp_path, monkeypatch):
+    """status_snapshot must not hold agent._lock across filesystem stat/hash work."""
+    from zippie.agent import BondAgent
+    from zippie.config import parse_config
+
+    agent = BondAgent(
+        parse_config(
+            {
+                "agent": {
+                    "private_key": "cGtleQ==",
+                    "state_dir": str(tmp_path),
+                    "run_dir": str(tmp_path / "run"),
+                    "dashboard_host": "127.0.0.1",
+                    "dashboard_port": 0,
+                },
+                "home": {
+                    "endpoint": "home.example:51900",
+                    "server_public_key": "c2VydmVy",
+                    "address_cidr": "198.51.100.10/24",
+                    "ports": [51900],
+                },
+                "policy": {"datapath": "packet", "transport_port": 51830, "mode": "aggregate"},
+                "paths": [{"name": "att", "interface": "eth0", "tier": 1}],
+            }
+        )
+    )
+
+    lock_was_free = []
+    real_build_info = build.build_info
+
+    def checking_build_info(*args, **kwargs):
+        acquired = agent._lock.acquire(blocking=False)
+        lock_was_free.append(acquired)
+        if acquired:
+            agent._lock.release()
+        return real_build_info(*args, **kwargs)
+
+    monkeypatch.setattr(build, "build_info", checking_build_info)
+    snap = agent.status_snapshot()
+    assert lock_was_free == [True]
+    assert snap.build["fingerprint"] == build.fingerprint()

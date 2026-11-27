@@ -232,9 +232,17 @@ def test_fake_series_passes_since_through(fake):
     assert seam.series_since == [123, None]
 
 
-def test_fake_discovery_roster_read_needs_no_token(fake):
+def test_fake_discovery_roster_refuses_a_missing_or_wrong_token(fake):
+    # The roster carries peer-proof keys, so reading it needs the same
+    # authority as a write: a paired device certificate or the bearer token.
+    _, base = fake
+    assert _call(base, "GET", "/api/discovery/roster")[0] == 401
+    assert _call(base, "GET", "/api/discovery/roster", token="wrong")[0] == 401
+
+
+def test_fake_discovery_roster_read_with_the_token(fake):
     seam, base = fake
-    status, body = _call(base, "GET", "/api/discovery/roster")
+    status, body = _call(base, "GET", "/api/discovery/roster", token=seam.console_token())
     assert status == 200
     assert isinstance(body, list)
 
@@ -316,3 +324,74 @@ def test_token_check_is_bearer_only():
     assert not console._token_matches("t0k", "t0k")
     assert not console._token_matches(None, "t0k")
     assert not console._token_matches("Bearer wrong", "t0k")
+
+
+def _raw_get(base: str, path: str, headers: dict[str, str] | None = None):
+    import http.client
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(base)
+    conn = http.client.HTTPConnection(parts.hostname, parts.port, timeout=5)
+    try:
+        conn.request("GET", path, headers=headers or {})
+        resp = conn.getresponse()
+        return resp.status, {k.lower(): v for k, v in resp.getheaders()}, resp.read()
+    finally:
+        conn.close()
+
+
+def test_dashboard_html_etag_304_and_gzip(fake, tmp_path, monkeypatch):
+    import gzip
+
+    _seam, base = fake
+    html_file = tmp_path / "index.html"
+    content = "<!doctype html><html><body>" + ("zippie dashboard " * 120) + "</body></html>"
+    html_file.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(console, "_DASHBOARD_CANDIDATES", (html_file,))
+    monkeypatch.setattr(console, "_DASHBOARD_CACHE", None)
+
+    status, headers, body = _raw_get(base, "/", headers={"Accept-Encoding": "gzip"})
+    assert status == 200
+    assert headers.get("content-encoding") == "gzip"
+    assert headers.get("vary") == "Accept-Encoding"
+    etag = headers.get("etag")
+    assert etag
+    assert gzip.decompress(body).decode("utf-8") == content
+
+    status_304, headers_304, body_304 = _raw_get(
+        base, "/index.html", headers={"If-None-Match": etag, "Accept-Encoding": "gzip"}
+    )
+    assert status_304 == 304
+    assert body_304 == b""
+    assert headers_304.get("etag") == etag
+
+    updated = content + "<p>updated</p>"
+    html_file.write_text(updated, encoding="utf-8")
+    status_new, headers_new, body_new = _raw_get(base, "/", headers={"If-None-Match": etag})
+    assert status_new == 200
+    assert headers_new.get("etag") != etag
+    assert "content-encoding" not in headers_new
+    assert body_new.decode("utf-8") == updated
+
+
+def test_status_and_roster_compress_when_gzip_accepted(fake, monkeypatch):
+    import gzip
+
+    seam, base = fake
+    big_status = {"legs": [{"name": f"leg-{i}", "detail": "x" * 64} for i in range(30)]}
+    big_roster = [{"name": f"phone-{i}", "label": "y" * 64} for i in range(30)]
+    monkeypatch.setattr(seam, "status_dict", lambda: big_status)
+    monkeypatch.setattr(seam, "discovery_roster", lambda: big_roster)
+
+    auth = {"Authorization": f"Bearer {seam.console_token()}"}
+    for path, expected in (("/api/status", big_status), ("/api/discovery/roster", big_roster)):
+        status, headers, body = _raw_get(base, path, headers={"Accept-Encoding": "gzip", **auth})
+        assert status == 200
+        assert headers.get("content-encoding") == "gzip"
+        assert headers.get("vary") == "Accept-Encoding"
+        assert json.loads(gzip.decompress(body)) == expected
+
+        plain_status, plain_headers, plain_body = _raw_get(base, path, headers=auth)
+        assert plain_status == 200
+        assert "content-encoding" not in plain_headers
+        assert json.loads(plain_body) == expected

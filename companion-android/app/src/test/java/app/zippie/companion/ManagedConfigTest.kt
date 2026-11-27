@@ -247,37 +247,10 @@ class ManagedConfigTest {
         assertEquals("https://console.example/api/status", ok.consoleUrl)
     }
 
-    // ---- telemetry credential (#186) ----------------------------------
-
     @Test
-    fun `an MDM may push the datadog token`() {
-        val out = ManagedConfig.merge(
-            RelayConfiguration(),
-            mapOf(ManagedConfig.KEY_DD_TOKEN to "pubXYZ", ManagedConfig.KEY_DD_SITE to "datadoghq.eu"),
-        )
-        assertEquals("pubXYZ", out.ddClientToken)
-        assertEquals("datadoghq.eu", out.ddSite)
-    }
-
-    @Test
-    fun `a blank push does not wipe a token the device already has`() {
-        // Headwind sends every declared key, blank ones included. Treating blank
-        // as "clear" would silence a phone's telemetry on the next MDM sync.
-        val stored = RelayConfiguration(ddClientToken = "keepme", ddSite = "datadoghq.com")
-        val out = ManagedConfig.merge(
-            stored,
-            mapOf(ManagedConfig.KEY_DD_TOKEN to "   ", ManagedConfig.KEY_DD_SITE to ""),
-        )
-        assertEquals("keepme", out.ddClientToken)
-        assertEquals("datadoghq.com", out.ddSite)
-    }
-
-    @Test
-    fun `the datadog keys are pushable at all`() {
-        // KEYS is what AndroidManagedConfig reads out of the restrictions
-        // Bundle. A field that merge() honours but KEYS omits can never be set
-        // by an MDM - a credential path that looks wired and is not.
-        assertTrue(ManagedConfig.KEYS.contains(ManagedConfig.KEY_DD_TOKEN))
-        assertTrue(ManagedConfig.KEYS.contains(ManagedConfig.KEY_DD_SITE))
+    fun `legacy telemetry keys are ignored`() {
+        val legacy = mapOf("ddClientToken" to "test-only-value", "ddSite" to "intake.example")
+        assertEquals(stored, ManagedConfig.merge(stored, legacy))
+        assertTrue(legacy.keys.none { it in ManagedConfig.KEYS })
     }
 }

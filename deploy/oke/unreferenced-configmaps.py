@@ -122,18 +122,24 @@ def _kubectl(context: str | None) -> list:
 
 
 def _fetch(namespace: str, context: str | None) -> list:
-    """Every ConfigMap, Pod and ReplicaSet in the namespace, or raise.
+    """Every ConfigMap, Pod, ReplicaSet and Deployment in the namespace, or raise.
 
     A REPORT THAT CANNOT SEE THE CLUSTER MUST NOT SAY "NOTHING IS REFERENCED" -
     that reads as "safe to delete everything", which is the worst failure this
     particular tool could have. So this raises and the caller exits non-zero.
+
+    Deployments are included because a ConfigMap named by a Deployment's current
+    pod template is effectively referenced - the Deployment controller will create
+    a ReplicaSet with that template. Without this, a freshly applied ConfigMap
+    can appear unreferenced in the window between `kubectl apply` returning and
+    the controller creating the new ReplicaSet.
     """
     cmd = [
         *_kubectl(context),
         "-n",
         namespace,
         "get",
-        "cm,pod,rs",
+        "cm,pod,rs,deploy",
         "-o",
         "json",
     ]
@@ -141,7 +147,7 @@ def _fetch(namespace: str, context: str | None) -> list:
     return json.loads(raw).get("items") or []
 
 
-def _report(configmaps: list, live: set, rollback: set) -> list:
+def _report(configmaps: list, live: set, rollback: set, deployment_refs: set) -> list:
     """Print the reconciliation. Returns the names nothing references."""
     unreferenced = []
     print(f"{'configmap':<34} {'created':<12} referenced by")
@@ -154,6 +160,8 @@ def _report(configmaps: list, live: set, rollback: set) -> list:
             where.append("RUNNING POD")
         if name in rollback:
             where.append("replicaset (rollback)")
+        if name in deployment_refs:
+            where.append("deployment (current)")
         if not where:
             where = ["NOTHING"]
             unreferenced.append(name)
@@ -221,10 +229,11 @@ def main() -> int:
     configmaps = [i for i in items if i["kind"] == "ConfigMap"]
     pods = [i for i in items if i["kind"] == "Pod"]
     replicasets = [i for i in items if i["kind"] == "ReplicaSet"]
+    deployments = [i for i in items if i["kind"] == "Deployment"]
 
-    if not pods and not replicasets:
+    if not pods and not replicasets and not deployments:
         print(
-            "no pods and no replicasets found - refusing to call anything "
+            "no pods, no replicasets, and no deployments found - refusing to call anything "
             "unreferenced from that",
             file=sys.stderr,
         )
@@ -236,12 +245,21 @@ def main() -> int:
     rollback = set()
     for rs in replicasets:
         rollback |= _configmap_names(_pod_spec(rs))
+    # A Deployment's current pod template references ConfigMaps that the
+    # controller will roll out. Treat these as referenced to close the window
+    # between apply returning and the new ReplicaSet appearing.
+    deployment_refs = set()
+    for deploy in deployments:
+        deployment_refs |= _configmap_names(_pod_spec(deploy))
 
-    unreferenced = _report(configmaps, live, rollback)
+    # Deployment refs are as load-bearing as live refs for pruning purposes.
+    # A ConfigMap named by the current Deployment spec must not be pruned.
+    unreferenced = _report(configmaps, live, rollback, deployment_refs)
     names = {c["metadata"]["name"] for c in configmaps}
     print()
     print(f"mounted by a running pod : {len(live & names)}")
     print(f"held for rollback only   : {len(rollback - live)}")
+    print(f"deployment current spec  : {len(deployment_refs - live - rollback)}")
     print(f"referenced by NOTHING    : {len(unreferenced)}")
 
     if args.prune:
