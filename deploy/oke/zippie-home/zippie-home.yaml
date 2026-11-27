@@ -208,6 +208,11 @@ spec:
             # startup; a reserved or absent value is not accepted as live.
             - name: ZIPPIE_HOME_ENDPOINT
               valueFrom:
+                # Explicitly null out the pre-#416 configMapKeyRef so client-side
+                # `kubectl diff -k` (which lacks --server-side against an
+                # SSA-managed Deployment) drops it instead of merging
+                # secretKeyRef alongside the live configMapKeyRef.
+                configMapKeyRef: null
                 secretKeyRef:
                   name: zippie-home-endpoint
                   key: endpoint

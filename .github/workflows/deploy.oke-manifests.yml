@@ -763,7 +763,7 @@ jobs:
           # Held EQUAL to the configMapGenerator list in the kustomization, not
           # merely overlapping - the same rule the drift guard enforces on the
           # zippie-pkg directory. Adding a module means editing both.
-          for f in __init__.py classify.py datapath.py home_transport.py retransmit.py transport.py; do
+          for f in __init__.py auth.py classify.py datapath.py egress.py home_transport.py retransmit.py transport.py; do
             check "$PKG_CM" "$f" "deploy/oke/zippie-home/zippie-pkg/$f"
           done
           rm -rf "$T"
