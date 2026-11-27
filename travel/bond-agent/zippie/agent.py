@@ -48,6 +48,7 @@ from zippie.models import (
     PolicyConfig,
 )
 from zippie.pairing import PairingRequests
+from zippie.route_tunnels import RouteTunnels
 from zippie.status_doc import projected_idle_mb_per_day as projected_idle_mb_per_day
 from zippie.store import HomeAddressStore, LegStore, UsageStore
 from zippie.leg_roster import DynamicChange, LegRoster
@@ -574,11 +575,9 @@ class BondAgent:
         # flapping upstream cannot turn into a DHCP renew storm.
         self._renew_last: dict[str, float] = {}
         self._renew_cooldown_s = 30.0
-        # Escalation ladder per uplink: a renew that does not restore the
-        # default within a loop pass or two escalates to a netifd bounce
-        # (GL's multi-WAN daemon owns the route and ignores mere renews -
-        # measured live 2026-07-30). Keyed by physical ifname.
-        self._heal_state: dict[str, dict] = {}
+        # The tick can escalate to a bounce. Its state is separate from the
+        # monitor thread's renews.
+        self._route_tunnels = RouteTunnels(self.config, heal_cooldown_s=self._renew_cooldown_s)
         # Anti-flap membership gate (join_streak_min): paths that failed must
         # rebuild a healthy streak before rejoining; tracked here, not in the
         # pure policy layer, because it is stateful across loop passes.
@@ -1302,186 +1301,25 @@ class BondAgent:
         return self._resolve_home_ip() or host
 
     def _ensure_path_tunnel(self, idx: int, path: PathRuntime, host: str) -> None:
-        """Reconcile ONE leg: decide what its tunnel should be, then make it so.
-
-        Raises nothing. A leg that cannot be built is a DOWN leg carrying the
-        reason, not a failed pass - see ensure_tunnels on why that containment
-        is the point.
-        """
-        # Named before any early return. wg_iface is how the rest of the agent
-        # refers to this leg's tunnel (teardown, counters, the console), and a
-        # leg being unusable this pass does not change what its tunnel is
-        # called.
-        path.wg_iface = self._wg_iface(path)
-
-        identity = self._path_identity(path)
-        if identity is None:
-            path.state = PathState.DOWN
-            path.last_error = "missing per-path WireGuard key/address (re-import client bundle)"
-            return
-        if not path.interface:
-            # No uplink matched, so there is nothing to dial over. A tunnel
-            # left from an earlier pass has to go: it would hold a socket on an
-            # interface the agent no longer believes it owns.
-            self._teardown_path(path)
-            path.state = PathState.DOWN
-            return
-
-        conf = self._write_path_conf(idx, path, host, identity)
-        if not self._bring_up_path_tunnel(path, conf):
-            return
-        self._pin_endpoint_route(host, path, idx)
-
-    def _path_identity(self, path: PathRuntime) -> tuple[str, str] | None:
-        """This leg's WireGuard key and inner address, or None if unknowable.
-
-        Pure decision, no side effects: what the tunnel SHOULD be, separate
-        from anything that builds it.
-
-        Per-leg material wins over the top-level pair because home issues one
-        peer per leg; the top-level pair is the older single-peer layout and
-        only fills gaps. None means no client bundle has been imported for this
-        leg, and a conf written without a key produces an interface that
-        exists, never handshakes, and is read as a live tunnel by every later
-        pass - so the leg is refused rather than half-built.
-        """
-        priv = path.config.private_key or self.config.private_key
-        addr = path.config.address_cidr or self.config.home.address_cidr
-        if not priv or not addr:
-            return None
-        return priv, addr
-
-    def _leg_dns(self, idx: int) -> list[str]:
-        """Only the first leg may install the resolver.
-
-        wg-quick rewrites resolv.conf per interface, so if every leg claimed
-        DNS the last one up would win and teardown order would silently decide
-        which resolver the router uses.
-        """
-        return self.config.home.dns if idx == 0 else []
-
-    def _write_path_conf(
-        self, idx: int, path: PathRuntime, host: str, identity: tuple[str, str]
-    ) -> Path:
-        """Write this leg's wg config and say where it landed.
-
-        `table = off` because routes belong to the agent's own policy pass;
-        wg-quick installing its own would race the multipath route this tunnel
-        is meant to be a nexthop of.
-
-        The fwmark is per leg and is what lets every tunnel dial the SAME home
-        endpoint down a DIFFERENT link. Sharing one, they fight over a single
-        /32 and all but one never handshake (live, 2026-07-27).
-        """
-        priv, addr = identity
-        conf = self._conf_path(path)
-        net.write_wg_config(
-            str(conf),
-            private_key=priv,
-            address=addr,
-            dns=self._leg_dns(idx),
-            peer_public_key=self.config.home.server_public_key,
-            endpoint=f"{host}:{path.port or self.config.home.ports[0]}",
-            allowed_ips=self.config.home.allowed_ips,
-            keepalive=self.config.home.persistent_keepalive,
-            mtu=path.config.mtu,
-            table="off",
-            fwmark=self._fwmark_for(idx),
+        self._route_tunnels.reconcile_leg(
+            idx,
+            path,
+            host,
+            wg_iface=self._wg_iface(path),
+            conf_path=self._conf_path,
+            tear_down=self._teardown_path,
+            pin_endpoint=self._pin_endpoint_route,
         )
-        return conf
-
-    def _bring_up_path_tunnel(self, path: PathRuntime, conf: Path) -> bool:
-        """Raise this leg's tunnel unless it is already carrying.
-
-        Answers "is this tunnel fit to have a route pinned to it". False means
-        it is not AND the reason is already recorded on the path, so the caller
-        only has to skip it.
-        """
-        try:
-            # address/mtu passed explicitly: the native path (OpenWrt, no
-            # wg-quick) applies them with `ip`, since `wg setconf` cannot. The
-            # address is the LEG'S OWN, never the home fallback the conf may
-            # have used - applying a borrowed one would put a second peer's
-            # inner source on this interface, which home silently drops.
-            tunnel.bring_up_if_needed(
-                conf,
-                path.wg_iface,
-                address=path.config.address_cidr or None,
-                mtu=path.config.mtu,
-            )
-        except net.NetError as exc:
-            path.last_error = str(exc)
-            path.state = PathState.DOWN
-            log.error("wg up failed for %s: %s", path.name, exc)
-            return False
-        return True
-
-    def _fwmark_for(self, idx: int) -> int:
-        return self.config.fwmark_base + idx
-
-    def _table_for(self, idx: int) -> int:
-        return self.config.table_base + idx
 
     def _pin_endpoint_route(self, host: str, path: PathRuntime, idx: int) -> None:
-        """Give this tunnel its own link, via fwmark + a private table.
-
-        Every tunnel dials the SAME home endpoint. The previous approach wrote
-        `<endpoint>/32 via <this link's gw>` into the MAIN table, so tunnel N+1
-        simply overwrote tunnel N and all outer packets left down one link --
-        the others could never handshake. Live on 2026-07-27, pb0 sat at
-        handshake=NEVER with rx=0 because pb1 had claimed the shared route.
-
-        WireGuard stamps this tunnel's encrypted packets with its FwMark; the
-        rule below steers exactly those into a table whose only entry is this
-        link's default route. Nothing is shared, so nothing contends.
-        """
-        if not path.interface:
-            return
-        mark = self._fwmark_for(idx)
-        table = self._table_for(idx)
-        gw = self._default_gw(path.interface)
-        if not net.pin_link_table(table, path.interface, gw):
-            # An empty private table means this tunnel's marked packets have
-            # nowhere to go. Say so on the path rather than letting it read as
-            # a mysterious no-handshake.
-            path.last_error = (
-                f"no route in table {table} for {path.interface} (gateway {gw or 'not found'})"
-            )
-            if gw is None:
-                self._heal_uplink(path.interface)
-            return
-        net.ip_rule_ensure(mark, table)
-
-        # Belt and braces: also resolve the endpoint so a failure here surfaces
-        # as a path error rather than a silent no-handshake.
-        try:
-            net.resolve_host(host)
-        except net.NetError as exc:
-            path.last_error = str(exc)
+        self._route_tunnels.pin_endpoint(host, path, idx)
 
     def _heal_uplink(self, ifname: str) -> None:
-        """Escalating recovery for a bound uplink with no usable gateway.
+        self._route_tunnels.heal_uplink(ifname)
 
-        Ladder: renew (cheap, fixes plain-netifd cases) -> bounce (what
-        `ifup` does; required on GL where the multi-WAN daemon owns the
-        default route and ignores renews) -> cooldown. Driven from the
-        control loop's pin failures, so the event thread never blocks and a
-        healthy interface is never touched.
-        """
-        now = time.monotonic()
-        st = self._heal_state.setdefault(ifname, {"stage": 0, "at": 0.0})
-        if net.link_has_default(ifname):
-            self._heal_state.pop(ifname, None)
-            return
-        if now - st["at"] < self._renew_cooldown_s:
-            return
-        st["at"] = now
-        if st["stage"] == 0:
-            st["stage"] = 1
-            net.netifd_renew(ifname)
-        else:
-            st["stage"] = 0
-            net.netifd_bounce(ifname)
+    @property
+    def _heal_state(self) -> dict[str, dict]:
+        return self._route_tunnels.heal_state
 
     def _default_gw(self, iface: str) -> str | None:
         """Delegates to net.link_gateway, which is scoped to the interface.
@@ -1494,9 +1332,7 @@ class BondAgent:
         return net.link_gateway(iface)
 
     def _teardown_path(self, path: PathRuntime) -> None:
-        conf = self._conf_path(path)
-        if conf.exists() or net.dry_run():
-            net.wg_quick_down(str(conf), path.wg_iface)
+        self._route_tunnels.tear_down(self._conf_path(path), path.wg_iface)
 
     def _on_uplink_addr_loss(self, ifname: str) -> None:
         """A bonded uplink just lost its IPv4 address: withdraw it NOW.
