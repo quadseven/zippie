@@ -232,9 +232,17 @@ def test_fake_series_passes_since_through(fake):
     assert seam.series_since == [123, None]
 
 
-def test_fake_discovery_roster_read_needs_no_token(fake):
+def test_fake_discovery_roster_refuses_a_missing_or_wrong_token(fake):
+    # The roster carries peer-proof keys, so reading it needs the same
+    # authority as a write: a paired device certificate or the bearer token.
+    _, base = fake
+    assert _call(base, "GET", "/api/discovery/roster")[0] == 401
+    assert _call(base, "GET", "/api/discovery/roster", token="wrong")[0] == 401
+
+
+def test_fake_discovery_roster_read_with_the_token(fake):
     seam, base = fake
-    status, body = _call(base, "GET", "/api/discovery/roster")
+    status, body = _call(base, "GET", "/api/discovery/roster", token=seam.console_token())
     assert status == 200
     assert isinstance(body, list)
 
@@ -375,14 +383,15 @@ def test_status_and_roster_compress_when_gzip_accepted(fake, monkeypatch):
     monkeypatch.setattr(seam, "status_dict", lambda: big_status)
     monkeypatch.setattr(seam, "discovery_roster", lambda: big_roster)
 
+    auth = {"Authorization": f"Bearer {seam.console_token()}"}
     for path, expected in (("/api/status", big_status), ("/api/discovery/roster", big_roster)):
-        status, headers, body = _raw_get(base, path, headers={"Accept-Encoding": "gzip"})
+        status, headers, body = _raw_get(base, path, headers={"Accept-Encoding": "gzip", **auth})
         assert status == 200
         assert headers.get("content-encoding") == "gzip"
         assert headers.get("vary") == "Accept-Encoding"
         assert json.loads(gzip.decompress(body)) == expected
 
-        plain_status, plain_headers, plain_body = _raw_get(base, path)
+        plain_status, plain_headers, plain_body = _raw_get(base, path, headers=auth)
         assert plain_status == 200
         assert "content-encoding" not in plain_headers
         assert json.loads(plain_body) == expected
