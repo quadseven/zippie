@@ -27,14 +27,20 @@ def which(binary: str) -> str | None:
     return shutil.which(binary)
 
 
+def _redact_value(text: str, value: str) -> str:
+    return text.replace(value, "[redacted]") if value else text
+
+
 def run(
     args: list[str],
     *,
     check: bool = True,
     input_text: str | None = None,
     timeout: float | None = 30,
+    redact_value: str = "",
 ) -> subprocess.CompletedProcess[str]:
-    log.debug("exec: %s", " ".join(args))
+    command = " ".join(args)
+    log.debug("exec: %s", _redact_value(command, redact_value))
     try:
         return subprocess.run(
             args,
@@ -45,14 +51,15 @@ def run(
             timeout=timeout,
         )
     except FileNotFoundError as exc:
-        if check:
-            raise NetError(f"command not found: {args[0]}") from exc
-        return subprocess.CompletedProcess(args, 127, stdout="", stderr=str(exc))
+        if not check:
+            return subprocess.CompletedProcess(
+                args, 127, stdout="", stderr=_redact_value(str(exc), redact_value)
+            )
+        message = f"command not found: {args[0]}"
+        cause = exc
     except subprocess.CalledProcessError as exc:
-        raise NetError(
-            f"command failed ({exc.returncode}): {' '.join(args)}\n"
-            f"stdout: {exc.stdout}\nstderr: {exc.stderr}"
-        ) from exc
+        message = f"command failed ({exc.returncode}): {command}\nstdout: {exc.stdout}\nstderr: {exc.stderr}"
+        cause = exc
     except subprocess.TimeoutExpired as exc:
         # A hung command must surface as the SAME error type as a failed one.
         # `wg setconf` blocks in getaddrinfo when the Endpoint is a hostname
@@ -60,7 +67,10 @@ def run(
         # tunnels. On 2026-08-02 the raw TimeoutExpired sailed past every
         # `except NetError` in ensure_tunnels, killed the whole loop pass, and
         # left a half-created pb2 that was never repaired.
-        raise NetError(f"command timed out after {timeout}s: {' '.join(args)}") from exc
+        message = f"command timed out after {timeout}s: {command}"
+        cause = exc
+    # Leave the subprocess handler before raising so a redacted error has no raw cause or context.
+    raise NetError(_redact_value(message, redact_value)) from (None if redact_value else cause)
 
 
 def dry_run() -> bool:
@@ -69,7 +79,7 @@ def dry_run() -> bool:
 
 def run_or_dry(args: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
     if dry_run():
-        log.info("[dry-run] %s", " ".join(args))
+        log.info("[dry-run] %s", _redact_value(" ".join(args), kwargs.get("redact_value", "")))
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
     return run(args, **kwargs)
 
@@ -384,6 +394,8 @@ PersistentKeepalive = {keepalive}
 
 def set_wg_persistent_keepalive(iface: str, peer_public_key: str, seconds: int) -> None:
     """Change one live peer's keepalive without rebuilding its interface."""
+    # AI-REVIEW 2026-11-27 [nemotron-3.5-super-vl] secret-in-log-or-trace (Grug Elder, PR #466):
+    # Mask the peer identity in command diagnostics while preserving the arguments WireGuard needs.
     run_or_dry(
         [
             "wg",
@@ -395,6 +407,7 @@ def set_wg_persistent_keepalive(iface: str, peer_public_key: str, seconds: int) 
             str(max(0, seconds)),
         ],
         check=True,
+        redact_value=peer_public_key,
     )
 
 

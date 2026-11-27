@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import inspect
+import logging
 import re
+import subprocess
+import traceback
 from pathlib import Path
+
+import pytest
 
 from zippie import agent as agent_mod
 from zippie import net
@@ -278,6 +283,50 @@ def test_live_wireguard_keepalive_is_changed_without_rebuilding(monkeypatch):
             "25",
         ]
     ]
+
+
+@pytest.mark.parametrize("outcome", ["dry-run", "success", "nonzero", "timeout", "missing"])
+def test_wireguard_keepalive_hides_peer_from_logs_and_errors(monkeypatch, caplog, outcome):
+    peer = "fixture-peer-identity"
+    expected = ["wg", "set", "pbz0", "peer", peer, "persistent-keepalive", "25"]
+    commands = []
+
+    def run(args, *, timeout, **kwargs):
+        commands.append(args)
+        if outcome == "nonzero":
+            raise subprocess.CalledProcessError(
+                1, args, f"fixture stdout {peer}", f"fixture stderr {peer}"
+            )
+        if outcome == "timeout":
+            raise subprocess.TimeoutExpired(args, timeout)
+        if outcome == "missing":
+            raise FileNotFoundError("fixture executable missing")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setenv("ZIPPIE_DRY_RUN", "1" if outcome == "dry-run" else "0")
+    monkeypatch.setattr(net.subprocess, "run", run)
+    caplog.set_level(logging.DEBUG, logger="zippie.net")
+
+    if outcome in {"dry-run", "success"}:
+        net.set_wg_persistent_keepalive("pbz0", peer, 25)
+    else:
+        with pytest.raises(net.NetError) as error:
+            net.set_wg_persistent_keepalive("pbz0", peer, 25)
+        exc = error.value
+        assert peer not in str(exc)
+        assert exc.__cause__ is None and exc.__context__ is None
+        assert peer not in "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        if outcome == "nonzero":
+            assert "fixture stdout" in str(exc) and "fixture stderr" in str(exc)
+        if outcome == "timeout":
+            assert "timed out" in str(exc)
+        if outcome == "missing":
+            assert "command not found: wg" in str(exc)
+
+    assert commands == ([] if outcome == "dry-run" else [expected])
+    assert "wg set pbz0 peer" in caplog.text
+    assert "persistent-keepalive 25" in caplog.text
+    assert peer not in caplog.text
 
 
 def test_idle_settings_can_never_increase_probe_or_keepalive_traffic(tmp_path):
