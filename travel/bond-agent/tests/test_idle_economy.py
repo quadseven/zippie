@@ -8,6 +8,7 @@ import re
 import subprocess
 import traceback
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -266,67 +267,81 @@ def test_router_toml_idle_floor_comment_matches_the_projection():
     assert mb_day == f"{projected:.2f}"
 
 
-def test_live_wireguard_keepalive_is_changed_without_rebuilding(monkeypatch):
-    commands = []
-    monkeypatch.setattr(net, "run_or_dry", lambda args, **kw: commands.append(args))
-
-    net.set_wg_persistent_keepalive("pbz0", "server-key", 25)
-
-    assert commands == [
-        [
-            "wg",
-            "set",
-            "pbz0",
-            "peer",
-            "server-key",
-            "persistent-keepalive",
-            "25",
-        ]
-    ]
+_KEEPALIVE_PEER = "fixture-peer-identity"
+_KEEPALIVE_ARGS = ["wg", "set", "pbz0", "peer", _KEEPALIVE_PEER, "persistent-keepalive", "25"]
 
 
-@pytest.mark.parametrize("outcome", ["dry-run", "success", "nonzero", "timeout", "missing"])
-def test_wireguard_keepalive_hides_peer_from_logs_and_errors(monkeypatch, caplog, outcome):
-    peer = "fixture-peer-identity"
-    expected = ["wg", "set", "pbz0", "peer", peer, "persistent-keepalive", "25"]
-    commands = []
-
-    def run(args, *, timeout, **kwargs):
-        commands.append(args)
-        if outcome == "nonzero":
-            raise subprocess.CalledProcessError(
-                1, args, f"fixture stdout {peer}", f"fixture stderr {peer}"
-            )
-        if outcome == "timeout":
-            raise subprocess.TimeoutExpired(args, timeout)
-        if outcome == "missing":
-            raise FileNotFoundError("fixture executable missing")
-        return subprocess.CompletedProcess(args, 0, "", "")
-
-    monkeypatch.setenv("ZIPPIE_DRY_RUN", "1" if outcome == "dry-run" else "0")
+def test_live_wireguard_keepalive_changes_one_peer_with_a_constant_debug_log(monkeypatch, caplog):
+    run = Mock(return_value=subprocess.CompletedProcess(_KEEPALIVE_ARGS, 0))
+    monkeypatch.delenv("ZIPPIE_DRY_RUN", raising=False)
     monkeypatch.setattr(net.subprocess, "run", run)
     caplog.set_level(logging.DEBUG, logger="zippie.net")
 
-    if outcome in {"dry-run", "success"}:
-        net.set_wg_persistent_keepalive("pbz0", peer, 25)
-    else:
-        with pytest.raises(net.NetError) as error:
-            net.set_wg_persistent_keepalive("pbz0", peer, 25)
-        exc = error.value
-        assert peer not in str(exc)
-        assert exc.__cause__ is None and exc.__context__ is None
-        assert peer not in "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-        if outcome == "nonzero":
-            assert "fixture stdout" in str(exc) and "fixture stderr" in str(exc)
-        if outcome == "timeout":
-            assert "timed out" in str(exc)
-        if outcome == "missing":
-            assert "command not found: wg" in str(exc)
+    net.set_wg_persistent_keepalive("pbz0", _KEEPALIVE_PEER, 25)
 
-    assert commands == ([] if outcome == "dry-run" else [expected])
-    assert "wg set pbz0 peer" in caplog.text
-    assert "persistent-keepalive 25" in caplog.text
-    assert peer not in caplog.text
+    run.assert_called_once_with(
+        _KEEPALIVE_ARGS,
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=30,
+    )
+    assert caplog.messages == ["set WireGuard peer keepalive"]
+
+
+def test_dry_run_wireguard_keepalive_logs_only_the_operation(monkeypatch, caplog):
+    run = Mock()
+    monkeypatch.setenv("ZIPPIE_DRY_RUN", "1")
+    monkeypatch.setattr(net.subprocess, "run", run)
+    caplog.set_level(logging.INFO, logger="zippie.net")
+
+    net.set_wg_persistent_keepalive("pbz0", _KEEPALIVE_PEER, 25)
+
+    run.assert_not_called()
+    assert caplog.messages == ["[dry-run] set WireGuard peer keepalive"]
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        (
+            subprocess.CalledProcessError(1, _KEEPALIVE_ARGS, "fixture stdout", "fixture stderr"),
+            "WireGuard keepalive command failed",
+        ),
+        (subprocess.TimeoutExpired(_KEEPALIVE_ARGS, 30), "WireGuard keepalive command timed out"),
+        (FileNotFoundError("fixture executable missing"), "WireGuard keepalive command not found"),
+    ],
+)
+def test_wireguard_keepalive_error_omits_process_details(monkeypatch, failure, message):
+    monkeypatch.delenv("ZIPPIE_DRY_RUN", raising=False)
+    monkeypatch.setattr(net.subprocess, "run", Mock(side_effect=failure))
+
+    with pytest.raises(net.NetError) as error:
+        net.set_wg_persistent_keepalive("pbz0", _KEEPALIVE_PEER, 25)
+
+    exc = error.value
+    assert str(exc) == message
+    assert exc.__cause__ is None and exc.__context__ is None
+    assert _KEEPALIVE_PEER not in "".join(
+        traceback.format_exception(type(exc), exc, exc.__traceback__)
+    )
+
+
+def test_ordinary_command_error_preserves_the_existing_diagnostics(monkeypatch, caplog):
+    args = ["fixture-command", "argument"]
+    failure = subprocess.CalledProcessError(4, args, "fixture stdout", "fixture stderr")
+    monkeypatch.setattr(net.subprocess, "run", Mock(side_effect=failure))
+    caplog.set_level(logging.DEBUG, logger="zippie.net")
+
+    with pytest.raises(net.NetError) as error:
+        net.run(args)
+
+    assert error.value.__cause__ is failure and error.value.__context__ is failure
+    assert (
+        str(error.value)
+        == "command failed (4): fixture-command argument\nstdout: fixture stdout\nstderr: fixture stderr"
+    )
+    assert caplog.messages == ["exec: fixture-command argument"]
 
 
 def test_idle_settings_can_never_increase_probe_or_keepalive_traffic(tmp_path):

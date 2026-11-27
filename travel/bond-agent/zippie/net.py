@@ -27,20 +27,14 @@ def which(binary: str) -> str | None:
     return shutil.which(binary)
 
 
-def _redact_value(text: str, value: str) -> str:
-    return text.replace(value, "[redacted]") if value else text
-
-
 def run(
     args: list[str],
     *,
     check: bool = True,
     input_text: str | None = None,
     timeout: float | None = 30,
-    redact_value: str = "",
 ) -> subprocess.CompletedProcess[str]:
-    command = " ".join(args)
-    log.debug("exec: %s", _redact_value(command, redact_value))
+    log.debug("exec: %s", " ".join(args))
     try:
         return subprocess.run(
             args,
@@ -51,15 +45,14 @@ def run(
             timeout=timeout,
         )
     except FileNotFoundError as exc:
-        if not check:
-            return subprocess.CompletedProcess(
-                args, 127, stdout="", stderr=_redact_value(str(exc), redact_value)
-            )
-        message = f"command not found: {args[0]}"
-        cause = exc
+        if check:
+            raise NetError(f"command not found: {args[0]}") from exc
+        return subprocess.CompletedProcess(args, 127, stdout="", stderr=str(exc))
     except subprocess.CalledProcessError as exc:
-        message = f"command failed ({exc.returncode}): {command}\nstdout: {exc.stdout}\nstderr: {exc.stderr}"
-        cause = exc
+        raise NetError(
+            f"command failed ({exc.returncode}): {' '.join(args)}\n"
+            f"stdout: {exc.stdout}\nstderr: {exc.stderr}"
+        ) from exc
     except subprocess.TimeoutExpired as exc:
         # A hung command must surface as the SAME error type as a failed one.
         # `wg setconf` blocks in getaddrinfo when the Endpoint is a hostname
@@ -67,10 +60,7 @@ def run(
         # tunnels. On 2026-08-02 the raw TimeoutExpired sailed past every
         # `except NetError` in ensure_tunnels, killed the whole loop pass, and
         # left a half-created pb2 that was never repaired.
-        message = f"command timed out after {timeout}s: {command}"
-        cause = exc
-    # Leave the subprocess handler before raising so a redacted error has no raw cause or context.
-    raise NetError(_redact_value(message, redact_value)) from (None if redact_value else cause)
+        raise NetError(f"command timed out after {timeout}s: {' '.join(args)}") from exc
 
 
 def dry_run() -> bool:
@@ -79,7 +69,7 @@ def dry_run() -> bool:
 
 def run_or_dry(args: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
     if dry_run():
-        log.info("[dry-run] %s", _redact_value(" ".join(args), kwargs.get("redact_value", "")))
+        log.info("[dry-run] %s", " ".join(args))
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
     return run(args, **kwargs)
 
@@ -395,20 +385,34 @@ PersistentKeepalive = {keepalive}
 def set_wg_persistent_keepalive(iface: str, peer_public_key: str, seconds: int) -> None:
     """Change one live peer's keepalive without rebuilding its interface."""
     # AI-REVIEW 2026-11-27 [nemotron-3.5-super-vl] secret-in-log-or-trace (Grug Elder, PR #466):
-    # Mask the peer identity in command diagnostics while preserving the arguments WireGuard needs.
-    run_or_dry(
-        [
-            "wg",
-            "set",
-            iface,
-            "peer",
-            peer_public_key,
-            "persistent-keepalive",
-            str(max(0, seconds)),
-        ],
-        check=True,
-        redact_value=peer_public_key,
-    )
+    # Command arguments and child output stay out of keepalive diagnostics.
+    if dry_run():
+        log.info("[dry-run] set WireGuard peer keepalive")
+        return
+    log.debug("set WireGuard peer keepalive")
+    args = [
+        "wg",
+        "set",
+        iface,
+        "peer",
+        peer_public_key,
+        "persistent-keepalive",
+        str(max(0, seconds)),
+    ]
+    try:
+        subprocess.run(
+            args, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30
+        )
+    except FileNotFoundError:
+        message = "WireGuard keepalive command not found"
+    except subprocess.CalledProcessError:
+        message = "WireGuard keepalive command failed"
+    except subprocess.TimeoutExpired:
+        message = "WireGuard keepalive command timed out"
+    else:
+        return
+    # Raise outside the handlers so the error does not retain subprocess details.
+    raise NetError(message) from None
 
 
 def wg_quick_available() -> bool:
