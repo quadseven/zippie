@@ -97,7 +97,7 @@ def _agent(tmp_path: Path) -> BondAgent:
                 "run_dir": str(tmp_path / "run"),
             },
             "home": {
-                "endpoint": "home.example:51900",
+                "endpoint": "203.0.113.7:51900",
                 "server_public_key": "c2VydmVy",
                 "address_cidr": "10.66.0.10/24",
                 "ports": [51900, 51901],
@@ -161,10 +161,9 @@ def test_lazy_packet_links_start_at_zero_without_config():
 
 def test_tick_releases_and_reuses_a_pid_before_probing_updated_links(tmp_path, monkeypatch):
     agent = _agent(tmp_path)
-    monkeypatch.setattr(agent, "_resolve_home_ip", lambda: "203.0.113.7")
     _join(agent, "phone-before")
-    pid = _pids(agent)["phone-before"]
     transport = agent._transport
+    (pid,) = (number for number, name in transport.links.items() if name == "phone-before")
     events = []
     wifi_joins = []
 
@@ -216,10 +215,12 @@ def test_tick_releases_and_reuses_a_pid_before_probing_updated_links(tmp_path, m
     agent.loop_once()
 
     assert wifi_joins == [(agent.config.paths, agent.wifi_secrets)]
-    same_pid_or_stage = [
+    replacement_events = [
         entry for entry in events if entry[0] in {"policy", "shaper", "probe"} or entry[1] == pid
     ]
-    assert same_pid_or_stage == [
+    # Preserve the pre-extraction tick order (ebd9db3, #375): release before
+    # policy and shaping, forget the old owner before reuse, then probe the new owner.
+    assert replacement_events == [
         ("remove", pid),
         ("policy",),
         ("shaper",),
