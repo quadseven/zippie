@@ -23,6 +23,9 @@ on:
       # every deploy restarts the bond.
       - '!travel/**/*.md'
       - '!travel/**/tests/**'
+      # The Go datapath is not consumed by the router (D38 keeps routers on the
+      # Python datapath). A merge touching only Go must not restart the live bond.
+      - '!travel/datapath-go/**'
       - 'scripts/deploy-openwrt.sh'
   workflow_dispatch:
 
@@ -70,6 +73,9 @@ jobs:
           # runner pod cannot resolve MagicDNS, and a literal goes stale the
           # moment the router is re-addressed on the tailnet.
           ROUTER_HOST: ${{ secrets.ROUTER_DEPLOY_TARGET }}
+          # Router host key, pinned from a secret. The key was captured out of
+          # band before this pin went in (see #394).
+          ROUTER_HOST_KEY: ${{ secrets.ROUTER_DEPLOY_SSH_HOST_KEY }}
         # AN AGENT, NOT A FILE ON DISK. deploy-openwrt.sh invokes bare
         # `ssh root@$HOST` with no -i, so the identity has to arrive through the
         # environment. An agent also dies with the job, where a key written to
@@ -80,15 +86,20 @@ jobs:
             echo "::error::ROUTER_DEPLOY_SSH_KEY_B64 is not set. Seed it from SSM /infra/zippie/router_deploy_ssh_key_b64."
             exit 1
           fi
+          if [ -z "${ROUTER_HOST_KEY:-}" ]; then
+            echo "::error::ROUTER_DEPLOY_SSH_HOST_KEY is not set. Capture the router's host key and store it in this secret."
+            exit 1
+          fi
           eval "$(ssh-agent -s)" >/dev/null
           printf '%s' "$KEY_B64" | base64 -d | ssh-add - >/dev/null 2>&1 \
             || { echo "::error::the deploy key did not load - it may be truncated or not a private key"; exit 1; }
           echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
           echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          # The router's host key, pinned on first contact rather than disabled.
-          # StrictHostKeyChecking=no would accept any host answering that address.
-          ssh-keyscan -T 10 -H "$ROUTER_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          # The router's host key, pinned from a repository secret. StrictHostKeyChecking=yes
+          # fails loudly on a mismatch instead of accepting any host that answers.
+          printf '%s\n' "$ROUTER_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
 
       - name: Is the router even there?
         id: reach
@@ -107,7 +118,7 @@ jobs:
           # Found by the script's own --dry-run before this ever ran for real.
           HOST="$ROUTER_HOST"
           if timeout 20 ssh -o BatchMode=yes -o ConnectTimeout=10 \
-               -o StrictHostKeyChecking=accept-new "root@$HOST" 'exit 0' 2>/dev/null; then
+               -o StrictHostKeyChecking=yes "root@$HOST" 'exit 0' 2>/dev/null; then
             echo "reachable=true" >> "$GITHUB_OUTPUT"
             echo "::notice::the router answered at $HOST"
           else

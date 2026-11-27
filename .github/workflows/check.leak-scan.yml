@@ -33,6 +33,11 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
 
+permissions:
+  contents: read
+  # id-token: write is required at job level for the reusable workflow's deny-list
+  # read role, but declaring it here makes the workflow's token scope explicit.
+
 jobs:
   leak-scan:
     uses: quadseven/infra-public/.github/workflows/_reusable.leak-scan.yml@273755079c88172df39501ee6914fd878c0920bc
