@@ -44,19 +44,18 @@ skipped:
 | `zippie-hub` | `auto` | bare `zippie-hub.yaml` | push to main when it changed, plus every scheduled reconcile (`kubectl apply -f`, client-side, matching how the live object is managed) |
 | `zippie-clienthome` | `dispatch` | bare `zippie-clienthome.yaml` | **`workflow_dispatch` only** - never a push, never the schedule |
 
-`zippie-clienthome` is deliberately not auto-applied. Its committed
-`zippie-clienthome-clients` ConfigMap is a placeholder (`clients.json: []`) and
-the manifest says so - real client keys are provisioned out of band. Applying
-it automatically would overwrite live pairing state with an empty list the
-first time anyone touched that directory. Once it has a Secret instead of a
-placeholder, move it to `auto` in the table.
+`zippie-clienthome` is deliberately not auto-applied: its manifest is PARKED
+(see its header) until it has an image pull path and a phone client to answer.
+Its client list is the `zippie-clienthome-clients` Secret, created out of band
+and never committed; the placeholder ConfigMap is gone from the manifest, so an
+apply can no longer overwrite live pairing state with an empty list. Once the
+header's remaining blockers clear, move it to `auto` in the table.
 
 Its image **is** built and published now, as of quadseven/zippie#110:
 `.github/workflows/build.clienthome-image.yml` publishes
 `ghcr.io/quadseven/zippie-clienthome` with one immutable `sha-<12>` tag per
 commit, and the manifest pins a digest rather than a tag. That closes the build
-half of quadseven/zippie#17; the deploy half is still blocked, on the
-placeholder above, on a GHCR pull secret this namespace does not have (the
+half of quadseven/zippie#17; the deploy half is still blocked, on a GHCR pull secret this namespace does not have (the
 package is private because the repo is), and on there being a phone client to
 answer (quadseven/zippie#27).
 

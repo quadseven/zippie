@@ -3,7 +3,7 @@
 #
 # Why: it is the home end for phone clients, and there is no phone client yet
 # to terminate on it. The image is built and published, but it cannot run
-# (see "What is NOT done" below): no pull secret, placeholder client keys.
+# (see "What is NOT done" below): no pull secret yet.
 # Unblocked by: legacy no. 27 (the phone client). Until then it is kept, not
 # deleted, and deploy/oke/targets.tsv holds it at dispatch-only.
 #
@@ -29,8 +29,8 @@
 #
 # What is NOT done, so applying this still will not give you a running pod:
 #
-#   1. `clients.json` below is a PLACEHOLDER. It must become a Secret with real
-#      keys, which needs the pairing ceremony (#31).
+#   1. DONE: `clients.json` now comes from a Secret created out of band (one
+#      hand-minted test client). Per-device keys need the pairing ceremony.
 #   2. The GHCR package is PRIVATE, because this repo is. Pulling it needs an
 #      image pull secret in the `zippie` namespace, and there is none - so the
 #      pod would sit in ImagePullBackOff on the credential rather than on a
@@ -53,19 +53,10 @@ kind: Namespace
 metadata:
   name: zippie
 ---
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: zippie-clienthome-clients
-  namespace: zippie
-data:
-  # PLACEHOLDER. Real client keys are provisioned out of band until the pairing
-  # ceremony exists (infra#2251) and MUST NOT be committed - this file is a
-  # shape, not a credential store. Replace with a Secret before any phone is
-  # paired.
-  clients.json: |
-    []
----
+# The client list is the Secret `zippie-clienthome-clients` in this namespace.
+# It is created out of band and is NOT committed: it holds real keys. The
+# placeholder ConfigMap that used to sit here is gone, so an apply can no
+# longer overwrite the live list with an empty one.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -159,7 +150,7 @@ spec:
             limits: {memory: 256Mi}
       volumes:
         - name: clients
-          configMap: {name: zippie-clienthome-clients}
+          secret: {secretName: zippie-clienthome-clients}
         - name: tun
           # The DEVICE, not the directory. Mounting /dev/net handed the
           # container every device node in it; only /dev/net/tun is used.
