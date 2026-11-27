@@ -36,8 +36,6 @@ object ManagedConfig {
     const val KEY_HOME_PORT = "homePort"
     const val KEY_LISTEN_PORT = "listenPort"
     const val KEY_AUTO_START = "autoStartRelay"
-    const val KEY_DD_TOKEN = "ddClientToken"
-    const val KEY_DD_SITE = "ddSite"
 
     /** Offer this phone as a home screen (#222). Absent means no - see
      *  HomeScreenRole for why the default must be off. */
@@ -47,7 +45,7 @@ object ManagedConfig {
      *  and not the other is visible in review rather than at runtime. */
     val KEYS = listOf(
         KEY_TOKEN, KEY_CONSOLE_LAN_HOST, KEY_CONSOLE_URL, KEY_HOME_HOST,
-        KEY_HOME_PORT, KEY_LISTEN_PORT, KEY_AUTO_START, KEY_DD_TOKEN, KEY_DD_SITE,
+        KEY_HOME_PORT, KEY_LISTEN_PORT, KEY_AUTO_START,
         KEY_HOME_SCREEN_MODE,
     )
 
@@ -83,12 +81,6 @@ object ManagedConfig {
             homeHost = str(KEY_HOME_HOST) ?: stored.homeHost,
             homePort = int(KEY_HOME_PORT) ?: stored.homePort,
             listenPort = int(KEY_LISTEN_PORT) ?: stored.listenPort,
-            // The telemetry credential arrives the same way the announce
-            // token does. Without this the device can never be given one:
-            // the field existed in RelayConfiguration but nothing could set
-            // it, which is a credential path that looks wired and is not.
-            ddClientToken = str(KEY_DD_TOKEN) ?: stored.ddClientToken,
-            ddSite = str(KEY_DD_SITE) ?: stored.ddSite,
         )
     }
 

@@ -6,12 +6,7 @@ import java.io.IOException
 /**
  * An append-only, size-capped log on disk, with no Android in it.
  *
- * Split from [BootLog] for the same reason CellularLogShipper's queue is split
- * from its POST: the part that has actually bitten is the bookkeeping - a log
- * that grows without limit on a phone nobody is watching, or one that rotates
- * away the lines that explain the incident - and that part can be proven on the
- * JVM. The Android half is one call to createDeviceProtectedStorageContext()
- * and cannot be unit tested here.
+ * Split from [BootLog] so size limits and rotation can be tested on the JVM.
  *
  * ROTATION KEEPS THE OLD FILE, IT DOES NOT DELETE IT. A cold boot that fails is
  * exactly the case where the interesting lines are the EARLIEST ones - the boot
