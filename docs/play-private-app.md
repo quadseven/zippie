@@ -157,13 +157,16 @@ the remaining migration steps are ordinary work rather than blocked:
 
 ## The managed-configuration surface
 
-Eight keys, already implemented and already delivered by Headwind today:
+The Android app advertises these seven keys in its managed restrictions:
 
     homeHost        homePort        consoleLanHost    announceToken
-    listenPort      autoStartRelay  ddClientToken     ddSite
+    listenPort      autoStartRelay  homeScreenMode
 
-Fleet uses the same Android mechanism, so this is a re-point rather than new
-work.
+The app also accepts `consoleUrl` when supplied directly in a restrictions
+Bundle. Older profiles may still send `ddClientToken` and `ddSite`. The Android app
+ignores both. Boot and announce diagnostics remain available in logcat.
+
+Fleet uses the same Android managed configuration mechanism as Headwind.
 
 **One thing managed configuration cannot reach**, and it is worth knowing before
 somebody loses an afternoon to it: `res/xml/network_security_config.xml` pins

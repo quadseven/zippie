@@ -77,13 +77,6 @@ data class RelayConfiguration(
      * which is the thing announcing exists to make unnecessary.
      */
     val announceToken: String = "",
-    /** Datadog client token, so this phone can report on itself over CELLULAR
-     *  while the router - and therefore adb, and therefore every other way of
-     *  asking it anything - is unreachable (#186). Empty disables shipping
-     *  entirely, which is the correct default for a device nobody has
-     *  provisioned. */
-    val ddClientToken: String = "",
-    val ddSite: String = "datadoghq.com",
 ) {
     val budget: DataBudget get() = DataBudget(dailyBudgetBytes, monthlyBudgetBytes)
 
@@ -159,8 +152,6 @@ data class RelayConfiguration(
         private const val KEY_CONSOLE_URL = "consoleUrl"
         private const val KEY_DAILY_BUDGET = "dailyBudgetBytes"
         private const val KEY_MONTHLY_BUDGET = "monthlyBudgetBytes"
-        private const val KEY_DD_TOKEN = "ddClientToken"
-        private const val KEY_DD_SITE = "ddSite"
         /** LegName.KEY, restated so this file does not depend on that object. */
         private const val LEG_NAME_KEY = "legName"
 
@@ -249,8 +240,6 @@ data class RelayConfiguration(
                 .putString(KEY_CONSOLE_URL, current.consoleUrl)
                 .putLong(KEY_DAILY_BUDGET, current.dailyBudgetBytes)
                 .putLong(KEY_MONTHLY_BUDGET, current.monthlyBudgetBytes)
-                .putString(KEY_DD_TOKEN, current.ddClientToken)
-                .putString(KEY_DD_SITE, current.ddSite)
                 .apply()
             // Carry an already-minted leg name across, once, so applying this
             // fix does not itself cause one final rename.
@@ -280,8 +269,6 @@ data class RelayConfiguration(
                 dailyBudgetBytes = p.getLong(KEY_DAILY_BUDGET, d.dailyBudgetBytes),
                 monthlyBudgetBytes = p.getLong(KEY_MONTHLY_BUDGET, d.monthlyBudgetBytes),
                 announceToken = AnnounceTokenStore.read(p, stablePrefs(context), storage.isDeviceProtectedStorage),
-                ddClientToken = p.getString(KEY_DD_TOKEN, d.ddClientToken).orEmpty(),
-                ddSite = p.getString(KEY_DD_SITE, d.ddSite).orEmpty().ifEmpty { d.ddSite },
             )
         }
 
@@ -306,8 +293,6 @@ data class RelayConfiguration(
                 .putString(KEY_CONSOLE_URL, config.consoleUrl)
                 .putLong(KEY_DAILY_BUDGET, config.dailyBudgetBytes)
                 .putLong(KEY_MONTHLY_BUDGET, config.monthlyBudgetBytes)
-                .putString(KEY_DD_TOKEN, config.ddClientToken)
-                .putString(KEY_DD_SITE, config.ddSite)
                 .apply()
             saveAnnounceToken(context, config.announceToken)
         }

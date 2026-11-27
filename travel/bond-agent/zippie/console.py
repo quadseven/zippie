@@ -683,6 +683,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self._series(parsed.query)
             return
         if parsed.path == "/api/discovery/roster":
+            # The roster carries peer-proof keys, so it needs write authority:
+            # a paired device certificate or the console bearer token.
+            if self._write_actor() is None:
+                return
             self._ok_json(self.seam.discovery_roster())
             return
         if parsed.path.lower().endswith(".apk"):

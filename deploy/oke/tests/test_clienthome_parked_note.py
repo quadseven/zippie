@@ -42,3 +42,9 @@ def test_the_manifest_opens_with_a_parked_note():
 def test_every_dispatch_only_target_is_this_parked_manifest():
     """A new dispatch-only target needs its own note and its own check."""
     assert _parked_targets() == ["zippie-clienthome"]
+
+
+def test_clients_come_from_a_secret_not_a_committed_configmap():
+    text = MANIFEST.read_text()
+    assert "kind: ConfigMap" not in text, "client keys must not be committed"
+    assert "secret: {secretName: zippie-clienthome-clients}" in text

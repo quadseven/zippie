@@ -412,9 +412,8 @@ final class TunnelController: ObservableObject {
                 guard let self else { return }
                 self.status = self.manager?.connection.status ?? .invalid
                 // #76: the ONLY channel that reaches Observability for a
-                // transition the SYSTEM delivered, rather than a snapshot
-                // read after the fact - see `Observability.tunnelStatus` and
-                // `traceTunnelTransition`.
+                // transition the system delivered, rather than a snapshot
+                // read after the fact.
                 Observability.tunnelStatus(self.status, error: self.lastError)
                 await self.refreshReport()
             }

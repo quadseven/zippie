@@ -567,3 +567,45 @@ def test_extra_headers_pass_anything_else_through():
         "Vary": "Accept-Encoding"
     }
     assert hub.check_extra_headers(None) == {}
+
+
+@pytest.mark.parametrize("path", ["/api/status?live=1", "/api/series"])
+@pytest.mark.parametrize(
+    "status_url",
+    [
+        "http://router.invalid/api/status",
+        "http://${TEST_ROUTER_HOST}/api/status",
+        "http://[::1/api/status",
+        "ftp://127.0.0.1/api/status",
+    ],
+)
+def test_live_proxy_reports_invalid_router_configuration(
+    hub_at, monkeypatch, path, status_url
+):
+    monkeypatch.delenv("TEST_ROUTER_HOST", raising=False)
+    attempts = []
+
+    def no_router(request, **_):
+        attempts.append(request.full_url)
+        raise hub.urllib.error.URLError("no router available in this test")
+
+    monkeypatch.setattr(hub.urllib.request, "urlopen", no_router)
+    hostport, _ = hub_at([{"name": "travel-router", "status_url": status_url}])
+
+    status, headers, body = _get(hostport, path)
+
+    assert status == 503
+    assert _json_body(body, headers) == {"error": "invalid router configuration"}
+    assert attempts == []
+
+
+def test_live_proxy_resolves_config_before_first_poll(hub_at, monkeypatch, router):
+    monkeypatch.setenv("TEST_ROUTER_HOST", f"127.0.0.1:{router.server_address[1]}")
+    config = dict(router.config, status_url="http://${TEST_ROUTER_HOST}/api/status")
+    hostport, _ = hub_at([config])
+
+    status, headers, body = _get(hostport, "/api/status?live=1")
+
+    assert status == 200
+    assert _json_body(body, headers) == LIVE_STATUS
+    assert router.hits == ["/api/status?live=1"]
