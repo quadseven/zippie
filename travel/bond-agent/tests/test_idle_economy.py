@@ -271,7 +271,7 @@ _KEEPALIVE_PEER = "fixture-peer-identity"
 _KEEPALIVE_ARGS = ["wg", "set", "pbz0", "peer", _KEEPALIVE_PEER, "persistent-keepalive", "25"]
 
 
-def test_live_wireguard_keepalive_changes_one_peer_with_a_constant_debug_log(monkeypatch, caplog):
+def test_live_wireguard_keepalive_is_changed_without_rebuilding(monkeypatch, caplog):
     run = Mock(return_value=subprocess.CompletedProcess(_KEEPALIVE_ARGS, 0))
     monkeypatch.delenv("ZIPPIE_DRY_RUN", raising=False)
     monkeypatch.setattr(net.subprocess, "run", run)
