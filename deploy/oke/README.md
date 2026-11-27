@@ -113,12 +113,11 @@ catalogued cases of exactly that. Three things are wired against it:
    not only the cron itself.
 3. **The gap, stated rather than glossed:** it cannot catch total silence on a
    repo nobody touches. If neither the schedule nor a push ever runs, nothing
-   evaluates the check. Closing that needs an off-repo observer. The estate has
-   one - `gha-metrics-emitter` in `quadseven/infra` emits
-   `gha.workflow_run.count{repo,workflow,event}` to Datadog every minute - but
-   its `ORG_REPOS_DEFAULT` does not list `zippie` (verified 2026-08-09), so
-   there is no zippie data to hang a no-data monitor on yet. That change plus
-   the monitor is infra-side work.
+   evaluates the check. Closing that needs an off-repo observer. Datadog is
+   off across the estate (since 2026-10-05), so the estate's former
+   metrics-emitter path to it is retired too: there is currently no off-repo
+   observer wired for this repo, and choosing one is an infra-side decision
+   that has not been made.
 
 GitHub also disables a repo's scheduled workflows after **60 days with no
 repository activity**, and emails the owner when it does. zippie is pushed to

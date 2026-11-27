@@ -94,17 +94,10 @@ spec:
     matchLabels: {app: zippie-hub}
   template:
     metadata:
-      # UNIFIED SERVICE TAGGING READS POD LABELS, NOT ANNOTATIONS. Without
-      # these the agent tags everything this pod emits with the image name, so
-      # the hub's logs landed as `service:python` and its spans would have too
-      # (quadseven/infra#2265). zippie-home had the same tags as
-      # ANNOTATIONS, which is why its logs read `service:alpine`; both are
-      # fixed the same way, and this is the shape pasto-api and
-      # digital-ledger-web already use.
+      # No tags.* service labels: they were read by the retired Datadog
+      # agent (#406). Datadog is off.
       labels:
         app: zippie-hub
-        tags.datadoghq.com/env: prod
-        tags.datadoghq.com/service: zippie-hub
     spec:
       # The LAN worker by name. It is where Caddy already runs and where the
       # tailnet route to the travel router is direct rather than relayed.
@@ -161,55 +154,11 @@ spec:
             - name: TRAVEL_ROUTER_HOST
               valueFrom:
                 secretKeyRef: {name: zippie-hub-router, key: host, optional: true}
-            # APM. hub.py builds and posts spans by hand - there is no ddtrace
-            # here and there must not be; the reasons are in the long comment
-            # at the top of hub.py, and the short version is that ddtrace has
-            # no integration for stdlib http.server, so it would add a
-            # dependency tree to the one component that must survive
-            # everything else failing AND still emit zero spans.
-            #
-            # THE UNIX SOCKET, NOT hostIP:8126. This pod is not hostNetwork,
-            # so TCP to the node's 8126 crosses the node's INPUT chain, where
-            # firewalld's reject rules are evaluated after the iptables ACCEPT
-            # - an ACCEPT there is not proof the packet arrives. The agent
-            # daemonset already publishes /var/run/datadog as a
-            # DirectoryOrCreate hostPath and the trace-agent chmods apm.socket
-            # 0o722 so a non-root uid can connect, so mounting it sidesteps
-            # the question. Swap this for http://<hostIP>:8126 if the socket
-            # ever goes away; the code takes either.
-            - {name: DD_TRACE_AGENT_URL, value: "unix:///var/run/datadog/apm.socket"}
-            # CUSTOM METRICS: the hub as the OUTSIDE OBSERVER (#272).
-            #
-            # The bond went down three times in a week and nothing alerted,
-            # because every monitor asks the router to report its own death
-            # over the bond that is dead. The hub is the only component that
-            # can see it - at home, on mains power, wired, outside the thing
-            # that fails - and it emitted spans and no metric at all. It now
-            # states, per router per poll cycle, whether the box answered and
-            # how many legs are carrying, with EXPLICIT values including zero.
-            #
-            # THE SAME SOCKET DIRECTORY THE SPANS ALREADY USE, and for the
-            # identical reason: this pod is not hostNetwork, so a datagram to
-            # the node's 8125 crosses the node's INPUT chain where firewalld's
-            # rejects are evaluated after the iptables ACCEPT. The agent
-            # daemonset publishes dsd.socket beside apm.socket in the hostPath
-            # already mounted below, chmodded so a non-root uid can write, so
-            # this needs NO new volume - only this line. Verified from the
-            # running pod on 2026-08-22: uid 65532 connects and writes.
-            #
-            # Swap for udp://<hostIP>:8125 if the socket ever goes away; the
-            # code takes either, and refuses anything else rather than
-            # pretending to be configured.
-            - {name: DD_DOGSTATSD_URL, value: "unix:///var/run/datadog/dsd.socket"}
-            # Must match the tags.datadoghq.com/* labels above, or the spans
-            # and the logs land under two different service names. The metrics
-            # above carry these as EXPLICIT tags, which is not belt-and-braces:
-            # a test datagram from this pod's socket mount on 2026-08-22
-            # arrived in Datadog with service, kube_namespace and pod_name all
-            # N/A, so origin detection is not enriching that path and a
-            # monitor scoped by service would match nothing without them.
-            - {name: DD_SERVICE, value: zippie-hub}
-            - {name: DD_ENV, value: prod}
+            # NO TELEMETRY ENV (#406). This pod used to carry telemetry wiring
+            # for the hub's hand-rolled spans and DogStatsD gauges. Datadog
+            # is off and its agent is retired, so hub.py logs its request
+            # and router-health lines instead; nothing here points it at
+            # an agent any more.
           # hostPort, NOT just a Service. Caddy runs hostNetwork with
           # dnsPolicy Default, so it uses the NODE's resolver and cannot
           # resolve *.svc.cluster.local at all - pointing it at the Service
@@ -225,14 +174,6 @@ spec:
           volumeMounts:
             - {name: app, mountPath: /app, readOnly: true}
             - {name: config, mountPath: /etc/zippie, readOnly: true}
-            # readOnly is correct even though the hub CONNECTS through these
-            # sockets: the kernel only refuses writes to regular files, dirs
-            # and symlinks on a read-only mount, never to a socket inode, and
-            # this is the mode Datadog's own chart uses. It also keeps the
-            # mount consistent with readOnlyRootFilesystem above. The whole
-            # directory is mounted, so dsd.socket comes with apm.socket and
-            # the metrics added for #272 need no second volume.
-            - {name: dd-apm-socket, mountPath: /var/run/datadog, readOnly: true}
           livenessProbe:
             httpGet: {path: /livez, port: 8080}
             initialDelaySeconds: 5
@@ -247,12 +188,6 @@ spec:
           configMap: {name: zippie-hub-app}
         - name: config
           configMap: {name: zippie-hub-config}
-        # The agent daemonset's own apm socket directory. DirectoryOrCreate
-        # matches how the daemonset declares it, so this cannot be the thing
-        # that creates an empty directory on a node with no agent and then
-        # looks configured.
-        - name: dd-apm-socket
-          hostPath: {path: /var/run/datadog, type: DirectoryOrCreate}
 ---
 apiVersion: v1
 kind: Service
