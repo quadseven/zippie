@@ -113,6 +113,8 @@ class PathConfig:
     # is the whole month. This is an absolute ceiling enforced in the datapath
     # at the last point before bytes leave, so nothing routes around it.
     max_kbps: int = 0
+    shaper_download_floor_kbit: int = 0
+    shaper_upload_floor_kbit: int = 0
     # When usage_gb/monthly_cap_gb >= this, demote path (still usable if nothing better)
     soft_limit_pct: float = 0.85
     # Per-path WireGuard identity (required for correct multipath return routing)
@@ -539,6 +541,7 @@ class PolicyConfig:
     # them together so the two cannot drift.
     duplicate_fanout: int = 2
     adaptive_duplicate_loss_pct: float = 10.0
+    advertise_downstream_weight: bool = False
 
     # BOND STANDDOWN (#124). "A bond with one dying leg beats an idle
     # healthy WAN, and takes the LAN with it" - the travel router 2026-08-11, the

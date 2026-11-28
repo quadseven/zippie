@@ -284,6 +284,7 @@ def parse_config(
         # start on a router that is currently somebody's only internet.
         duplicate_fanout=int(policy_raw.get("duplicate_fanout", 2)),
         adaptive_duplicate_loss_pct=float(policy_raw.get("adaptive_duplicate_loss_pct", 10.0)),
+        advertise_downstream_weight=bool(policy_raw.get("advertise_downstream_weight", False)),
         # Bond standdown (#124). Not validated here, same reasoning as the
         # shed ratio and the resolver-kick knobs above: an operator on a
         # router in a car may need to reach for this, and a bad value must
@@ -318,6 +319,8 @@ def parse_config(
                 port=int(raw["port"]) if raw.get("port") is not None else None,
                 relay_endpoint=str(raw.get("relay_endpoint", "")),
                 max_kbps=int(raw.get("max_kbps", 0) or 0),
+                shaper_download_floor_kbit=int(raw.get("shaper_download_floor_kbit", 0)),
+                shaper_upload_floor_kbit=int(raw.get("shaper_upload_floor_kbit", 0)),
                 # tier and label existed in the model, were used by policy.py,
                 # and had passing unit tests -- but were never read from the
                 # config file, so setting tier = 2 in zippie.toml did nothing

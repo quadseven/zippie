@@ -268,6 +268,21 @@ uci show wireless | grep '\.pb_'
 GL interface names vary by mode (`wwan0`, `wlan-sta`, `apcli0`, `eth0`, `usb0`).
 Prefer **SSID match** in `zippie.toml` over hard-coded interface names.
 
+## Weighting a measured fast uplink
+
+Packet mode can use the travel router's effective leg weights for downloads.
+Upgrade the home relay first, then set `advertise_downstream_weight = true`
+under `[policy]` on the travel router. The relay continues to accept older
+routers' RTT-only probes. A held leg still receives probes so it can recover.
+
+For a link with measured end-to-end spare capacity, set `weight` on its path
+to give it a larger share. The existing health and cost policy still adjusts
+that share. If adaptive CAKE underestimates the link after idle, set
+`shaper_download_floor_kbit` and `shaper_upload_floor_kbit` on that same path.
+Use conservative measurements through the tunnel, since Ethernet link speed
+only describes the local hop. The floors apply while the path carries traffic
+and disappear from the calculation when it stops carrying.
+
 ## CPU / throughput
 
 WireGuard on the MT3000 handles typical travel rates (tens to a few hundred Mbps

@@ -1178,12 +1178,17 @@ class BondAgent:
             return
 
         carrying: dict[str, tuple[float | None, float | None]] = {}
+        down_floor = up_floor = 0
         for path in self.paths:
             pid = self._transport_ids.get(path.name)
             if self._leg_activity_facts(path, pid)["contributing"]:
                 carrying[path.name] = (path.rx_bps, path.tx_bps)
+                down_floor = max(down_floor, path.config.shaper_download_floor_kbit)
+                up_floor = max(up_floor, path.config.shaper_upload_floor_kbit)
 
-        result = self._shaper.update(carrying)
+        result = self._shaper.update(
+            carrying, download_floor_kbit=down_floor, upload_floor_kbit=up_floor
+        )
         if result is None:
             return
         download_kbit, upload_kbit = result
@@ -2966,6 +2971,7 @@ class BondAgent:
             # can turn (#50).
             duplicate_fanout=self.config.policy.duplicate_fanout,
             adaptive_duplicate_loss_pct=self.config.policy.adaptive_duplicate_loss_pct,
+            advertise_downstream_weight=self.config.policy.advertise_downstream_weight,
             auth_level=auth_level,
             identity=identity,
         )
