@@ -47,6 +47,7 @@ from zippie.models import (
     PathState,
     PolicyConfig,
 )
+from zippie.packet_links import PacketLinks
 from zippie.pairing import PairingRequests
 from zippie.route_tunnels import RouteTunnels
 from zippie.status_doc import projected_idle_mb_per_day as projected_idle_mb_per_day
@@ -456,17 +457,7 @@ class BondAgent:
         # policy.datapath = packet; harmless otherwise.
         self._transport = None
         self._transport_thread = None
-        self._last_transport_probe_at = float("-inf")
-        # The tunnel is created with this active value. Recording it here
-        # avoids one `wg set` on every startup; transitions update it below.
-        self._packet_keepalive_s = self.config.home.persistent_keepalive
-        self._transport_ids: dict[str, int] = {}
-        # pid -> the leg name that LAST held it, kept after the leg is gone.
-        # This is what makes a recycled pid detectable, so the transport can be
-        # told to drop the previous owner's retained keepalive history before a
-        # new leg inherits it (#163). Bounded by the pid space itself (0..255),
-        # so it cannot grow without limit however long the agent runs.
-        self._pid_owner: dict[int, str] = {}
+        self._packet_links = PacketLinks(config.home.persistent_keepalive)
         # Durable per-leg state. usage.json is what we MEASURED; legs.json is
         # what the operator TOLD us and overrides the config file.
         # The usage ledger owns usage.json, the delta marks and the throughput
@@ -479,7 +470,6 @@ class BondAgent:
         # Phones on ethernet asking for the console token before they can
         # announce. In memory only - see zippie/pairing.py.
         self.pairing = PairingRequests()
-        self._transport_links: set[int] = set()
         # Last-logged packet-mode facts, so the control loop reports TRANSITIONS
         # rather than restating the steady state once a tick (#87). Declared
         # here rather than reached for with getattr defaults: a missing
@@ -528,9 +518,6 @@ class BondAgent:
         # (monotonic, delivered, delivered_bytes) samples for the route gate's
         # rolling window. Appended once per gate evaluation (~1s).
         self._deliver_samples: deque[tuple[float, int, int]] = deque()
-        # What each transport link is currently dialling, so a changed home
-        # address can be detected and the link rebuilt.
-        self._link_remotes: dict[int, tuple[str, int]] = {}
         self._started = time.time()
         # Metrics ride the very links being measured, so this is
         # fire-and-forget UDP that can never block or fail the bond.
@@ -625,6 +612,36 @@ class BondAgent:
         self._counters = CounterSampler()
         self._series = SeriesStore()
         self._assign_ports()
+
+    @property
+    def packet_links(self) -> PacketLinks:
+        # Some status and policy fixtures construct a partial agent.
+        links = self.__dict__.get("_packet_links")
+        if links is None:
+            home = getattr(getattr(self, "config", None), "home", None)
+            keepalive = getattr(home, "persistent_keepalive", 0)
+            links = self.__dict__["_packet_links"] = PacketLinks(keepalive)
+        return links
+
+    @property
+    def _transport_ids(self) -> dict[str, int]:
+        return self.packet_links.ids
+
+    @_transport_ids.setter
+    def _transport_ids(self, ids: dict[str, int]) -> None:
+        self.packet_links.ids = ids
+
+    @property
+    def _transport_links(self) -> set[int]:
+        return self.packet_links.installed
+
+    @_transport_links.setter
+    def _transport_links(self, links: set[int]) -> None:
+        self.packet_links.installed = links
+
+    @property
+    def _packet_keepalive_s(self) -> int:
+        return self.packet_links.keepalive_s
 
     @property
     def leg_roster(self) -> LegRoster:
@@ -1870,90 +1887,26 @@ class BondAgent:
         gets unplugged."""
         return self.usage_ledger.save(self.paths, force=force)
 
-    def reconcile_dynamic_legs(self) -> DynamicChange:
-        """Bring self.paths in line with what is announced, then drop the
-        transport link of every leg that expired or moved.
+    def reconcile_dynamic_legs(self, *, release_transport: bool = True) -> DynamicChange:
+        """Bring self.paths in line with what is announced and return the change.
 
-        The roster decides which legs those are and says so in its result; the
-        links are the transport's, so they are dropped here, before the next
-        step reads the leg list (LegRoster.reconcile_dynamic).
+        Direct callers drop stale transport links before returning. The tick
+        receives the roster change first and passes it to the release step.
         """
         change = self.leg_roster.reconcile_dynamic(self.paths)
-        for name in change.released:
-            self._drop_transport_path(name)
+        if release_transport:
+            self._drop_released_transport_paths(change)
         return change
 
+    def _drop_released_transport_paths(self, change: DynamicChange) -> None:
+        for name in change.released:
+            self._drop_transport_path(name)
+
     def _allocate_transport_pid(self, name: str) -> int:
-        """The transport id for this leg, stable for as long as the leg exists.
-
-        IDS COME FROM THE NAME, NOT FROM LIST POSITION (#163). The previous
-        version read `self._transport_ids.setdefault(path.name, idx)`, so a leg
-        joining later took its id from wherever it happened to sit in
-        `self.paths` at that moment - and that list SHRINKS when a leg is
-        removed. Two live legs could be handed the same integer:
-
-            static, static, phone A, phone B   -> 0, 1, 2, 3
-            phone A expires and is removed
-            phone C joins, list is [static, static, B, C]
-              B keeps its stored 3, C takes index 3   -> both on 3
-
-        A collision cross-wires two phones inside the datapath: one link-table
-        entry, one RTT, one rx-age, and - because `remove_link` deliberately
-        preserves the keepalive loss ring (#115) - one loss history.
-
-        LOWEST FREE ID, NOT A COUNTER. `path_id` is ONE BYTE on the wire
-        (`datapath._HEADER` is "!2sBBBQI", and `Frame.pack` rejects anything
-        outside 0..255), so a monotonically increasing id would eventually fail
-        to pack every packet on a long-running agent whose phones come and go.
-        Ids must therefore be recycled - just never while their holder is live,
-        which is what scanning the live values guarantees.
-        """
-        # Imported here, not at module scope, matching how ensure_tunnels pulls
-        # HEADER_LEN: the datapath is only meaningful in packet mode.
-        from zippie.datapath import MAX_PATH_ID
-
-        existing = self._transport_ids.get(name)
-        if existing is not None:
-            return existing
-
-        taken = set(self._transport_ids.values())
-        pid = next(i for i in range(MAX_PATH_ID + 2) if i not in taken)
-        if pid > MAX_PATH_ID:
-            # Every id in the wire field is held by a live leg. Refusing is the
-            # honest failure: handing back a duplicate would silently cross-wire
-            # two legs, which is the defect this function exists to prevent.
-            raise RuntimeError(
-                f"no free transport id for {name}: all {MAX_PATH_ID + 1} are held by live legs"
-            )
-
-        previous = self._pid_owner.get(pid)
-        if previous is not None and previous != name:
-            # The id is being recycled. Whatever the last owner left behind at
-            # this key is about to be read as though it belonged to this leg.
-            transport = getattr(self, "_transport", None)
-            if transport is not None:
-                try:
-                    transport.forget_link(pid)
-                except Exception as exc:  # noqa: BLE001
-                    log.debug("forget_link %s: %s", pid, exc)
-            log.info("transport id %d: %s -> %s (recycled)", pid, previous, name)
-        self._pid_owner[pid] = name
-        self._transport_ids[name] = pid
-        return pid
+        return self.packet_links.allocate(name, getattr(self, "_transport", None))
 
     def _drop_transport_path(self, name: str) -> None:
-        """Remove a path from the transport by name, if it is there."""
-        pid = self._transport_ids.pop(name, None)
-        transport = getattr(self, "_transport", None)
-        if pid is None or transport is None:
-            return
-        if pid in self._transport_links:
-            try:
-                transport.remove_link(pid)
-            except Exception as exc:  # noqa: BLE001
-                log.debug("remove_link %s: %s", name, exc)
-            self._transport_links.discard(pid)
-        self._link_remotes.pop(pid, None)
+        self.packet_links.release(name, getattr(self, "_transport", None))
 
     def apply_leg_overrides(self) -> None:
         """Let legs.json win over zippie.toml. See LegRoster.apply_overrides."""
@@ -3089,20 +3042,6 @@ class BondAgent:
         except OSError as exc:  # noqa: BLE001
             log.warning("could not persist home address %s: %s", ip, exc)
 
-    def _drop_link(self, pid: int) -> None:
-        """Remove one link and forget everything remembered about it.
-
-        LOGGED, because transport.add_link logs at INFO and this did not. One
-        sided transition logging is worse than none: `logread` showed
-        `link up: ethernet via eth0` every few seconds with no matching down,
-        which reads as a link flapping hard when the truth may be far quieter.
-        A reader cannot tell an add from a re-add without the other half.
-        """
-        log.info("link down: pid %d removed from the transport", pid)
-        self._transport.remove_link(pid)
-        self._transport_links.discard(pid)
-        self._link_remotes.pop(pid, None)
-
     def _masquerade_ifaces(self) -> list[str]:
         """Tunnel interfaces LAN client traffic must be source-NAT'd onto.
 
@@ -3167,125 +3106,9 @@ class BondAgent:
     def _reconcile_link(
         self, path: PathRuntime, pid: int, *, usable: bool, carrying: bool, remote: tuple[str, int]
     ) -> None:
-        """Bring ONE link in line with what the control loop wants.
-
-        Split out of sync_transport because that function had grown three
-        interleaved decisions - membership, address changes, and weight - and
-        reading any one of them meant holding the other two in your head.
-
-        USABLE AND CARRYING ARE DIFFERENT QUESTIONS, and conflating them makes
-        shedding absorbing. `usable` is "may this be a transport link at all" -
-        false for a leg with no interface or one the tier gate excluded, and
-        those leave the transport entirely. `carrying` is "may payload go down
-        it", which a leg shed for latency fails while remaining a link.
-
-        A leg REMOVED from the transport gets no keepalives (send_keepalives
-        walks the link table), so it stops being probed, so `path.rtt_ms` goes
-        None, so `update_rtt_tail` returns early and its tail freezes at the
-        value that got it shed - forever. It would never rejoin. The transport
-        already solved this for its own health flag and says so: "Probing only
-        healthy links would make unhealthy absorbing - a leg demoted once could
-        never produce the evidence needed to come back."
-        """
-        from zippie.datapath_port import LinkEndpoint
-
-        if usable and pid in self._transport_links and self._link_remotes.get(pid) != remote:
-            # Dynamic DNS moved the home endpoint. A link cannot be re-pointed
-            # in place, so rebuild it - rare enough that the dropped socket
-            # costs less than dialling a dead address.
-            log.info("link %s: home moved to %s, rebuilding", path.name, remote[0])
-            self._drop_link(pid)
-
-        if not usable:
-            if pid in self._transport_links:
-                # A standby or dead link leaves the transport entirely, so it
-                # cannot be selected even by a stale weight.
-                self._drop_link(pid)
-            return
-
-        if pid not in self._transport_links:
-            self._transport.add_link(
-                LinkEndpoint(
-                    path_id=pid,
-                    name=path.name,
-                    device=path.interface,
-                    remote=remote,
-                    # NO FLOOR. max(1, ...) forced a leg the policy had
-                    # deliberately held out of the bond - weight 0, "held out until
-                    # proven" - into the transport with weight 1, where it took a
-                    # share of real traffic and dropped all of it.
-                    weight=path.effective_weight if carrying else 0,
-                    max_kbps=path.config.max_kbps,
-                )
-            )
-            self._transport_links.add(pid)
-            self._link_remotes[pid] = remote
-
-        # ALWAYS, INCLUDING THE PASS THAT ADDED THE LINK. This used to be the
-        # `elif` arm of the add, so a newly added link never had its health set
-        # until the NEXT pass - a leg admitted and shed on the same pass would
-        # carry a full probe interval of real traffic before anything stopped
-        # it. add_link takes a weight but has no opinion about health.
-        #
-        # Weight 0 AND health false for a shed leg. HEALTH IS THE ONE THAT
-        # STOPS TRAFFIC - scheduler.healthy_paths is what send_payload picks
-        # from, so an unhealthy link takes no sprayed copy and no duplicate.
-        #
-        # The weight is belt-and-braces, and until #92 it did not actually land:
-        # Scheduler.set_weight floored it at 1, so this 0 arrived as a 1 on
-        # every pass. Harmless for shedding, because health had already excluded
-        # the leg - but it silently leaked ~1% of sprayed traffic to anything
-        # held out on WEIGHT alone, which is how the join gate holds a flapping
-        # leg. Fixed there; the claim is true now.
-        self._transport.set_link_weight(pid, path.effective_weight if carrying else 0)
-        self._transport.set_link_health(pid, carrying and path.state is not PathState.DOWN)
-
-    def _log_leg_exclusions(self, gated: list[PathRuntime], active: set[str]) -> None:
-        """Say WHY a leg is not carrying, naming the right gate.
-
-        Two gates reach the same outcome and want different fixes: the tier gate
-        means somebody set a tier, latency shedding means the link is bad. A leg
-        dropped for latency reported as "tier gate excludes" sends the reader to
-        legs.json hunting an override that does not exist.
-
-        Edge-triggered - only when the set CHANGES - because this runs every
-        pass and a steady state is not news. #67 was an hour of a household on
-        one phone's cellular with nothing anywhere saying a leg had been
-        dropped.
-        """
-        eligible = {p.name for p in self.paths if p.interface and p.state is not PathState.DOWN}
-        gated_names = {p.name for p in gated}
-        tier_excluded = eligible - gated_names
-        bloat_excluded = gated_names - active
-        excluded = (tier_excluded, bloat_excluded)
-        if excluded == getattr(self, "_leg_exclusions", None):
-            return
-        self._leg_exclusions = excluded
-        if tier_excluded:
-            tiers = {p.name: p.config.tier for p in self.paths if p.name in tier_excluded}
-            log.warning(
-                "tier gate excludes %s (tiers %s) - carrying tier is %s",
-                sorted(tier_excluded),
-                tiers,
-                min((p.config.tier for p in self.paths if p.name in active), default="none"),
-            )
-        if bloat_excluded:
-            # The tail, not the average - the average is what made this
-            # invisible in the first place. Over `gated`, not the carrying set:
-            # that is what update_shed_state compared against, and a log quoting
-            # a different denominator than the decision used is worse than none.
-            tails = {
-                p.name: round(p.rtt_tail_ms or 0.0) for p in self.paths if p.name in bloat_excluded
-            }
-            best = min((p.rtt_tail_ms for p in gated if p.rtt_tail_ms is not None), default=None)
-            log.warning(
-                "shed %s for latency: tail %s ms vs best tail %s ms in tier "
-                "(loss is not the signal here - a bufferbloated leg loses "
-                "nothing)",
-                sorted(bloat_excluded),
-                tails,
-                round(best) if best is not None else "unknown",
-            )
+        self.packet_links.reconcile(
+            self._transport, path, pid, usable=usable, carrying=carrying, remote=remote
+        )
 
     def _flag_never_handshaked(self) -> None:
         """Name the leg that has transmitted and has never once been answered.
@@ -3333,7 +3156,7 @@ class BondAgent:
             # EDGE-TRIGGERED. This runs every pass and the condition persists
             # for as long as the leg is misconfigured, so an unconditional line
             # would bury the event it reports under thousands of copies of
-            # itself - the same reason _log_leg_exclusions is edge-triggered.
+            # itself - the same reason link exclusions are edge-triggered.
             if never:
                 log.warning(
                     "leg %s has NEVER been answered: %d bytes sent, 0 received, "
@@ -3347,124 +3170,43 @@ class BondAgent:
                 log.info("leg %s completed its first round trip", path.name)
 
     def _packet_is_idle(self) -> bool:
-        transport = getattr(self, "_transport", None)
-        idle_for = getattr(transport, "client_idle_for_s", None)
-        if idle_for is None:
-            return False
-        return idle_for() >= max(0.0, self.config.policy.idle_after_s)
+        return self.packet_links.is_idle(self.config, getattr(self, "_transport", None))
 
     def _transport_probe_interval_s(self) -> float:
-        active = max(0.2, self.config.policy.probe_interval_ms / 1000.0)
-        if not self._packet_is_idle():
-            return active
-        return self._idle_transport_probe_interval_s()
+        return self.packet_links.probe_interval_s(self.config, getattr(self, "_transport", None))
 
     def _idle_transport_probe_interval_s(self) -> float:
-        active = max(0.2, self.config.policy.probe_interval_ms / 1000.0)
-        requested = max(active, self.config.policy.idle_probe_interval_ms / 1000.0)
-        # Liveness is still checked every active control tick. Keeping at
-        # two missed probe opportunities inside the six-second stale window
-        # reduces spend without extending the existing failover deadline.
-        return max(active, min(requested, PACKET_LINK_STALE_S / 3))
+        return self.packet_links.idle_probe_interval_s(self.config)
 
     def _idle_persistent_keepalive_s(self) -> int:
-        active = max(0, self.config.home.persistent_keepalive)
-        if active == 0:
-            return 0
-        return max(active, self.config.policy.idle_persistent_keepalive)
+        return self.packet_links.idle_keepalive_s(self.config)
 
     def _sync_idle_cadence(self) -> None:
+        self.packet_links.sync_cadence(self.config, getattr(self, "_transport", None), PACKET_IFACE)
+
+    def sync_transport(self) -> None:
+        """Apply each packet link intent before preparing the next one."""
         transport = getattr(self, "_transport", None)
         if transport is None:
             return
-        idle = self._packet_is_idle()
-        desired_keepalive = (
-            self._idle_persistent_keepalive_s() if idle else self.config.home.persistent_keepalive
-        )
-        if desired_keepalive != self._packet_keepalive_s:
-            try:
-                net.set_wg_persistent_keepalive(
-                    PACKET_IFACE,
-                    self.config.home.server_public_key,
-                    desired_keepalive,
-                )
-            except net.NetError as exc:
-                # Retry on the next tick. A failed economy transition must not
-                # interrupt link reconciliation or probing.
-                log.warning("could not change packet keepalive cadence: %s", exc)
-            else:
-                self._packet_keepalive_s = desired_keepalive
-
-        now = time.monotonic()
-        if not idle:
-            transport.send_keepalives()
-            self._last_transport_probe_at = now
-            return
-        if now - self._last_transport_probe_at < self._transport_probe_interval_s():
-            return
-        transport.send_keepalives()
-        self._last_transport_probe_at = now
-
-    def sync_transport(self) -> None:
-        """Push the control loop's view of the links into the transport.
-
-        Membership is reconciled rather than rebuilt: tearing down and
-        recreating every socket each second would reset the retransmit ring and
-        drop packets in flight, which is precisely what the bond exists to
-        avoid. The per-link work lives in _reconcile_link.
-        """
-        if getattr(self, "_transport", None) is None:
-            return
 
         self._flag_never_handshaked()
-
-        # packet_mode_legs, NOT paths_in_active_tier: the latter requires a
-        # per-leg wg_iface, which packet mode does not have by design. Using it
-        # here added zero links on the first live cutover and the transport
-        # reported `no_path: 13` - 13 datagrams accepted from WireGuard with
-        # nowhere to send any of them.
-        # TWO GATES, REPORTED SEPARATELY. Taken in the order the policy applies
-        # them: the tier gate decides which legs are eligible at all, then
-        # shedding drops any of those whose latency tail dwarfs its peers.
-        #
-        # They are computed apart ONLY so the log can name the real reason. A
-        # leg dropped for bufferbloat that gets reported as "tier gate excludes"
-        # sends the next reader to legs.json to look for an override that does
-        # not exist - and #67 is precisely the issue where a leg left the bond
-        # and nothing said why.
-        gated = policy.tier_legs(self.paths)
-        carrying = policy.carrying_legs(gated)
-        gated_names = {p.name for p in gated}
-        active = {p.name for p in carrying}
-        self._log_leg_exclusions(gated, active)
-        # Resolved ONCE per pass, not once per path: it is the same endpoint for
-        # every leg, and the whole point of caching it is to keep name lookups
-        # away from anything hot.
-        home = self._resolve_home_ip() or self.config.home.endpoint
-
-        for path in self.paths:
-            # NOT enumerate(): the index is a seat in a list that shrinks when a
-            # leg leaves, and handing that out collided two live legs (#163).
-            pid = self._allocate_transport_pid(path.name)
-            # Per PATH, not hoisted: the fallback chain ends in path.port, so a
-            # leg with its own port keeps it.
-            default_remote = (home, self.config.policy.home_port or path.port or 51820)
+        for intent in self.packet_links.intents(
+            self.paths,
+            self.config,
+            transport,
+            resolve_home=self._resolve_home_ip,
+            leg_remote=self._leg_remote,
+        ):
             self._reconcile_link(
-                path,
-                pid,
-                # Tier membership decides whether it is a link at all; the
-                # latency verdict decides only whether it carries.
-                usable=path.name in gated_names and path.interface is not None,
-                carrying=path.name in active,
-                # A companion leg dials the PHONE on the LAN, not home: the
-                # phone is the hop that owns the cellular, and sending straight
-                # to home would just be this router's own uplink again under a
-                # different name. Everything else keeps the shared endpoint.
-                remote=self._leg_remote(path, default_remote),
+                intent.path,
+                intent.pid,
+                usable=intent.usable,
+                carrying=intent.carrying,
+                remote=intent.remote,
             )
 
-        # AFTER membership is reconciled, so a leg adopted this pass is probed
-        # this pass instead of waiting a full tick to start proving itself.
+        # An adopted link can start proving itself as soon as cadence is due.
         if self.config.policy.datapath is Datapath.PACKET:
             self._sync_idle_cadence()
 
@@ -3606,7 +3348,8 @@ class BondAgent:
         # startup from zippie.toml, a dynamic leg has no baseline at all - what
         # reconcile writes each tick IS its baseline, so clearing an override
         # now restores the announced label instead of leaving the old one.
-        self.reconcile_dynamic_legs()
+        roster_change = self.reconcile_dynamic_legs(release_transport=False)
+        self._drop_released_transport_paths(roster_change)
         self.apply_leg_overrides()
         # AFTER overrides and BEFORE policy, both deliberately. Overrides carry
         # the cycle day this reads, and apply_policy is what recomputes

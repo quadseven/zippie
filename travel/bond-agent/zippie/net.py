@@ -384,18 +384,35 @@ PersistentKeepalive = {keepalive}
 
 def set_wg_persistent_keepalive(iface: str, peer_public_key: str, seconds: int) -> None:
     """Change one live peer's keepalive without rebuilding its interface."""
-    run_or_dry(
-        [
-            "wg",
-            "set",
-            iface,
-            "peer",
-            peer_public_key,
-            "persistent-keepalive",
-            str(max(0, seconds)),
-        ],
-        check=True,
-    )
+    # AI-REVIEW 2026-11-27 [nemotron-3.5-super-vl] secret-in-log-or-trace (Grug Elder, PR #466):
+    # Command arguments and child output stay out of keepalive diagnostics.
+    if dry_run():
+        log.info("[dry-run] set WireGuard peer keepalive")
+        return
+    log.debug("set WireGuard peer keepalive")
+    args = [
+        "wg",
+        "set",
+        iface,
+        "peer",
+        peer_public_key,
+        "persistent-keepalive",
+        str(max(0, seconds)),
+    ]
+    try:
+        subprocess.run(
+            args, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30
+        )
+    except FileNotFoundError:
+        message = "WireGuard keepalive command not found"
+    except subprocess.CalledProcessError:
+        message = "WireGuard keepalive command failed"
+    except subprocess.TimeoutExpired:
+        message = "WireGuard keepalive command timed out"
+    else:
+        return
+    # Raise outside the handlers so the error does not retain subprocess details.
+    raise NetError(message) from None
 
 
 def wg_quick_available() -> bool:

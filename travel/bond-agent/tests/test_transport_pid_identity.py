@@ -39,10 +39,13 @@ have agreed with the buggy code.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
-from zippie.agent import BondAgent
+from zippie import wifi
+from zippie.agent import PACKET_IFACE, BondAgent
 from zippie.config import parse_config
 from zippie.datapath import Frame
+from zippie.leg_roster import DynamicChange
 from zippie.models import PathState
 
 
@@ -95,7 +98,7 @@ def _agent(tmp_path: Path) -> BondAgent:
                 "run_dir": str(tmp_path / "run"),
             },
             "home": {
-                "endpoint": "home.example:51900",
+                "endpoint": "203.0.113.7:51900",
                 "server_public_key": "c2VydmVy",
                 "address_cidr": "10.66.0.10/24",
                 "ports": [51900, 51901],
@@ -117,9 +120,13 @@ def _agent(tmp_path: Path) -> BondAgent:
     return a
 
 
-def _join(agent: BondAgent, name: str) -> None:
+def _announce(agent: BondAgent, name: str) -> None:
     """A phone announces itself, exactly as the companion app does."""
     agent.dynamic.announce(name=name, host="10.99.0.151", port=51999, label=name, tier=None)
+
+
+def _join(agent: BondAgent, name: str) -> None:
+    _announce(agent, name)
     agent.reconcile_dynamic_legs()
     for p in agent.paths:
         if p.name == name:
@@ -138,6 +145,139 @@ def _leave(agent: BondAgent, name: str) -> None:
 
 def _pids(agent: BondAgent) -> dict[str, int]:
     return {p.name: agent._transport_ids[p.name] for p in agent.paths}
+
+
+def test_lazy_packet_links_start_at_configured_active_keepalive():
+    agent = object.__new__(BondAgent)
+    agent.config = parse_config({"home": {"endpoint": "home.example", "persistent_keepalive": 17}})
+
+    assert agent.packet_links.keepalive_s == 17
+
+
+def test_lazy_packet_links_start_at_zero_without_config():
+    agent = object.__new__(BondAgent)
+
+    assert agent.packet_links.keepalive_s == 0
+
+
+def test_tick_releases_and_reuses_a_pid_before_probing_updated_links(tmp_path, monkeypatch):
+    agent = _agent(tmp_path)
+    _join(agent, "phone-before")
+    transport = agent._transport
+    (pid,) = (number for number, name in transport.links.items() if name == "phone-before")
+    events = []
+    wifi_joins = []
+    reconcile = agent.reconcile_dynamic_legs
+
+    def record_roster_change(**kwargs):
+        change = reconcile(**kwargs)
+        events.append(("roster", change))
+        return change
+
+    monkeypatch.setattr(agent, "reconcile_dynamic_legs", record_roster_change)
+
+    def trace(name, record):
+        original = getattr(transport, name)
+
+        def record_call(*args):
+            events.append(record(*args))
+            return original(*args)
+
+        monkeypatch.setattr(transport, name, record_call)
+
+    trace("remove_link", lambda removed: ("remove", removed))
+    trace("forget_link", lambda reused: ("forget", reused))
+    trace("add_link", lambda link: ("add", link.path_id, link.name))
+    trace("set_link_weight", lambda number, weight: ("weight", number, weight))
+    trace("set_link_health", lambda number, healthy: ("health", number, healthy))
+    trace("send_keepalives", lambda: ("probe", transport.links.get(pid)))
+
+    def bind():
+        for path in agent.paths:
+            path.interface = path.config.match.interface or "br-lan"
+            path.state = PathState.UP
+            path.effective_weight = 100
+
+    def record_wifi_join(paths, secrets):
+        wifi_joins.append((paths, secrets))
+
+    monkeypatch.setattr(wifi, "auto_join_configured", record_wifi_join)
+    monkeypatch.setattr(agent._isp_name_resolver, "update", lambda *_: {})
+    monkeypatch.setattr(agent, "match_interfaces", bind)
+    for method in (
+        "apply_auto_labels",
+        "apply_auto_cost_class",
+        "ensure_tunnels",
+        "probe_paths",
+        "sample_counters",
+        "write_status_file",
+    ):
+        monkeypatch.setattr(agent, method, lambda: None)
+    monkeypatch.setattr(agent, "apply_policy", lambda: events.append(("policy",)))
+    monkeypatch.setattr(agent, "_update_bond_shaper_rate", lambda: events.append(("shaper",)))
+    monkeypatch.setattr(agent, "status_dict", dict)
+    monkeypatch.setattr(agent.telemetry, "emit_status", lambda *_: None)
+    monkeypatch.setattr(agent, "_resolver_watchdog", None)
+    agent.dynamic.withdraw("phone-before")
+    _announce(agent, "phone-after")
+
+    agent.loop_once()
+
+    assert wifi_joins == [(agent.config.paths, agent.wifi_secrets)]
+    change = DynamicChange(joined=("phone-after",), expired=("phone-before",))
+    assert events.index(("roster", change)) < events.index(("remove", pid))
+    replacement_events = [
+        entry for entry in events if entry[0] in {"policy", "shaper", "probe"} or entry[1] == pid
+    ]
+    # Preserve the pre-extraction tick order (ebd9db3, #375): release before
+    # policy and shaping, forget the old owner before reuse, then probe the new owner.
+    assert replacement_events == [
+        ("remove", pid),
+        ("policy",),
+        ("shaper",),
+        ("forget", pid),
+        ("add", pid, "phone-after"),
+        ("weight", pid, 100),
+        ("health", pid, True),
+        ("probe", "phone-after"),
+    ]
+
+
+def test_idle_probe_cadence_uses_the_in_memory_host_after_installing_links(tmp_path, monkeypatch):
+    agent = _agent(tmp_path)
+    transport = agent._transport
+    now = [1000.0]
+    idle = [True]
+    events = []
+    active_keepalive = agent.config.home.persistent_keepalive
+    agent.config.policy.idle_persistent_keepalive = active_keepalive + 10
+    agent.packet_links.host = SimpleNamespace(
+        monotonic=lambda: now[0],
+        set_keepalive=lambda interface, _peer, seconds: events.append((interface, seconds)),
+    )
+    monkeypatch.setattr(agent, "_resolve_home_ip", lambda: "203.0.113.7")
+    monkeypatch.setattr(
+        transport,
+        "client_idle_for_s",
+        lambda: agent.config.policy.idle_after_s + 1 if idle[0] else -1,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        transport, "send_keepalives", lambda: events.append(tuple(transport.links.values()))
+    )
+
+    agent.sync_transport()
+    agent.sync_transport()
+    assert events == [(PACKET_IFACE, active_keepalive + 10), ("ethernet", "hotspot")]
+
+    now[0] += agent._transport_probe_interval_s() + 1
+    agent.sync_transport()
+    assert events[-1] == ("ethernet", "hotspot")
+    assert len(events) == 3
+
+    idle[0] = False
+    agent.sync_transport()
+    assert events[3:] == [(PACKET_IFACE, active_keepalive), ("ethernet", "hotspot")]
 
 
 # ------------------------------------------------------------ the reported bug
