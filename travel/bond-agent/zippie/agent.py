@@ -1887,18 +1887,20 @@ class BondAgent:
         gets unplugged."""
         return self.usage_ledger.save(self.paths, force=force)
 
-    def reconcile_dynamic_legs(self) -> DynamicChange:
-        """Bring self.paths in line with what is announced, then drop the
-        transport link of every leg that expired or moved.
+    def reconcile_dynamic_legs(self, *, release_transport: bool = True) -> DynamicChange:
+        """Bring self.paths in line with what is announced and return the change.
 
-        The roster decides which legs those are and says so in its result; the
-        links are the transport's, so they are dropped here, before the next
-        step reads the leg list (LegRoster.reconcile_dynamic).
+        Direct callers drop stale transport links before returning. The tick
+        receives the roster change first and passes it to the release step.
         """
         change = self.leg_roster.reconcile_dynamic(self.paths)
+        if release_transport:
+            self._drop_released_transport_paths(change)
+        return change
+
+    def _drop_released_transport_paths(self, change: DynamicChange) -> None:
         for name in change.released:
             self._drop_transport_path(name)
-        return change
 
     def _allocate_transport_pid(self, name: str) -> int:
         return self.packet_links.allocate(name, getattr(self, "_transport", None))
@@ -3346,7 +3348,8 @@ class BondAgent:
         # startup from zippie.toml, a dynamic leg has no baseline at all - what
         # reconcile writes each tick IS its baseline, so clearing an override
         # now restores the announced label instead of leaving the old one.
-        self.reconcile_dynamic_legs()
+        roster_change = self.reconcile_dynamic_legs(release_transport=False)
+        self._drop_released_transport_paths(roster_change)
         self.apply_leg_overrides()
         # AFTER overrides and BEFORE policy, both deliberately. Overrides carry
         # the cycle day this reads, and apply_policy is what recomputes

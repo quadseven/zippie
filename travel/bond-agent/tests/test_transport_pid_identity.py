@@ -45,6 +45,7 @@ from zippie import wifi
 from zippie.agent import PACKET_IFACE, BondAgent
 from zippie.config import parse_config
 from zippie.datapath import Frame
+from zippie.leg_roster import DynamicChange
 from zippie.models import PathState
 
 
@@ -166,6 +167,14 @@ def test_tick_releases_and_reuses_a_pid_before_probing_updated_links(tmp_path, m
     (pid,) = (number for number, name in transport.links.items() if name == "phone-before")
     events = []
     wifi_joins = []
+    reconcile = agent.reconcile_dynamic_legs
+
+    def record_roster_change(**kwargs):
+        change = reconcile(**kwargs)
+        events.append(("roster", change))
+        return change
+
+    monkeypatch.setattr(agent, "reconcile_dynamic_legs", record_roster_change)
 
     def trace(name, record):
         original = getattr(transport, name)
@@ -215,6 +224,8 @@ def test_tick_releases_and_reuses_a_pid_before_probing_updated_links(tmp_path, m
     agent.loop_once()
 
     assert wifi_joins == [(agent.config.paths, agent.wifi_secrets)]
+    change = DynamicChange(joined=("phone-after",), expired=("phone-before",))
+    assert events.index(("roster", change)) < events.index(("remove", pid))
     replacement_events = [
         entry for entry in events if entry[0] in {"policy", "shaper", "probe"} or entry[1] == pid
     ]

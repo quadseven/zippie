@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from zippie.isp import DNSClient, ISPNameResolver, _answers, _origin_asn, _provider_from_cymru
+from zippie.leg_roster import DynamicChange
 from zippie.models import PathState
 
 
@@ -269,8 +270,8 @@ def test_control_loop_resolves_names_after_current_path_health_probe(monkeypatch
     agent._dynamic_paths = {"relay": relay}
     agent.config = SimpleNamespace(paths=[], policy=SimpleNamespace())
     agent.wifi_secrets = {}
+    agent.reconcile_dynamic_legs = lambda **kwargs: DynamicChange()
     for name in (
-        "reconcile_dynamic_legs",
         "apply_leg_overrides",
         "roll_usage_period",
         "match_interfaces",

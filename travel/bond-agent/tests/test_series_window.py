@@ -47,6 +47,7 @@ from zippie.counters import (
     SERIES_APPEND_INTERVAL_S,
     SeriesStore,
 )
+from zippie.leg_roster import DynamicChange
 from zippie.models import PolicyConfig
 
 COUNTERS_SRC = Path(agent_mod.__file__).with_name("counters.py")
@@ -167,8 +168,8 @@ def test_append_happens_once_per_control_loop_pass(monkeypatch):
 
     a._isp_name_resolver = _IdleISPResolver()
     a._series = store
+    a.reconcile_dynamic_legs = lambda **kwargs: DynamicChange()
     for name in (
-        "reconcile_dynamic_legs",
         "apply_leg_overrides",
         "roll_usage_period",
         "match_interfaces",
